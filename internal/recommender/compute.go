@@ -113,6 +113,9 @@ type Request struct {
 	// now is the instant the computation runs as of: the age gate measures
 	// since against it.
 	now time.Time
+	// fetch asks for the identity's inputs, sized by containers: what
+	// ComputeRange reads the identity's history with.
+	fetch InputsRequest
 }
 
 func (r Request) Now() time.Time { return r.now }

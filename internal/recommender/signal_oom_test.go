@@ -28,11 +28,24 @@ type oomSource map[string]*oomwatch.OOMRecord
 
 func (s oomSource) ByWorkload(promclient.WorkloadIdentity) map[string]*oomwatch.OOMRecord { return s }
 
-// fixedInputs is an InputsFetcher serving the same inputs to every identity,
-// and failing those in failed.
+// fixedInputs is an InputsFetcher serving the same inputs and history to
+// every identity, and failing those in failed.
 type fixedInputs struct {
-	in     *WorkloadInputs
-	failed promclient.WorkloadIdentity
+	in      *WorkloadInputs
+	history *History
+	failed  promclient.WorkloadIdentity
+}
+
+func (f fixedInputs) FetchHistory(_ context.Context, _ Span, _ sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]HistoryResult {
+	out := make(map[promclient.WorkloadIdentity]HistoryResult, len(reqs))
+	for _, r := range reqs {
+		if r.Identity == f.failed {
+			out[r.Identity] = HistoryResult{Err: errors.New("unreadable")}
+			continue
+		}
+		out[r.Identity] = HistoryResult{History: f.history}
+	}
+	return out
 }
 
 func (f fixedInputs) FetchInputs(_ context.Context, _ time.Time, _ sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
@@ -486,5 +499,32 @@ func TestOOMFloor_TracesThroughCoordination(t *testing.T) {
 				t.Errorf("determined = %v, want %v", floor.Determined, tc.wantDetermined)
 			}
 		})
+	}
+}
+
+// At each instant of a history, the decorator merges the kills as of that
+// instant, as an instant read as of it would: a kill after an earlier instant
+// stays out of it. The decorated history is left as it was.
+func TestWithLiveOOMs_MergesKillsAsOfEachInstantOfAHistory(t *testing.T) {
+	earlier := now.Add(-time.Hour)
+	kill := promclient.OOMKill{Timestamp: now, Container: "app"}
+	history := func() *History {
+		return NewHistory([]HistoryPoint{{At: earlier, Inputs: NewInputs()}, {At: now, Inputs: NewInputs()}}, kill)
+	}
+	decorated := history()
+	live := oomSource{"app": liveKill("app", 10*time.Second, 184<<20)}
+
+	got := WithLiveOOMs(fixedInputs{history: decorated}, live).
+		FetchHistory(context.Background(), SpanOf(earlier, now, time.Hour), sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}})[liveID]
+
+	want := NewHistory([]HistoryPoint{
+		{At: earlier, Inputs: NewInputs()},
+		{At: now, Inputs: NewInputs(WithOOMKills(map[string]OOM{"app": {LimitBytes: 184 << 20, LiveAt: now.Add(-10 * time.Second)}}))},
+	}, kill)
+	if got.Err != nil || !reflect.DeepEqual(got.History, want) {
+		t.Errorf("history = %+v (%v), want %+v", got.History, got.Err, want)
+	}
+	if !reflect.DeepEqual(decorated, history()) {
+		t.Errorf("decorated history = %+v, want it untouched", decorated)
 	}
 }

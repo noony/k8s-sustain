@@ -85,21 +85,26 @@ func (c *Client) execInstant(ctx context.Context, expr string, ts time.Time, tim
 	return v, nil
 }
 
+// parseStep reads a range query's step, a Prometheus duration.
+func parseStep(step string) (time.Duration, error) {
+	d, err := model.ParseDuration(step)
+	if err != nil {
+		return 0, fmt.Errorf("parsing step %q: %w", step, err)
+	}
+	return time.Duration(d), nil
+}
+
 // execRange is execInstant's range-query counterpart: it runs the breaker
-// gate, parses step, and returns the result as a matrix.
-func (c *Client) execRange(ctx context.Context, expr string, r TimeRange, step string, timeout time.Duration) (model.Matrix, error) {
+// gate and returns the result as a matrix.
+func (c *Client) execRange(ctx context.Context, expr string, r TimeRange, step, timeout time.Duration) (model.Matrix, error) {
 	allowed, probe := c.breaker.allow()
 	if !allowed {
 		return nil, ErrCircuitOpen
 	}
-	stepDur, err := model.ParseDuration(step)
-	if err != nil {
-		return nil, fmt.Errorf("parsing step %q: %w", step, err)
-	}
 	result, err := c.runRange(ctx, expr, prometheusv1.Range{
 		Start: r.Start,
 		End:   r.End,
-		Step:  time.Duration(stepDur),
+		Step:  step,
 	}, timeout, probe)
 	if err != nil {
 		return nil, err
@@ -321,21 +326,42 @@ type OOMKill struct {
 	Pod       string    `json:"pod"`
 }
 
+// OOMKillsPerStep counts, per identity and container of selector, the OOM
+// kills MetricContainerOOMKills recorded in each step of a range query
+// stepping by step. A window of exactly one step tiles the range: every kill
+// sample falls in one step's window, so it is counted once.
+func OOMKillsPerStep(selector string, step time.Duration) string {
+	return fmt.Sprintf("sum by (namespace, owner_kind, owner_name, container) (sum_over_time(%s%s[%s]))",
+		MetricContainerOOMKills, selector, model.Duration(step))
+}
+
+// OOMEventsOf turns one container's OOMKillsPerStep series into one event per
+// kill, dated at the end of the step it fell in.
+func OOMEventsOf(container string, perStep []TimeValue) []OOMKill {
+	var out []OOMKill
+	for _, p := range perStep {
+		for range int(math.Round(p.Value)) {
+			out = append(out, OOMKill{Timestamp: p.Timestamp, Container: container})
+		}
+	}
+	return out
+}
+
 // QueryOOMKillEvents returns a workload's OOM kills over r, one event per kill
 // the MetricContainerOOMKills rule recorded, dated at the end of the step it
 // falls in.
 func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName string, r TimeRange, step string) ([]OOMKill, error) {
-	stepDur, err := model.ParseDuration(step)
+	stepDur, err := parseStep(step)
 	if err != nil {
-		return nil, fmt.Errorf("parsing step %q: %w", step, err)
+		return nil, err
 	}
 
 	// A window of exactly one step tiles the range: every kill sample falls in
 	// one step's window, so it is counted once.
 	expr := fmt.Sprintf("sum by (pod, container) (sum_over_time(%s%s[%s]))",
-		MetricContainerOOMKills, WorkloadSelector(namespace, ownerKind, ownerName), stepDur)
+		MetricContainerOOMKills, WorkloadSelector(namespace, ownerKind, ownerName), model.Duration(stepDur))
 
-	matrix, err := c.execRange(ctx, expr, r, step, c.queryTimeout)
+	matrix, err := c.execRange(ctx, expr, r, stepDur, c.queryTimeout)
 	if err != nil {
 		// Non-fatal: the breaker may be open or OOM data missing (no
 		// kube-state-metrics); keep the dashboard rendering. runRange already
@@ -363,7 +389,11 @@ func (c *Client) QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, o
 }
 
 func (c *Client) queryRangeByContainer(ctx context.Context, expr string, r TimeRange, step string) (ContainerTimeSeries, error) {
-	matrix, err := c.execRange(ctx, expr, r, step, c.queryTimeout)
+	stepDur, err := parseStep(step)
+	if err != nil {
+		return nil, err
+	}
+	matrix, err := c.execRange(ctx, expr, r, stepDur, c.queryTimeout)
 	if err != nil {
 		return nil, wrapQueryErr("prometheus range query", expr, err)
 	}
@@ -379,7 +409,7 @@ func (c *Client) queryRangeByContainer(ctx context.Context, expr string, r TimeR
 func timeValues(pairs []model.SamplePair) []TimeValue {
 	out := make([]TimeValue, 0, len(pairs))
 	for _, p := range pairs {
-		out = append(out, TimeValue{Timestamp: p.Timestamp.Time(), Value: float64(p.Value)})
+		out = append(out, TimeValue{Timestamp: p.Timestamp.Time().UTC(), Value: float64(p.Value)})
 	}
 	return out
 }
@@ -438,7 +468,11 @@ func (c *Client) QueryInstant(ctx context.Context, expr string) (float64, error)
 // QueryRange runs a range query for a single series and returns its time-stamped
 // values. If the query produces multiple series, only the first is returned.
 func (c *Client) QueryRange(ctx context.Context, expr string, r TimeRange, step string) ([]TimeValue, error) {
-	matrix, err := c.execRange(ctx, expr, r, step, dashboardQueryTimeout)
+	stepDur, err := parseStep(step)
+	if err != nil {
+		return nil, err
+	}
+	matrix, err := c.execRange(ctx, expr, r, stepDur, dashboardQueryTimeout)
 	if err != nil {
 		return nil, wrapQueryErr("range query", expr, err)
 	}

@@ -95,10 +95,14 @@ type InputsResult struct {
 }
 
 // InputsFetcher fetches the recommendation inputs of many identities at once,
-// all under one ResourcesConfigs, as of the instant at: what every signal read
-// then. The result holds exactly one entry per requested identity. An
-// identity with no samples gets empty Inputs, not an error: an error means
-// its inputs could not be read at all.
+// all under one ResourcesConfigs. Each result holds exactly one entry per
+// requested identity, and an identity with no samples gets empty inputs, not
+// an error: an error means its inputs could not be read at all.
 type InputsFetcher interface {
+	// FetchInputs fetches them as of the instant at: what every signal read
+	// then.
 	FetchInputs(ctx context.Context, at time.Time, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult
+	// FetchHistory fetches them at every instant of span, each as FetchInputs
+	// would as of it, with the OOM kills recorded over span.
+	FetchHistory(ctx context.Context, span Span, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]HistoryResult
 }

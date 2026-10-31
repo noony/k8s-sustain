@@ -3,6 +3,7 @@ package recommender
 import (
 	"context"
 	"maps"
+	"slices"
 	"strconv"
 	"time"
 
@@ -126,6 +127,13 @@ func (oomFloor) samplesPerContainer(sustainv1alpha1.ResourcesConfigs) int {
 
 func (oomFloor) query(_ sustainv1alpha1.ResourcesConfigs, shard promclient.Shard) string {
 	return shard.MetricsSelector(oomRules...)
+}
+
+// killsQuery reads the kill rule the 24h rules derive from: its range form
+// carries the kills a chart marks, which no instant of the 24h rules can
+// date.
+func (oomFloor) killsQuery(shard promclient.Shard, step time.Duration) string {
+	return promclient.OOMKillsPerStep(shard.Selector(), step)
 }
 
 // contract: the rules are read as an instant vector, so the cost does not
@@ -292,6 +300,30 @@ func (l *liveOOMInputs) FetchInputs(
 			continue
 		}
 		r.Inputs = withLiveOOMs(r.Inputs, l.source.ByWorkload(id), at)
+		out[id] = r
+	}
+	return out
+}
+
+// FetchHistory merges, at every instant of every fetched identity's history,
+// the identity's kills as of that instant, as FetchInputs would as of it.
+func (l *liveOOMInputs) FetchHistory(
+	ctx context.Context,
+	span Span,
+	cfg sustainv1alpha1.ResourcesConfigs,
+	reqs []InputsRequest,
+) map[promclient.WorkloadIdentity]HistoryResult {
+	out := l.inputs.FetchHistory(ctx, span, cfg, reqs)
+	for id, r := range out {
+		if r.History == nil {
+			continue
+		}
+		live := l.source.ByWorkload(id)
+		points := slices.Clone(r.History.points)
+		for i, p := range points {
+			points[i].Inputs = withLiveOOMs(p.Inputs, live, p.At)
+		}
+		r.History = NewHistory(points, r.History.kills...)
 		out[id] = r
 	}
 	return out

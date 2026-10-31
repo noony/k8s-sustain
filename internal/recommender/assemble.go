@@ -78,6 +78,7 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 		if len(id.Containers) == 0 && len(id.InitContainers) == 0 {
 			req.containers = observedContainers(f.Inputs)
 		}
+		req.fetch = InputsRequest{Identity: id.Key, Containers: len(req.containers)}
 	}
 	return out
 }

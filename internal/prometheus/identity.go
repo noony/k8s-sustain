@@ -27,20 +27,31 @@ func CompareIdentity(a, b WorkloadIdentity) int {
 	)
 }
 
-// shardSamples unpacks a shard query's vector. A shard spans many identities,
-// so a series missing any identity label, or the container label, is dropped
-// rather than attributed to a neighbouring identity, which would silently
-// corrupt that workload's recommendation.
+// attribute names the identity and container a shard query's series belongs
+// to. A shard spans many identities, so a series missing any identity label,
+// or the container label, is not attributed (false) rather than attributed to
+// a neighbouring identity, which would silently corrupt that workload's
+// recommendation.
+func attribute(m model.Metric) (WorkloadIdentity, string, bool) {
+	id := WorkloadIdentity{
+		Namespace: string(m["namespace"]),
+		OwnerKind: string(m["owner_kind"]),
+		OwnerName: string(m["owner_name"]),
+	}
+	container := string(m["container"])
+	if id.Namespace == "" || id.OwnerKind == "" || id.OwnerName == "" || container == "" {
+		return WorkloadIdentity{}, "", false
+	}
+	return id, container, true
+}
+
+// shardSamples unpacks a shard query's vector, dropping every series it
+// cannot attribute.
 func shardSamples(vec model.Vector) []ShardSample {
 	out := make([]ShardSample, 0, len(vec))
 	for _, s := range vec {
-		id := WorkloadIdentity{
-			Namespace: string(s.Metric["namespace"]),
-			OwnerKind: string(s.Metric["owner_kind"]),
-			OwnerName: string(s.Metric["owner_name"]),
-		}
-		container := string(s.Metric["container"])
-		if id.Namespace == "" || id.OwnerKind == "" || id.OwnerName == "" || container == "" {
+		id, container, ok := attribute(s.Metric)
+		if !ok {
 			continue
 		}
 		out = append(out, ShardSample{
@@ -48,6 +59,25 @@ func shardSamples(vec model.Vector) []ShardSample {
 			Container: container,
 			Metric:    string(s.Metric[model.MetricNameLabel]),
 			Value:     float64(s.Value),
+		})
+	}
+	return out
+}
+
+// shardSeries unpacks a shard range query's matrix, dropping every series it
+// cannot attribute.
+func shardSeries(matrix model.Matrix) []ShardSeries {
+	out := make([]ShardSeries, 0, len(matrix))
+	for _, s := range matrix {
+		id, container, ok := attribute(s.Metric)
+		if !ok {
+			continue
+		}
+		out = append(out, ShardSeries{
+			Identity:  id,
+			Container: container,
+			Metric:    string(s.Metric[model.MetricNameLabel]),
+			Points:    timeValues(s.Values),
 		})
 	}
 	return out

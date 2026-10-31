@@ -23,16 +23,38 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// recordedInputs serves canned inputs by identity, fails those in failed,
-// gives every other identity empty inputs, and records each call and the
-// instant it fetched as of. A fetch takes a minute of clock, when it is set.
+// recordedInputs serves canned inputs and histories by identity, fails those
+// in failed, gives every other identity empty ones, and records each call and
+// the instant it fetched as of. A fetch takes a minute of clock, when it is
+// set.
 type recordedInputs struct {
-	inputs map[promclient.WorkloadIdentity]*WorkloadInputs
-	failed map[promclient.WorkloadIdentity]error
-	ats    []time.Time
-	cfgs   []sustainv1alpha1.ResourcesConfigs
-	calls  [][]InputsRequest
-	clock  *clocktesting.FakePassiveClock
+	inputs    map[promclient.WorkloadIdentity]*WorkloadInputs
+	histories map[promclient.WorkloadIdentity]*History
+	failed    map[promclient.WorkloadIdentity]error
+	ats       []time.Time
+	cfgs      []sustainv1alpha1.ResourcesConfigs
+	calls     [][]InputsRequest
+	spans     []Span
+	clock     *clocktesting.FakePassiveClock
+}
+
+func (f *recordedInputs) FetchHistory(_ context.Context, span Span, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]HistoryResult {
+	f.spans = append(f.spans, span)
+	f.cfgs = append(f.cfgs, cfg)
+	f.calls = append(f.calls, slices.Clone(reqs))
+	out := make(map[promclient.WorkloadIdentity]HistoryResult, len(reqs))
+	for _, r := range reqs {
+		if err := f.failed[r.Identity]; err != nil {
+			out[r.Identity] = HistoryResult{Err: err}
+			continue
+		}
+		h := f.histories[r.Identity]
+		if h == nil {
+			h = NewHistory(nil)
+		}
+		out[r.Identity] = HistoryResult{History: h}
+	}
+	return out
 }
 
 func (f *recordedInputs) FetchInputs(_ context.Context, at time.Time, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {

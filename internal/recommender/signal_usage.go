@@ -70,11 +70,19 @@ func (in *WorkloadInputs) Resolved() bool {
 // Usage is the usage percentile of res observed for the container named
 // container, in cores or bytes: zero when none was.
 func (in *WorkloadInputs) Usage(container string, res corev1.ResourceName) float64 {
-	u, ok := usageOf(resourceKind(res))
+	v, _ := in.usage(container, resourceKind(res))
+	return v
+}
+
+// usage is the usage percentile of res observed for the container named
+// container, false when none was.
+func (in *WorkloadInputs) usage(container string, res resourceKind) (float64, bool) {
+	u, ok := usageOf(res)
 	if !ok {
-		return 0
+		return 0, false
 	}
-	return valuesOf[usageValues](in, u)[container]
+	v, ok := valuesOf[usageValues](in, u)[container]
+	return v, ok
 }
 
 func (u usage) name() string { return string(u.resource) }
