@@ -545,11 +545,12 @@ every default explicit), the outcome and the trace, so the Simulator shows
 the Policy's values and the recommender's defaults without holding either.
 
 Its charts are its history: `recommender.ComputeRange` over a `Span` that
-ends at the instant the Simulation computes as of, its step derived from the
-chart range (`SpanOf`, at most about 300 instants, the requested step only the
-finest), returns per container and resource the usage the signal read and the
+ends where the chart range does, its step derived from the range (`SpanOf`, at
+most about 300 instants, the requested step only the finest), returns per container and resource the usage the signal read and the
 request and limit the full chain computed at each instant, with the OOM kills.
-The dashboard only renders them, next to the requests and limits the pods ran
+A range back from now (`window`) ends at the instant the Simulation computes
+as of, so its last point is the Simulation itself; an absolute range ends at
+its `toTs`. The dashboard only renders them, next to the requests and limits the pods ran
 with, which it reads through `PromQuerier`. A history that cannot be read
 leaves the Simulation's numbers standing with a `historyError`.
 

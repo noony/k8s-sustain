@@ -142,9 +142,9 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 }
 
 // simulationRange is the range a Simulation's history is read over: the
-// request's absolute range, or its window back from now, the instant the
-// Simulation computes as of, so the history's last instant is the Simulation
-// itself.
+// request's absolute range, ending at its toTs, or its window back from now,
+// the instant the Simulation computes as of, so that history's last instant
+// is the Simulation itself.
 func simulationRange(req simulateRequest, now time.Time) (promclient.TimeRange, error) {
 	if req.FromTs > 0 && req.ToTs > 0 {
 		return promclient.TimeRange{Start: time.Unix(req.FromTs, 0), End: time.Unix(req.ToTs, 0)}, nil
