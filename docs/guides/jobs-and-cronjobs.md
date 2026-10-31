@@ -104,6 +104,9 @@ Setting `equalsToRequest: true` for both CPU and memory limits makes the pod [Gu
 
 ## OOM detection for job pods
 
-An OOM kill counts when its container restarts after it: the [`k8s_sustain:workload_oom_24h`](../reference/recording-rules.md#k8s_sustainworkload_oom_24h) rule counts restarts whose last termination is `OOMKilled`, and the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher) reads the same last termination. A Job pod with `restartPolicy: OnFailure` is restarted in place after a kill, so the OOM-driven memory floor and the dashboard's At risk state see it.
+Job and CronJob pods' OOM kills count like any other's, whatever their restart policy: the [`k8s_sustain:container_oom_kills`](../reference/recording-rules.md#k8s_sustaincontainer_oom_kills) rule and the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher) count each kill once, so the OOM-driven memory floor and the dashboard's At risk state see it for 24 hours.
 
-A pod with `restartPolicy: Never` dies with its kill and is never restarted, and the Job's retry runs in a new pod, so no kill is counted for it. Size such Jobs from usage alone: use a window that spans several runs (see [Collecting enough history](#collecting-enough-history)), or set a memory `minAllowed`.
+- A pod with `restartPolicy: OnFailure` is restarted in place after a kill: the restart counts it.
+- A pod with `restartPolicy: Never` dies with its kill, and the Job's retry runs in a new pod: the kill counts when the container's status first shows it, and only once however long the failed pod is kept.
+
+A container killed within seconds of starting leaves little usage behind, and the floor rests on the limit it was killed at: give such Jobs a window that spans several runs (see [Collecting enough history](#collecting-enough-history)), or a memory `minAllowed`.

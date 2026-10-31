@@ -72,7 +72,7 @@ Every row, badge, KPI and attention list shows one **Risk state** per workload i
 
 1. **Conflicted** — the identity's members opt into different Policies, so no Policy governs it and its recommendation is frozen (see [Conflicted identities](../concepts/workload-recommendations.md#conflicted-identities)).
 2. **Blocked** — the controller's last attempt to apply the identity's recommendation to a member failed, transiently (retried with backoff) or permanently (retried every reconcile, e.g. missing RBAC), and none has succeeded since.
-3. **At risk** — an OOM kill in the last 24 hours. A kill counts when its container restarts after it, so the kill of a `restartPolicy: Never` container never counts.
+3. **At risk** — an OOM kill in the last 24 hours, counted once whether its container restarted after it or, with `restartPolicy: Never`, did not.
 4. **Drifted** — pods whose running resources still differ from the recommendation beyond the policy's `downsizeThreshold`; a decrease the policy suppresses is not drift.
 5. **Safe** — none of the above.
 

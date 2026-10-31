@@ -64,6 +64,10 @@ The single most actionable condition of an identity, in this precedence: Conflic
 **Blocked**:
 The controller's last attempt to apply an identity's Recommendation to one of its members failed, and none has succeeded since. A transient failure is retried with a backoff that grows with each consecutive transient failure; a permanent one (forbidden, invalid, a member the controller refuses to apply to) every reconcile, until something outside the controller fixes it. A member left alone because its Recommendation could not be stored for the webhook has failed too. One Blocked member is enough to block the identity, and a Policy with a Blocked identity is not Ready.
 
+**OOM kill**:
+A container the kernel terminated for exceeding its memory limit, counted once, when it is first seen: as a restart whose last termination was OOMKilled, or, for a container that will not restart, as its OOMKilled termination. Every reader (the OOM floor, At risk, the chart markers, the OOM watcher) counts the same kills, and a kill stops counting 24 hours after it happened, whatever the container does since.
+_Avoid_: OOM event, OOM (alone)
+
 **At risk**:
 An identity with an OOM kill in the last 24 hours.
 
