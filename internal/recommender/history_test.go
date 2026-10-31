@@ -167,3 +167,68 @@ func TestComputeRange_AnUnreadableHistoryIsItsError(t *testing.T) {
 		t.Errorf("err = %v, want %v", err, down)
 	}
 }
+
+// UsageRange reads the history once, under the spec's resources with every
+// default explicit, and returns what the usage signals read at each instant
+// for each container the spec recommends: none for an init container it
+// excludes, none for a resource whose request it keeps, and nothing computed.
+func TestUsageRange_WhatTheUsageSignalsReadAtEachInstant(t *testing.T) {
+	key := prodID("api")
+	t0, t1 := now.Add(-time.Hour), now
+	read := func(cores float64) *WorkloadInputs {
+		return NewInputs(
+			WithCPUUsage(promclient.ContainerValues{"app": cores, "migrate": 2}),
+			WithMemoryUsage(promclient.ContainerValues{"app": 64 * mib, "migrate": 32 * mib}),
+		)
+	}
+	inputs := &recordedInputs{histories: map[promclient.WorkloadIdentity]*History{key: NewHistory([]HistoryPoint{
+		{At: t0, Inputs: read(0.1)},
+		{At: t1, Inputs: read(0.3)},
+	})}}
+	spec := sustainv1alpha1.RightSizingSpec{
+		ExcludeInitContainers: true,
+		ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
+			CPU:    sustainv1alpha1.ResourceConfig{Window: "24h"},
+			Memory: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true}},
+		},
+	}
+	id := &inventory.Identity{Key: key, Containers: containers("app"), InitContainers: containers("migrate"), Since: old}
+	span := SpanOf(t0, t1, time.Hour)
+
+	got, err := UsageRange(context.Background(), inputs, spec, id, span)
+	if err != nil {
+		t.Fatalf("UsageRange: %v", err)
+	}
+
+	if len(inputs.spans) != 1 || inputs.spans[0] != span || !reflect.DeepEqual(inputs.cfgs, []sustainv1alpha1.ResourcesConfigs{WithDefaults(spec.ResourcesConfigs)}) ||
+		!reflect.DeepEqual(inputs.calls, [][]InputsRequest{{{Identity: key, Containers: 1}}}) || len(inputs.ats) != 0 {
+		t.Errorf("reads %v under %+v for %v, instant reads %v; want one history over %v under the defaulted resources, for the containers recommended",
+			inputs.spans, inputs.cfgs, inputs.calls, inputs.ats, span)
+	}
+	want := map[string]UsageSeries{"app": {CPU: []promclient.TimeValue{{Timestamp: t0, Value: 0.1}, {Timestamp: t1, Value: 0.3}}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("usage = %+v, want %+v", got, want)
+	}
+}
+
+// An identity with no containers at all has a series for every container its
+// history reports, and a history that cannot be read is the error.
+func TestUsageRange_AnUnseenIdentityAndAnUnreadableHistory(t *testing.T) {
+	seen, down := prodID("seen"), prodID("down")
+	failure := errors.New("prometheus down")
+	inputs := &recordedInputs{
+		histories: map[promclient.WorkloadIdentity]*History{seen: NewHistory([]HistoryPoint{
+			{At: now, Inputs: NewInputs(WithMemoryUsage(promclient.ContainerValues{"app": 64 * mib, "sidecar": 8 * mib}))},
+		})},
+		failed: map[promclient.WorkloadIdentity]error{down: failure},
+	}
+	span := SpanOf(now, now, time.Minute)
+
+	got, err := UsageRange(context.Background(), inputs, sustainv1alpha1.RightSizingSpec{}, &inventory.Identity{Key: seen}, span)
+	if err != nil || len(got) != 2 || len(got["app"].Memory) != 1 || len(got["sidecar"].Memory) != 1 {
+		t.Errorf("usage = %+v, %v; want app's and sidecar's memory", got, err)
+	}
+	if _, err := UsageRange(context.Background(), inputs, sustainv1alpha1.RightSizingSpec{}, &inventory.Identity{Key: down}, span); !errors.Is(err, failure) {
+		t.Errorf("err = %v, want %v", err, failure)
+	}
+}

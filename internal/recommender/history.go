@@ -7,6 +7,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -122,6 +124,58 @@ func ComputeRange(ctx context.Context, inputs InputsFetcher, req Request, span S
 		return RangeResult{}, h.Err
 	}
 	return computeRange(req, h.History), nil
+}
+
+// UsageSeries is one container's usage at each instant of a span, in cores and
+// bytes: what its usage signals read. A series has a point only at the
+// instants its signal read a value.
+type UsageSeries struct {
+	CPU, Memory []promclient.TimeValue
+}
+
+// UsageRange is what the usage signals read of id at each instant of span,
+// under spec's resources with every default explicit, as Assemble fetches
+// them: for each container spec recommends, the busiest replica's usage
+// percentile over the resource's window. A resource whose request spec keeps
+// has no series, as no signal sizes it, and an identity with no containers at
+// all has a series for every container its history reports. The history is
+// read through inputs in the one range read ComputeRange makes, and nothing is
+// computed from it: it charts what the recommender reads without recomputing
+// a Recommendation.
+func UsageRange(ctx context.Context, inputs InputsFetcher, spec sustainv1alpha1.RightSizingSpec, id *inventory.Identity, span Span) (map[string]UsageSeries, error) {
+	resources := WithDefaults(spec.ResourcesConfigs)
+	recommended := ContainersOf(spec, id)
+	req := InputsRequest{Identity: id.Key, Containers: len(recommended)}
+	h := inputs.FetchHistory(ctx, span, resources, []InputsRequest{req})[id.Key]
+	if h.Err != nil {
+		return nil, h.Err
+	}
+	sizes := func(name string) bool {
+		return len(id.Containers) == 0 && len(id.InitContainers) == 0 ||
+			slices.ContainsFunc(recommended, func(c corev1.Container) bool { return c.Name == name })
+	}
+	out := map[string]UsageSeries{}
+	for _, p := range h.History.points {
+		for _, u := range []usage{cpuUsage, memoryUsage} {
+			if u.resource.config(resources).Requests.KeepRequest {
+				continue
+			}
+			for name, v := range valuesOf[usageValues](p.Inputs, u) {
+				if !sizes(name) {
+					continue
+				}
+				s := out[name]
+				point := promclient.TimeValue{Timestamp: p.At, Value: v}
+				if u.resource == cpuResource {
+					s.CPU = append(s.CPU, point)
+				} else {
+					s.Memory = append(s.Memory, point)
+				}
+				out[name] = s
+			}
+		}
+	}
+	return out, nil
 }
 
 func computeRange(req Request, h *History) RangeResult {
