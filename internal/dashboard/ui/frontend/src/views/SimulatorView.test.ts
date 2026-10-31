@@ -1,4 +1,4 @@
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import SimulatorView from './SimulatorView.vue'
 import * as api from '../lib/api'
@@ -96,6 +96,10 @@ function mountOpened() {
     global: { stubs: ['TimeRangePicker'] },
   })
 }
+
+// A view left mounted keeps its debounce timer, whose simulation reaches the
+// next test's api mock.
+enableAutoUnmount(afterEach)
 
 describe('SimulatorView', () => {
   afterEach(() => {
