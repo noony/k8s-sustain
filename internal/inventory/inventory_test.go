@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -403,7 +404,8 @@ func TestTakeDecidesWithTheListerItIsHanded(t *testing.T) {
 
 // A Policy's snapshot reads only its selector's namespaces and the kinds it
 // manages, governs nothing in an excluded namespace, and is empty for a
-// Policy managing no kind rather than reading every kind.
+// Policy managing no kind rather than reading every kind. Either is dated by
+// its clock: a sweep keeps what was created after it.
 func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
 	p := managing("p", sustainv1alpha1.UpdateTypes{Deployment: ongoing()})
 	p.Spec.Selector.Namespaces = []string{"a", "excluded"}
@@ -417,9 +419,14 @@ func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
 		deployment("a", "idle", base, optIn("none")),
 	).Build()
 
-	snap, err := inventory.TakeForPolicy(context.Background(), c, p, []string{"excluded"}, nil)
+	takenAt := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	opts := inventory.Options{ExcludedNamespaces: []string{"excluded"}, Clock: clocktesting.NewFakePassiveClock(takenAt)}
+	snap, err := inventory.TakeForPolicy(context.Background(), c, p, opts)
 	if err != nil {
 		t.Fatalf("TakeForPolicy: %v", err)
+	}
+	if !snap.TakenAt.Equal(takenAt) {
+		t.Errorf("TakenAt = %v, want the clock's %v", snap.TakenAt, takenAt)
 	}
 	var governed []promclient.WorkloadIdentity
 	for _, id := range snap.GovernedBy("p") {
@@ -434,12 +441,15 @@ func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
 		}
 	}
 
-	snap, err = inventory.TakeForPolicy(context.Background(), c, none, nil, nil)
+	snap, err = inventory.TakeForPolicy(context.Background(), c, none, opts)
 	if err != nil {
 		t.Fatalf("TakeForPolicy: %v", err)
 	}
 	if len(snap.Identities) != 0 {
 		t.Errorf("a Policy managing no kind read %v", keys(snap))
+	}
+	if !snap.TakenAt.Equal(takenAt) {
+		t.Errorf("TakenAt of the empty snapshot = %v, want the clock's %v", snap.TakenAt, takenAt)
 	}
 }
 

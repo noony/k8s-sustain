@@ -73,7 +73,7 @@ func TestReconcile_AdoptedRecommendationIsComputedByTheAdoptingPolicy(t *testing
 	previous := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns, Name: wlrcache.Name("Deployment", "web"),
-			Labels:            map[string]string{wlrPolicyLabel: "old"},
+			Labels:            map[string]string{sustainv1alpha1.WLRPolicyLabel: "old"},
 			CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
 		},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{

@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -42,12 +43,24 @@ type Options struct {
 	// is compiled once per version of it rather than once per snapshot; nil
 	// lists through a lister of the snapshot's own.
 	Policies *governance.PolicyLister
+	// Clock dates the snapshot. Nil is the wall clock.
+	Clock clock.PassiveClock
+}
+
+func (o Options) now() time.Time {
+	if o.Clock == nil {
+		return time.Now()
+	}
+	return o.Clock.Now()
 }
 
 // Snapshot is the identities in scope when it was taken, sorted by key.
 type Snapshot struct {
 	Identities []Identity
-	index      map[promclient.WorkloadIdentity]int
+	// TakenAt is when the snapshot began reading: an object created since
+	// may be missing from it.
+	TakenAt time.Time
+	index   map[promclient.WorkloadIdentity]int
 }
 
 // Lookup returns the identity with key, if the snapshot has it.
@@ -145,6 +158,7 @@ type Member struct {
 // does not serve (no Argo Rollouts CRD) has no identities rather than failing
 // the snapshot.
 func Take(ctx context.Context, r client.Reader, opts Options) (*Snapshot, error) {
+	takenAt := opts.now()
 	b := &builder{
 		reader:     r,
 		opts:       opts,
@@ -172,32 +186,29 @@ func Take(ctx context.Context, r client.Reader, opts Options) (*Snapshot, error)
 	if err := b.addRecommendations(ctx); err != nil {
 		return nil, fmt.Errorf("listing WorkloadRecommendations: %w", err)
 	}
-	return b.snapshot(), nil
+	snap := b.snapshot()
+	snap.TakenAt = takenAt
+	return snap, nil
 }
 
-// TakeForPolicy reads the identities policy can govern: those in its
-// selector's namespaces whose kind it manages, outside excludedNamespaces,
-// decided with the Policies lister lists (see Options.Policies). Every
-// identity it returns has a kind policy manages, and is whole: its members
-// share its namespace and kind, so the narrowed read also sees what makes one
-// Conflicted. A Policy managing no kind reads nothing.
-func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1.Policy, excludedNamespaces []string, lister *governance.PolicyLister) (*Snapshot, error) {
-	var kinds []string
+// TakeForPolicy reads the identities policy can govern: Take with opts
+// narrowed to its selector's namespaces and the kinds it manages, whatever
+// opts names. Every identity it returns has a kind policy manages, and is
+// whole: its members share its namespace and kind, so the narrowed read also
+// sees what makes one Conflicted. A Policy managing no kind reads nothing.
+func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1.Policy, opts Options) (*Snapshot, error) {
+	opts.Kinds = nil
 	for _, kind := range workload.SupportedKinds {
 		if policy.Spec.RightSizing.Update.Types.ModeForKind(kind) != nil {
-			kinds = append(kinds, kind)
+			opts.Kinds = append(opts.Kinds, kind)
 		}
 	}
 	// An empty Kinds would read every kind.
-	if len(kinds) == 0 {
-		return &Snapshot{}, nil
+	if len(opts.Kinds) == 0 {
+		return &Snapshot{TakenAt: opts.now()}, nil
 	}
-	return Take(ctx, r, Options{
-		Namespaces:         policy.Spec.Selector.Namespaces,
-		Kinds:              kinds,
-		ExcludedNamespaces: excludedNamespaces,
-		Policies:           lister,
-	})
+	opts.Namespaces = policy.Spec.Selector.Namespaces
+	return Take(ctx, r, opts)
 }
 
 // builder is the governance.Reader of its snapshot: it serves the Policies it

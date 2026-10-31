@@ -2,14 +2,9 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"slices"
 	"time"
 
-	"github.com/go-logr/logr"
-
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -18,106 +13,52 @@ import (
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
-// wlrPolicyLabel labels each WorkloadRecommendation with its Policy.
-const wlrPolicyLabel = sustainv1alpha1.WLRPolicyLabel
-
 func (r *PolicyReconciler) lifetimes() wlrcache.Lifetimes {
 	return wlrcache.Lifetimes{ReconcileInterval: r.ReconcileInterval, Retention: r.RecommendationRetention}
 }
 
-// onConflict says what a conflicting delete means on a cleanup path.
-type onConflict int
-
-const (
-	// judgeNextPass: the object is re-judged on the path's next pass.
-	judgeNextPass onConflict = iota
-
-	// failCleanup: the conflict is returned, so a path that promises cleanup
-	// retries instead of reporting it finished.
-	failCleanup
-)
-
-// deleteWLRsWhere lists WorkloadRecommendations and deletes those keep
-// rejects. Every delete is conditioned on the UID and resourceVersion keep
-// judged: each path decides on a copy from the informer cache, and an object
-// rewritten since may have been adopted by another Policy, which a conflict
-// hands back to a fresh judgement instead of deleting it. NotFound counts as
-// deleted. A list failure returns a zero count.
-func (r *PolicyReconciler) deleteWLRsWhere(
-	ctx context.Context,
-	logger logr.Logger,
-	conflict onConflict,
-	listOpts []client.ListOption,
-	keep func(*sustainv1alpha1.WorkloadRecommendation) bool,
-) (deleted int, listErr error, deleteErr error) {
-	var list sustainv1alpha1.WorkloadRecommendationList
-	if err := r.List(ctx, &list, listOpts...); err != nil {
-		return 0, err, nil
-	}
-
-	for i := range list.Items {
-		wlr := &list.Items[i]
-		if keep(wlr) {
-			continue
-		}
-		err := r.Delete(ctx, wlr, client.Preconditions{UID: &wlr.UID, ResourceVersion: &wlr.ResourceVersion})
-		switch {
-		case err == nil || apierrors.IsNotFound(err):
-			deleted++
-		case apierrors.IsConflict(err) && conflict == judgeNextPass:
-			logger.V(1).Info("WorkloadRecommendation changed since it was listed; leaving it to the next pass",
-				"name", wlr.Name, "namespace", wlr.Namespace, "policy", wlr.Spec.Policy)
-		default:
-			logger.V(1).Info("failed to delete WorkloadRecommendation",
-				"name", wlr.Name, "namespace", wlr.Namespace, "policy", wlr.Spec.Policy, "err", err)
-			if deleteErr == nil {
-				deleteErr = err
-			}
-		}
-	}
-	return deleted, nil, deleteErr
-}
-
-// sweepWorkloadRecommendations deletes the policy's WorkloadRecommendations
-// wlrcache.Expired judges expired against snap: one whose identity the policy
-// no longer governs (its members opted out, or it fell out of the Policy's
-// namespaces or kinds), or a Departed or Conflicted identity's past the
-// retention window. One now governed by another Policy is left for that
-// Policy to adopt. Best-effort.
-func (r *PolicyReconciler) sweepWorkloadRecommendations(ctx context.Context, policyName string, snap *inventory.Snapshot) {
+// sweep deletes the policy's WorkloadRecommendations that snap says are
+// expired at the instant it was taken (wlrcache.Sweep). Best-effort: what it
+// leaves is judged again next pass.
+func (r *PolicyReconciler) sweep(ctx context.Context, policyName string, snap *inventory.Snapshot) {
 	logger := log.FromContext(ctx).WithValues("policy", policyName)
-
-	now := time.Now()
-	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, judgeNextPass,
-		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
-		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
-			return !wlrcache.Expired(wlr, policyName, standing(snap, wlr), now, r.RecommendationRetention)
-		})
-	if listErr != nil {
-		logger.V(1).Info("failed to list WorkloadRecommendations for sweep", "err", listErr)
-		return
+	deleted, err := wlrcache.Sweep(ctx, r.Client, policyName, standingIn(snap), snap.TakenAt, r.lifetimes())
+	if err != nil {
+		logger.V(1).Info("failed to sweep WorkloadRecommendations", "err", err)
 	}
 	if deleted > 0 {
 		logger.V(1).Info("swept stale WorkloadRecommendations", "deleted", deleted)
 	}
 }
 
-// standing is where wlr's identity stands in snap.
-func standing(snap *inventory.Snapshot, wlr *sustainv1alpha1.WorkloadRecommendation) wlrcache.Standing {
-	ref := wlr.Spec.WorkloadRef
-	id, ok := snap.Lookup(promclient.WorkloadIdentity{Namespace: ref.Namespace, OwnerKind: ref.Kind, OwnerName: ref.Name})
-	switch {
-	case !ok:
-		return wlrcache.Ungoverned
-	case id.Departed():
-		return wlrcache.Departed
-	case id.Conflicted:
-		return wlrcache.Conflicted
-	case id.Policy != "":
-		return wlrcache.Governed
-	default:
-		return wlrcache.Ungoverned
+// standingIn is where each identity stands in snap.
+func standingIn(snap *inventory.Snapshot) wlrcache.Standings {
+	return func(key promclient.WorkloadIdentity) wlrcache.Standing {
+		id, ok := snap.Lookup(key)
+		switch {
+		case !ok:
+			return wlrcache.Ungoverned
+		case id.Departed():
+			return wlrcache.Departed
+		case id.Conflicted:
+			return wlrcache.Conflicted
+		case id.Policy != "":
+			return wlrcache.Governed
+		default:
+			return wlrcache.Ungoverned
+		}
 	}
+}
+
+// release deletes the WorkloadRecommendations of policyName, which is being
+// deleted (wlrcache.Release). A failure keeps the finalizer, so a retry lists
+// and judges afresh.
+func (r *PolicyReconciler) release(ctx context.Context, policyName string) error {
+	deleted, err := wlrcache.Release(ctx, r.Client, policyName)
+	if deleted > 0 {
+		log.FromContext(ctx).Info("deleted WorkloadRecommendations for removed policy", "policy", policyName, "deleted", deleted)
+	}
+	return err
 }
 
 // recordConflicted records the Conflicted outcome on the stored
@@ -147,61 +88,4 @@ func (r *PolicyReconciler) recordConflicted(ctx context.Context, policyName stri
 				"namespace", id.Recommendation.Namespace, "err", err)
 		}
 	}
-}
-
-// deleteAllRecommendationsForPolicy removes every WorkloadRecommendation for
-// the policy before the finalizer is dropped, and only those still naming it
-// when they are deleted: another Policy may have adopted one since it was
-// listed (a GitOps rename creates the new Policy before deleting the old), and
-// the adopted object is the new Policy's to keep. A conflict is returned, so
-// the finalizer only goes once a retry has re-listed and judged afresh.
-func (r *PolicyReconciler) deleteAllRecommendationsForPolicy(ctx context.Context, policyName string) error {
-	logger := log.FromContext(ctx).WithValues("policy", policyName)
-
-	deleted, listErr, deleteErr := r.deleteWLRsWhere(ctx, logger, failCleanup,
-		[]client.ListOption{client.MatchingLabels{wlrPolicyLabel: policyName}},
-		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
-			return wlr.Spec.Policy != policyName
-		})
-	if listErr != nil {
-		return fmt.Errorf("listing WorkloadRecommendations for policy delete: %w", listErr)
-	}
-	if deleted > 0 {
-		logger.Info("deleted WorkloadRecommendations for removed policy", "deleted", deleted)
-	}
-	return deleteErr
-}
-
-// reapOrphanedRecommendations deletes every WorkloadRecommendation whose
-// spec.policy names no existing Policy, catching force deletes and crashes
-// mid-delete. Runs on a tick; a stale copy can call a just-adopted object an
-// orphan, and the conflict leaves it to the next tick.
-func (r *PolicyReconciler) reapOrphanedRecommendations(ctx context.Context) error {
-	logger := log.FromContext(ctx).WithName("orphan-reaper")
-
-	var policies sustainv1alpha1.PolicyList
-	if err := r.List(ctx, &policies); err != nil {
-		return fmt.Errorf("listing policies: %w", err)
-	}
-	known := make(map[string]struct{}, len(policies.Items))
-	for i := range policies.Items {
-		known[policies.Items[i].Name] = struct{}{}
-	}
-
-	deleted, listErr, _ := r.deleteWLRsWhere(ctx, logger, judgeNextPass, nil,
-		func(wlr *sustainv1alpha1.WorkloadRecommendation) bool {
-			if wlr.Spec.Policy == "" {
-				// Untracked entry; some other writer may own it.
-				return true
-			}
-			_, ok := known[wlr.Spec.Policy]
-			return ok
-		})
-	if listErr != nil {
-		return fmt.Errorf("listing workloadrecommendations: %w", listErr)
-	}
-	if deleted > 0 {
-		logger.Info("reaped orphan WorkloadRecommendations", "deleted", deleted)
-	}
-	return nil
 }

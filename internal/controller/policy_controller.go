@@ -125,7 +125,7 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.recorder = mgr.GetEventRecorder("k8s-sustain")
 	r.ledger = newLedger(clock.RealClock{})
 	r.applyTuningDefaults()
-	if err := mgr.Add(&orphanReaper{reconciler: r, interval: r.OrphanReapInterval}); err != nil {
+	if err := mgr.Add(&orphanReaper{client: r.Client, interval: r.OrphanReapInterval}); err != nil {
 		return err
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
@@ -192,7 +192,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	const finalizerName = "k8s.sustain.io/cleanup"
 	if !policy.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(policy, finalizerName) {
-			if err := r.deleteAllRecommendationsForPolicy(ctx, policy.Name); err != nil {
+			if err := r.release(ctx, policy.Name); err != nil {
 				logger.Error(err, "failed to delete WorkloadRecommendations for policy; will retry")
 				return ctrl.Result{}, err
 			}
@@ -217,7 +217,11 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	start := time.Now()
 	logger.Info("starting reconcile cycle")
 
-	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, r.ExcludedNamespaces, &r.policies)
+	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, inventory.Options{
+		ExcludedNamespaces: r.ExcludedNamespaces,
+		Policies:           &r.policies,
+		Clock:              r.Clock,
+	})
 	if listErr != nil {
 		logger.Error(listErr, "failed to list workloads")
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)
@@ -235,7 +239,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	blocked := health.blocked()
 	r.series.publish(policy.Name, report.publication(health, attempts))
 
-	r.sweepWorkloadRecommendations(ctx, policy.Name, snap)
+	r.sweep(ctx, policy.Name, snap)
 
 	processed := report.processed()
 	logger.Info("reconcile cycle complete",

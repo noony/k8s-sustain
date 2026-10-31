@@ -810,7 +810,7 @@ func TestReconcile_ConflictedIdentityFreezesItsRecommendation(t *testing.T) {
 	frozen := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns, Name: wlrcache.Name("Deployment", "api"),
-			Labels:            map[string]string{wlrPolicyLabel: "p"},
+			Labels:            map[string]string{sustainv1alpha1.WLRPolicyLabel: "p"},
 			CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
 		},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
@@ -835,9 +835,9 @@ func TestReconcile_ConflictedIdentityFreezesItsRecommendation(t *testing.T) {
 	reconcileOnce(t, r, "p")
 
 	got := getWLRFor(t, r, ns, "Deployment", "api")
-	if got.Spec.Policy != "p" || got.Labels[wlrPolicyLabel] != "p" {
+	if got.Spec.Policy != "p" || got.Labels[sustainv1alpha1.WLRPolicyLabel] != "p" {
 		t.Errorf("spec.policy/label = %q/%q, want both still p: no Policy governs a Conflicted identity",
-			got.Spec.Policy, got.Labels[wlrPolicyLabel])
+			got.Spec.Policy, got.Labels[sustainv1alpha1.WLRPolicyLabel])
 	}
 	if got.Status.Outcome != sustainv1alpha1.OutcomeConflicted {
 		t.Errorf("outcome = %q, want Conflicted", got.Status.Outcome)

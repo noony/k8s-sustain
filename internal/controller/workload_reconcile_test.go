@@ -109,7 +109,7 @@ func TestReconcile_AgeGateDatesTheIdentityByItsWorkloadRecommendation(t *testing
 			wlr := &sustainv1alpha1.WorkloadRecommendation{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "default", Name: wlrcache.Name("Job", "nightly-etl"),
-					Labels:            map[string]string{wlrPolicyLabel: "p"},
+					Labels:            map[string]string{sustainv1alpha1.WLRPolicyLabel: "p"},
 					CreationTimestamp: metav1.NewTime(tc.wlrCreated),
 				},
 				Spec: sustainv1alpha1.WorkloadRecommendationSpec{
