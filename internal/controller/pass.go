@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"slices"
-	"time"
 
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
@@ -173,6 +172,7 @@ func (r *PolicyReconciler) claim(ctx context.Context, policyName string, work []
 // identity, why its decision could not be stored.
 func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, claims []claimed, recs []recommendation) []error {
 	errs := make([]error, len(work))
+	now := r.now()
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
 	for i, w := range work {
@@ -183,7 +183,7 @@ func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, clai
 		default:
 			d := recs[i].decision(w.id.Departed())
 			g.Go(func() error {
-				errs[i] = wlrcache.Record(ctx, r.Client, claims[i].wlr, d, time.Now(), r.lifetimes())
+				errs[i] = wlrcache.Record(ctx, r.Client, claims[i].wlr, d, now, r.lifetimes())
 				return nil
 			})
 		}

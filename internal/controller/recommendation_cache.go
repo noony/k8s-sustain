@@ -3,7 +3,6 @@ package controller
 import (
 	"context"
 	"slices"
-	"time"
 
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -60,6 +59,7 @@ func standingIn(snap *inventory.Snapshot) wlrcache.Standings {
 // came back. Best-effort.
 func (r *PolicyReconciler) recordConflicted(ctx context.Context, policyName string, snap *inventory.Snapshot) {
 	logger := log.FromContext(ctx)
+	now := r.now()
 	for i := range snap.Identities {
 		id := &snap.Identities[i]
 		policies := id.MemberPolicies()
@@ -74,7 +74,7 @@ func (r *PolicyReconciler) recordConflicted(ctx context.Context, policyName stri
 			continue
 		}
 		decision := wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeConflicted}
-		if err := wlrcache.Record(ctx, r.Client, id.Recommendation, decision, time.Now(), r.lifetimes()); err != nil {
+		if err := wlrcache.Record(ctx, r.Client, id.Recommendation, decision, now, r.lifetimes()); err != nil {
 			logger.V(1).Info("failed to record the Conflicted outcome", "name", id.Recommendation.Name,
 				"namespace", id.Recommendation.Namespace, "err", err)
 		}

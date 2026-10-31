@@ -20,7 +20,6 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
-	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
@@ -91,12 +90,13 @@ func (f fetchHook) FetchInputs(ctx context.Context, at time.Time, cfg sustainv1a
 }
 
 // The pass sweeps the Policy's objects by where their identities stand in the
-// snapshot it took, as of when it took it. Its clock stands twelve minutes
-// back, as for a pass that then waited on evictions: a webhook stub created
-// during the pass is in no snapshot, and survives only because the grace is
-// counted from the snapshot.
+// snapshot it took, as of when it took it. Its clock moves twelve minutes on
+// during the fetch, as for a pass that waits long: a webhook stub created a
+// minute after the snapshot is in no snapshot, and survives only because the
+// grace is counted from the snapshot. The pass records on the same clock.
 func TestReconcile_SweepsAgainstItsSnapshotAtItsInstant(t *testing.T) {
-	now := time.Now()
+	now := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	clk := clocktesting.NewFakeClock(now)
 	p := governingPolicy("p")
 	p.Spec.Selector.Namespaces = []string{"prod"}
 	member := func(name, policy, ownerName string) *appsv1.Deployment {
@@ -118,17 +118,22 @@ func TestReconcile_SweepsAgainstItsSnapshotAtItsInstant(t *testing.T) {
 	).Build()
 	stub := wlrFor("p", "prod", "Pod", "late", time.Time{})
 	stub.Status = sustainv1alpha1.WorkloadRecommendationStatus{}
-	stub.CreationTimestamp = metav1.NewTime(now.Add(-11 * time.Minute))
-	inputs := fetchHook{InputsFetcher: recommendertest.NewStaticInputs(), hook: func() {
+	stub.CreationTimestamp = metav1.NewTime(now.Add(time.Minute))
+	inputs := fetchHook{InputsFetcher: usageFor("prod", "Deployment", "app"), hook: func() {
+		clk.Step(12 * time.Minute)
 		if err := c.Create(context.Background(), stub.DeepCopy()); err != nil && !apierrors.IsAlreadyExists(err) {
 			t.Errorf("creating the stub: %v", err)
 		}
 	}}
 	r := reconcilerOn(c, c.Scheme(), inputs, false)
-	r.Clock = clocktesting.NewFakePassiveClock(now.Add(-12 * time.Minute))
+	r.Clock = clk
 	r.RecommendationRetention = 72 * time.Hour
 
 	reconcileOnce(t, r, "p")
+
+	if got := getWLRFor(t, r, "prod", "Deployment", "app").Status.ObservedAt; !got.Time.Equal(clk.Now()) {
+		t.Errorf("app observedAt = %v, want the reconciler's clock at the record, %v", got.Time, clk.Now())
+	}
 
 	for _, tc := range []struct {
 		ns, kind, name string
