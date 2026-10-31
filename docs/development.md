@@ -396,7 +396,8 @@ over a `Span`, under the same sharding, retries and fallback, with shards
 planned on the signal's samples per container times the span's instants, and
 collects each instant's samples with the signal's own `collect`. Only the OOM
 signal adds anything: its range read also carries the kills a chart marks
-(`killsQuery`, read from the kill rule), which no instant of its 24h rules can
+(`killsQuery`, read from the kill rule its contract declares as a history
+rule), which no instant of its 24h rules can
 date. `ComputeRange` then runs the whole chain at each instant on that
 instant's values, the instant in the `stageContext`, without reading anything
 else; it is what a Simulation's charts draw, and `Request.RequestAt` no longer
@@ -430,7 +431,8 @@ exists. To add a signal:
 4. Declare its Prometheus contract next to its query, in its `contract`
    method: the recording rules the query reads, the labels each aggregates by
    (`shardLabels`, the identity and the container), the evaluation interval
-   its shard cost assumes (zero if none), the cAdvisor and
+   its shard cost assumes (zero if none), any rule only its history read
+   reads (`HistoryRules`, as the OOM floor's kill rule), the cAdvisor and
    kube-state-metrics series those rules compute from, through every rule
    they read in turn, and the cAdvisor series a rule reads per container
    instance (`CAdvisorPerInstance`, as the OOM floor's memory limit). Then run

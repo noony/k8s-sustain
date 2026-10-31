@@ -137,11 +137,13 @@ func (oomFloor) killsQuery(shard promclient.Shard, step time.Duration) string {
 }
 
 // contract: the rules are read as an instant vector, so the cost does not
-// depend on their evaluation interval.
+// depend on their evaluation interval. The history read also reads the kill
+// rule they derive from, for the kills a chart marks.
 func (oomFloor) contract() PromContract {
 	return PromContract{
-		Rules:  oomRules,
-		Labels: shardLabels,
+		Rules:        oomRules,
+		Labels:       shardLabels,
+		HistoryRules: []string{promclient.MetricContainerOOMKills},
 		CAdvisor: []string{
 			"container_memory_max_usage_bytes",
 			"container_memory_peak_working_set_bytes",

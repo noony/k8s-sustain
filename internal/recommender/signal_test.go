@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
@@ -286,7 +287,7 @@ var ruleRef = regexp.MustCompile(`k8s_sustain:[a-z0-9_:]+`)
 
 // Listing a signal is enough for its contract to be checked against the
 // chart, and each contract declares exactly the rules its signal's query
-// reads.
+// reads, and as history rules exactly those its history read alone reads.
 func TestSignals_ContractDeclaresTheRulesItsQueryReads(t *testing.T) {
 	withSignals(t, append(slices.Clone(signals), listedSignal{})...)
 
@@ -303,6 +304,13 @@ func TestSignals_ContractDeclaresTheRulesItsQueryReads(t *testing.T) {
 		read := ruleRef.FindAllString(s.query(sustainv1alpha1.ResourcesConfigs{}, dottedShard), -1)
 		if got, want := slices.Sorted(slices.Values(read)), slices.Sorted(slices.Values(c.Rules)); !slices.Equal(got, want) {
 			t.Errorf("%s reads %v, its contract declares %v", s.name(), got, want)
+		}
+		var history []string
+		if k, ok := s.(killReader); ok {
+			history = ruleRef.FindAllString(k.killsQuery(dottedShard, time.Minute), -1)
+		}
+		if got, want := slices.Sorted(slices.Values(history)), slices.Sorted(slices.Values(c.HistoryRules)); !slices.Equal(got, want) {
+			t.Errorf("%s's history reads %v, its contract declares %v", s.name(), got, want)
 		}
 	}
 }

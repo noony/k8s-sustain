@@ -180,14 +180,29 @@ func (s scrape) instancesApart(metric string) (bool, error) {
 
 // chart is what the contracts are checked against: the recording rules by
 // name, the bundled scrape job of each exporter, the pod annotations the
-// bundled kube-state-metrics exports, and the rules a promtool fixture
-// evaluates with expected samples.
+// bundled kube-state-metrics exports, the rules a promtool fixture evaluates
+// with expected samples, and, per rule a fixture evaluates alone, the labels
+// of each sample it expects.
 type chart struct {
 	rules            map[string][]rule
 	cAdvisor         scrape
 	kubeStateMetrics scrape
 	podAnnotations   []string
 	fixtured         map[string]bool
+	sampleLabels     map[string][][]string
+}
+
+var sampleLabel = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"(?:[^"\\]|\\.)*"`)
+
+// labelNames lists the label names of a promtool expected sample's series,
+// its metric name aside.
+func labelNames(series string) []string {
+	_, matchers, _ := strings.Cut(series, "{")
+	var out []string
+	for _, m := range sampleLabel.FindAllStringSubmatch(matchers, -1) {
+		out = append(out, m[1])
+	}
+	return out
 }
 
 func loadChart(t *testing.T) chart {
@@ -195,7 +210,7 @@ func loadChart(t *testing.T) chart {
 	var v values
 	readYAML(t, filepath.Join(repoRoot, valuesFile), &v)
 
-	c := chart{rules: map[string][]rule{}, fixtured: map[string]bool{}}
+	c := chart{rules: map[string][]rule{}, fixtured: map[string]bool{}, sampleLabels: map[string][][]string{}}
 	for _, g := range v.PrometheusRule.Groups {
 		for _, r := range g.Rules {
 			if r.Record != "" {
@@ -238,6 +253,17 @@ func loadChart(t *testing.T) chart {
 				}
 				for _, name := range metricNames(e.Expr) {
 					c.fixtured[name] = true
+				}
+				if name := strings.TrimSpace(e.Expr); c.rules[name] != nil {
+					for _, raw := range e.ExpSamples {
+						var s struct {
+							Labels string `json:"labels"`
+						}
+						if err := json.Unmarshal(raw, &s); err != nil {
+							t.Fatalf("%s: expected sample of %s: %v", f, name, err)
+						}
+						c.sampleLabels[name] = append(c.sampleLabels[name], labelNames(s.Labels))
+					}
 				}
 			}
 		}
@@ -324,14 +350,29 @@ func check(c chart, contracts []recommender.PromContract) []string {
 			}
 		}
 
+		for _, name := range k.HistoryRules {
+			if len(c.rules[name]) == 0 {
+				report("signal %s's history reads %s, which prometheusRule.groups in %s does not record", k.Signal, name, valuesFile)
+				allRecorded = false
+				continue
+			}
+			if !c.fixtured[name] {
+				report("signal %s's history reads %s, which no promtool fixture in %s evaluates with expected samples",
+					k.Signal, name, fixturesDir)
+				continue
+			}
+			c.checkHistoryLabels(k.Signal, name, labels, report)
+		}
+
 		declared := map[string]bool{}
 		for _, m := range slices.Concat(k.CAdvisor, k.KubeStateMetrics) {
 			declared[m] = true
 		}
 		if allRecorded {
-			recorded, raw := c.through(k.Rules)
+			read := slices.Concat(k.Rules, k.HistoryRules)
+			recorded, raw := c.through(read)
 			for _, name := range slices.Sorted(maps.Keys(recorded)) {
-				if !slices.Contains(k.Rules, name) && !c.fixtured[name] {
+				if !slices.Contains(read, name) && !c.fixtured[name] {
 					report("signal %s's rules compute from %s, which no promtool fixture in %s evaluates with expected samples",
 						k.Signal, name, fixturesDir)
 				}
@@ -379,11 +420,34 @@ func check(c chart, contracts []recommender.PromContract) []string {
 	return problems
 }
 
+// checkHistoryLabels reports a history rule whose series may lack one of
+// labels, the ones the history read sums it by. A history rule need not be one
+// aggregation, so the labels it keeps are read from the samples a promtool
+// fixture expects of it alone, which make helm-promtool holds to the rule.
+func (c chart) checkHistoryLabels(signal, name string, labels []string, report func(string, ...any)) {
+	samples := c.sampleLabels[name]
+	if len(samples) == 0 {
+		report("signal %s's history reads %s, which no promtool fixture evaluates alone with expected samples, so the labels it keeps are unchecked",
+			signal, name)
+		return
+	}
+	for _, got := range samples {
+		for _, l := range labels {
+			if !slices.Contains(got, l) {
+				report("signal %s's history sums %s by (%s), but a sample a promtool fixture expects of it has no %s label",
+					signal, name, strings.Join(labels, ", "), l)
+				return
+			}
+		}
+	}
+}
+
 // The chart provides every signal's contract: its rules, aggregated by its
-// labels at its interval, computed from the raw metrics it declares, all of
-// them kept by their exporter's keep-list, those read per container instance
-// kept apart per instance, and every rule they compute through, theirs
-// included, covered by a promtool fixture.
+// labels at its interval, its history rules, keeping those labels, computed
+// from the raw metrics it declares, all of them kept by their exporter's
+// keep-list, those read per container instance kept apart per instance, and
+// every rule they compute through, theirs included, covered by a promtool
+// fixture.
 func TestChartProvidesEverySignalsContract(t *testing.T) {
 	contracts := recommender.PromContracts()
 	if len(contracts) == 0 {
@@ -504,6 +568,64 @@ func TestCheckReportsEachBreach(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := loadChart(t)
 			k := cpu
+			tc.edit(&c, &k)
+
+			problems := check(c, []recommender.PromContract{k})
+
+			if len(problems) != 1 || !strings.Contains(problems[0], tc.want) {
+				t.Errorf("problems = %q, want one containing %q", problems, tc.want)
+			}
+		})
+	}
+}
+
+// Each way a chart can fail a history rule is reported on its own, starting
+// from the OOM floor's contract the chart provides, whose history read sums
+// the kill rule by the identity and the container.
+func TestCheckReportsEachHistoryBreach(t *testing.T) {
+	var oom recommender.PromContract
+	for _, k := range recommender.PromContracts() {
+		if k.Signal == "oom" {
+			oom = k
+		}
+	}
+	killRule := promclient.MetricContainerOOMKills
+	if !slices.Equal(oom.HistoryRules, []string{killRule}) {
+		t.Fatalf("oom contract = %+v, want the kill rule as its one history rule", oom)
+	}
+
+	cases := []struct {
+		name string
+		edit func(*chart, *recommender.PromContract)
+		want string
+	}{
+		{
+			"a history rule the chart does not record",
+			func(_ *chart, k *recommender.PromContract) { k.HistoryRules = []string{throttleRule} },
+			"history reads " + throttleRule + ", which prometheusRule.groups in " + valuesFile + " does not record",
+		},
+		{
+			"a history rule no promtool fixture evaluates",
+			func(c *chart, _ *recommender.PromContract) { delete(c.fixtured, killRule) },
+			"history reads " + killRule + ", which no promtool fixture in " + fixturesDir + " evaluates with expected samples",
+		},
+		{
+			"a history rule no promtool fixture evaluates alone",
+			func(c *chart, _ *recommender.PromContract) { delete(c.sampleLabels, killRule) },
+			"which no promtool fixture evaluates alone with expected samples, so the labels it keeps are unchecked",
+		},
+		{
+			"a history rule losing a label the read sums by",
+			func(c *chart, _ *recommender.PromContract) {
+				c.sampleLabels[killRule] = [][]string{{"container", "namespace", "owner_kind", "pod"}}
+			},
+			"history sums " + killRule + " by (container, namespace, owner_kind, owner_name), but a sample a promtool fixture expects of it has no owner_name label",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := loadChart(t)
+			k := oom
 			tc.edit(&c, &k)
 
 			problems := check(c, []recommender.PromContract{k})
