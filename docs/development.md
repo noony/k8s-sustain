@@ -43,15 +43,20 @@ through the `recommender.InputsFetcher` port. Their tests inject
 
 ```go
 inputs := recommendertest.NewStaticInputs().
-    Set(id, &recommender.WorkloadInputs{
-        CPUPerPod: promclient.ContainerValues{"app": 0.1},
-        OOM:       map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 300 << 20, HasPeak: true}},
-    }).
+    Set(id,
+        recommender.WithCPUUsage(promclient.ContainerValues{"app": 0.1}),
+        recommender.WithOOMKills(map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 300 << 20, HasPeak: true}}),
+    ).
     Fail(otherID, errors.New("prometheus down"))
 ```
 
-An identity with neither gets empty inputs, whatever the settings it is
-fetched under, as Prometheus answers for one with no samples. `Calls()`
+Each signal's module exports the option that sets its values
+(`WithCPUUsage`, `WithMemoryUsage`, `WithOOMKills`). `Set` builds the
+identity's inputs with `recommender.NewInputs`, which gives every signal it
+is not given its values from no samples, so they read exactly as the inputs
+`PromInputs` fetches. An identity with neither gets empty inputs, whatever
+the settings it is fetched under, as Prometheus answers for one with no
+samples. `Calls()`
 reports every fetch, the settings it ran under and its requests, and
 `Requested(id)` whether an identity was part of any, so a test can assert
 what was fetched and how. Prefer driving
@@ -340,32 +345,56 @@ A [signal](concepts/recommendation-pipeline.md#signals) is one module of
 `internal/recommender` (`signal_usage.go` holds the CPU and memory usage
 signals, `signal_oom.go` the OOM floor) implementing the `signal` interface in
 `signal.go`: its query and shard cost, its Prometheus contract (`contract`),
-how it collects samples into per-container values, its failure policy, whether
-its values excuse a Too
-young identity from the age gate (`excusesAge`), where its stage runs (`slot`:
-base, adjuster or limit adjuster, CPU or memory), its contribution to a
-container's request or limit, and its trace stage. `PromInputs` fetches every
-signal in the `signals` list, and `Compute` runs one chain per resource in a
-fixed order: on the request side base signals, adjusters, headroom, clamp and
-coordination; on the limit side the Policy's limit strategy, limit adjusters
-and the guard (`limit.go`, whose `limitStrategies` is the one list of limit
-strategies, which `WithDefaults` reads too). Both sides run their signals
-alike (`contributionsTo`, then `stagesOf` for their trace stages) and differ
-only in which contribution wins. Neither has a line specific to any signal:
-the age gate asks every signal, and live OOM kills reach the OOM floor through
-the inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
+how it collects samples into its values (`collect`), its failure policy, where
+its stage runs (`slot`: base, adjuster or limit adjuster, CPU or memory), its
+contribution to a container's request or limit, and its trace stage. Its
+values are a type of its own behind the `signalValues` interface
+(`inputs.go`): the containers they give something to recommend from
+(`observed`), and whether they excuse a Too young identity from the age gate
+(`excusesAge`). `WorkloadInputs` holds every signal's values keyed by the
+signal, and a signal reads its own back with `valuesOf`, so a new signal adds
+no field to any shared type.
+
+`PromInputs` fetches every signal in the `signals` list, and `Compute` runs
+one chain per resource in a fixed order: on the request side base signals,
+adjusters, headroom, clamp and coordination; on the limit side the Policy's
+limit strategy, limit adjusters and the guard (`limit.go`, whose
+`limitStrategies` is the one list of limit strategies, which `WithDefaults`
+reads too). Both sides run their signals alike (`contributionsTo`, then
+`stagesOf` for their trace stages), and every stage of a signal, its
+contribution and its trace entry, sizes with one `stageContext`: the
+identity's inputs, the resource's Policy config, the container as the
+identity holds it (the union of its members', with the requests and limits it
+declares, not a live pod's), the instant the Request computes as of, and on
+the limit side the final request. Each role combines its contributions its
+own way: base contributions by taking the highest, a tie going to the first in
+`signals` order (`requestOf`); an adjuster's only when it is above the value
+so far; a limit adjuster's only when, rounded up to a whole millicore or MiB,
+it is above the limit the strategy set. The trace marks the contribution that
+set the final value as the determining one. Neither side has a line specific
+to any signal: the age gate asks every signal's values, and live OOM kills
+reach the OOM floor through the inputs port (`WithLiveOOMs`), not through
+`Compute`.
+
+Outside the recommender, inputs answer only the questions every reader
+shares: `Resolved` (whether any container's usage was observed, the
+controller's coverage count) and `Usage` (a container's usage of a resource,
+which a Simulation shows). Add another only when a reader needs it, never a
+signal's values. To add a signal:
 
 1. Write `internal/recommender/signal_<name>.go`. Build its PromQL from the
    `internal/prometheus` primitives (`Shard.Selector`, `Shard.MetricsSelector`,
    `QuantileOverTime`, `WindowMinutes`); `PromInputs` runs it through
    `Client.QueryShard`, with the batching, retry and one-identity fallback
-   every signal shares. Give its per-container values a field in
-   `WorkloadInputs`, which is what `recommendertest.StaticInputs` serves
+   every signal shares. Give its values a type of their own implementing
+   `signalValues`, whose zero value holds nothing, and export the
+   `InputsOption` that sets them (`WithOOMKills` does, through `setting`):
+   it is how `recommendertest.StaticInputs` serves them
 2. List it in `signals` (`internal/recommender/signal.go`). Within a role,
-   stages run in list order. A base signal or adjuster shapes the request; a
-   limit adjuster may only raise the limit the strategy set, never remove it
-   or give one to a container without, and the guard still raises a limit
-   left below the request
+   stages run in list order, which settles a tie between base signals. A base
+   signal or adjuster shapes the request; a limit adjuster may only raise the
+   limit the strategy set, never remove it or give one to a container
+   without, and the guard still raises a limit left below the request
 3. Its trace stage is a `TraceStage` it builds itself: its name, the value it
    contributed and any facts as key/values. The trace is a list, so a new
    stage needs no CRD, `api.ts` or dashboard change (the dashboard shows an
@@ -398,17 +427,19 @@ the inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
    for users who bring their own Prometheus
 5. Test it at its own interface, next to `signal_usage_test.go` and
    `signal_oom_test.go`: the query built from settings, the values collected
-   from `ShardSample`s, its failure policy, its contribution and trace stage.
-   Test what it does to a whole recommendation through `Compute`, from a
-   `Request` the test builds in the package at a fixed instant (`now`; outside
-   the package only `Assemble` builds one). `signal_test.go` shows, in one
-   test, that a signal defined only in a test is fetched and then computed on
-   the limit side with its own trace stage from what was fetched, from its
-   list entry alone and with its values carried in `WorkloadInputs`, and
-   checks that every listed signal's contract
-   declares exactly the rules its query reads and that its `collect` reads a
-   sample of each of them, so no series its query returns is dropped for a
-   metric name `collect` does not handle
+   from `ShardSample`s, its failure policy, and its contribution and trace
+   stage from a `stageContext` the test builds (`stageFor`), with no
+   Request. Test what it does to a whole recommendation through `Compute`,
+   from a `Request` the test builds in the package at a fixed instant (`now`;
+   outside the package only `Assemble` builds one) with inputs from
+   `NewInputs`. `signal_test.go` shows that a signal defined only in a test,
+   with values of its own type, is fetched and then computed on the limit
+   side with its own trace stage from what was fetched, from its list entry
+   alone; that every stage of a signal gets its context; that base signals
+   combine by max; and it checks that every listed signal's contract declares
+   exactly the rules its query reads and that its `collect` reads a sample of
+   each of them, so no series its query returns is dropped for a metric name
+   `collect` does not handle
 6. Add it to the signals table in
    [Recommendation Pipeline](concepts/recommendation-pipeline.md#signals) and
    describe its stage there
@@ -716,7 +747,7 @@ The computation unit is the identity, not the workload object: a group of worklo
 - the spec's resources with every default explicit (`WithDefaults`: the window, the percentile and headroom unless the request is kept, `keepLimit` when no strategy is set), which the fetch and the computation both use and a Simulation returns as its effective settings;
 - one batch fetch, and one instant per batch read from `now` once it returns: kills the live decorator merged in never postdate it. The caller owns the clock: the controller passes `PolicyReconciler.Clock`, the one `start` also gives `WithLiveOOMs`, so the age gate and the live OOM window are judged by one clock; the dashboard passes `Server.Clock`. Nil is the wall clock on both, and a test fixes the instant with a fake one.
 
-`Request` has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). `Request.RequestAt` is the request a Request computes for one of its containers had its usage percentile of one resource been a given value, every other signal as observed: a Simulation's recommendation chart computes each past percentile point with it (`recommendationSeries`), so a point costs one resource of one container, and the dashboard never maps a resource to its fields itself.
+`Request` has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). `Request.RequestAt` is the request a Request computes for one of its containers had its usage percentile of one resource been a given value, every other signal as observed: a Simulation's recommendation chart computes each past percentile point with it (`recommendationSeries`), so a point costs one resource of one container, and the dashboard never reads a signal's values itself.
 
 #### The Policy pass
 

@@ -41,7 +41,9 @@ A signal is an observed input that contributes one stage to a recommendation. Ea
 | Memory usage | base: sets the request | memory | the identity's fetch fails | `percentile` |
 | OOM floor | adjuster: can only raise the request | memory | computed without the floor | `oomFloor` |
 
-A signal's stage sits on the request side (base or adjuster) or on the limit side (limit adjuster: can only raise the limit the strategy set). No built-in signal is a limit adjuster yet.
+A signal's stage sits on the request side (base or adjuster) or on the limit side (limit adjuster: can only raise the limit the strategy set). No built-in signal is a limit adjuster yet. Base signals combine by max: when several contribute to one resource, the highest contribution sets the request, a tie going to the first in their fixed order, and the trace marks it as the determining stage. An adjuster only replaces the value the base signals set when it is higher. Today each resource has one base signal, its usage.
+
+Every stage of a signal works from the same context: the resource's Policy settings, the container as the identity declares it (the union of its members' containers, with the requests and limits they declare, not a live pod's), the instant the computation runs as of, and, on the limit side, the final request.
 
 Every resource goes through the same fixed chain. Request side: base signals, adjusters, headroom, the min/max clamp, autoscaler coordination. Limit side: the Policy's limit strategy applied to the final request, limit adjusters, then the guard. The order is not configurable.
 
