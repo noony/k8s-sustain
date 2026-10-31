@@ -345,7 +345,7 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 4. Add the same kind to `k8s.OwnerChainDisableFor()` in `internal/k8s/client.go`. Every kind in `ownerKinds` must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. `TestDisableForCoversOwnerAnnotationKinds` (`internal/webhook/optin_test.go`) cross-checks the two lists and fails if one is missing from the other
 5. If the kind is a CRD, register its scheme in `internal/config/config.go` and `internal/dashboard/server.go`
 6. Give the kind its apply rule in `applyRules` (`internal/workload/apply.go`): where a member's pods come from (`selectedPods` with the kind's selector for a workload whose pods it owns through a selector, a function of its own otherwise) and whether the kind is `inPlaceOnly`, its pods never evicted (like Job, CronJob and bare `Pod`). `TestApply_EveryKindHasAnApplyRule` fails for a kind of `SupportedKinds` without a rule, and `TestApply_EveryKindUnderEveryMode` (`internal/workload/apply_test.go`) needs a fixture for it
-7. Add RBAC markers (`+kubebuilder:rbac:...`) to the controller and the Helm RBAC rule in `charts/k8s-sustain/templates/rbac.yaml`
+7. Grant the kind's resource in both ClusterRoles of `charts/k8s-sustain/templates/rbac.yaml`: the chart's RBAC is the only one, nothing generates it
 
 ## Adding a recommendation signal
 
