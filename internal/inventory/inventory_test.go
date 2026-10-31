@@ -43,8 +43,15 @@ func scheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+// basis is what the tests' snapshots are taken with: dated at base.
+func basis() inventory.Basis {
+	return inventory.Basis{Clock: clocktesting.NewFakePassiveClock(base)}
+}
+
+// take snapshots objs on opts with basis's clock.
 func take(t *testing.T, opts inventory.Options, objs ...client.Object) *inventory.Snapshot {
 	t.Helper()
+	opts.Clock = basis().Clock
 	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(objs...).Build()
 	snap, err := inventory.Take(context.Background(), c, opts)
 	if err != nil {
@@ -471,7 +478,7 @@ func TestUnservedKindIsEmptyButOtherErrorsFail(t *testing.T) {
 	isRollouts := func(l client.ObjectList) bool { _, ok := l.(*rolloutsv1alpha1.RolloutList); return ok }
 
 	noCRD := &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "argoproj.io", Kind: "Rollout"}}
-	snap, err := inventory.Take(context.Background(), listErr(isRollouts, noCRD), inventory.Options{})
+	snap, err := inventory.Take(context.Background(), listErr(isRollouts, noCRD), inventory.Options{Basis: basis()})
 	if err != nil {
 		t.Fatalf("Take with no Rollout CRD: %v", err)
 	}
@@ -479,7 +486,7 @@ func TestUnservedKindIsEmptyButOtherErrorsFail(t *testing.T) {
 		t.Error("the other kinds must still be listed")
 	}
 
-	if _, err := inventory.Take(context.Background(), listErr(isRollouts, errors.New("forbidden")), inventory.Options{}); err == nil {
+	if _, err := inventory.Take(context.Background(), listErr(isRollouts, errors.New("forbidden")), inventory.Options{Basis: basis()}); err == nil {
 		t.Error("a failed read must fail the snapshot")
 	}
 }
@@ -505,12 +512,25 @@ func TestNamespaceReadOnlyWhenUndecided(t *testing.T) {
 			},
 		}).Build()
 
-	for _, opts := range []inventory.Options{{}, {Namespaces: []string{"a"}}} {
+	for _, opts := range []inventory.Options{{Basis: basis()}, {Basis: basis(), Namespaces: []string{"a"}}} {
 		if _, err := inventory.Take(context.Background(), c, opts); err != nil {
 			t.Fatalf("Take: %v", err)
 		}
 	}
 	if reads != 0 {
 		t.Errorf("Namespace reads = %d, want none for a template-level opt-in", reads)
+	}
+}
+
+// A snapshot is dated by its reader's clock, never a fallback of its own: a
+// Basis without one fails, even for a Policy that reads nothing.
+func TestABasisWithoutAClockFails(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(everyKind("p")).Build()
+	if _, err := inventory.Take(context.Background(), c, inventory.Options{}); err == nil {
+		t.Error("Take without a clock succeeded")
+	}
+	none := managing("none", sustainv1alpha1.UpdateTypes{})
+	if _, err := inventory.TakeForPolicy(context.Background(), c, none, inventory.Basis{}); err == nil {
+		t.Error("TakeForPolicy without a clock succeeded")
 	}
 }

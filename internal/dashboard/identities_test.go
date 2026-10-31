@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -74,7 +75,7 @@ func deploymentPolicy(name string) *sustainv1alpha1.Policy {
 func identityServer(t *testing.T, health memHealthSignals, objs ...client.Object) *Server {
 	t.Helper()
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
-	return &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: health, Inputs: recommendertest.NewStaticInputs()}
+	return &Server{Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: health, Inputs: recommendertest.NewStaticInputs()}
 }
 
 type listedRow struct {
@@ -406,7 +407,7 @@ func TestWorkloadDetailReadsEventsOfEveryMember(t *testing.T) {
 	} {
 		b = index(b)
 	}
-	srv := &Server{K8sClient: b.Build(), Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
+	srv := &Server{Clock: clock.RealClock{}, K8sClient: b.Build(), Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
 	var got workloadDetailResponse
 	detail(t, srv, "prod", "Deployment", "api", &got)

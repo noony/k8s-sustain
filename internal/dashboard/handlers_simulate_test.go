@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/noony/k8s-sustain/internal/recommender"
@@ -18,7 +19,7 @@ import (
 // TestHandleSimulate_RejectsNonPost verifies the handler rejects GET/PUT/etc.
 // with 405 instead of trying to decode an empty body.
 func TestHandleSimulate_RejectsNonPost(t *testing.T) {
-	srv := &Server{Logger: testLogger(t)}
+	srv := &Server{Clock: clock.RealClock{}, Logger: testLogger(t)}
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {
 			rec := httptest.NewRecorder()
@@ -33,7 +34,7 @@ func TestHandleSimulate_RejectsNonPost(t *testing.T) {
 // A body that is not JSON, or names a field the API does not have (such as
 // the former per-resource settings, now an override), is a 400.
 func TestHandleSimulate_RejectsBadJSON(t *testing.T) {
-	srv := &Server{Logger: testLogger(t)}
+	srv := &Server{Clock: clock.RealClock{}, Logger: testLogger(t)}
 	for _, body := range []string{
 		"{not json",
 		`{"namespace":"default","ownerKind":"Deployment","ownerName":"web","cpu":{"percentile":90}}`,
@@ -47,7 +48,7 @@ func TestHandleSimulate_RejectsBadJSON(t *testing.T) {
 }
 
 func TestHandleSimulate_RejectsMissingNamespace(t *testing.T) {
-	srv := &Server{Logger: testLogger(t)}
+	srv := &Server{Clock: clock.RealClock{}, Logger: testLogger(t)}
 	body := mustJSON(t, simulateRequest{OwnerKind: "Deployment", OwnerName: "web"})
 	req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
 	rec := httptest.NewRecorder()
@@ -61,7 +62,7 @@ func TestHandleSimulate_RejectsMissingNamespace(t *testing.T) {
 }
 
 func TestHandleSimulate_RejectsMissingOwnerName(t *testing.T) {
-	srv := &Server{Logger: testLogger(t)}
+	srv := &Server{Clock: clock.RealClock{}, Logger: testLogger(t)}
 	body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: "Deployment"})
 	req := httptest.NewRequest(http.MethodPost, "/api/simulate", body)
 	rec := httptest.NewRecorder()
@@ -79,7 +80,7 @@ func TestHandleSimulate_RejectsMissingOwnerName(t *testing.T) {
 // supported kind (see TestHandleSimulate_AcceptsPod) — it identifies a
 // bare-pod identity formed via api/v1alpha1.OwnerNameAnnotation.
 func TestHandleSimulate_RejectsInvalidOwnerKind(t *testing.T) {
-	srv := &Server{Logger: testLogger(t)}
+	srv := &Server{Clock: clock.RealClock{}, Logger: testLogger(t)}
 	for _, kind := range []string{"ReplicaSet"} {
 		t.Run(kind, func(t *testing.T) {
 			body := mustJSON(t, simulateRequest{Namespace: "default", OwnerKind: kind, OwnerName: "x"})
@@ -101,6 +102,7 @@ func TestHandleSimulate_RejectsInvalidOwnerKind(t *testing.T) {
 // validator must not bounce it with a 400.
 func TestHandleSimulate_AcceptsJob(t *testing.T) {
 	srv := &Server{
+		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
@@ -120,6 +122,7 @@ func TestHandleSimulate_AcceptsJob(t *testing.T) {
 // bounce it with a 400.
 func TestHandleSimulate_AcceptsRollout(t *testing.T) {
 	srv := &Server{
+		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
@@ -141,6 +144,7 @@ func TestHandleSimulate_AcceptsRollout(t *testing.T) {
 // for the request to validate and reach the simulation pipeline.
 func TestHandleSimulate_AcceptsPod(t *testing.T) {
 	srv := &Server{
+		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
@@ -159,6 +163,7 @@ func TestHandleSimulate_AcceptsPod(t *testing.T) {
 // it cannot see to the one the controller's OOM floor counts a live kill for.
 func TestHandleSimulate_SendsTheLiveOOMWindow(t *testing.T) {
 	srv := &Server{
+		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
@@ -189,7 +194,7 @@ func TestHandleSimulate_SendsTheLiveOOMWindow(t *testing.T) {
 // flow into Prometheus queries (where they'd cause a late, less actionable
 // error — and could be used to trigger pathologically expensive queries).
 func TestHandleSimulate_RejectsBadDuration(t *testing.T) {
-	srv := &Server{Logger: testLogger(t)}
+	srv := &Server{Clock: clock.RealClock{}, Logger: testLogger(t)}
 	body := mustJSON(t, simulateRequest{
 		Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
 		Window: "drop tables; --",
@@ -209,6 +214,7 @@ func TestHandleSimulate_RejectsBadDuration(t *testing.T) {
 // starting Policy that does not exist is a 404.
 func TestHandleSimulate_RejectsWhatItCannotStartFrom(t *testing.T) {
 	srv := &Server{
+		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
@@ -257,7 +263,7 @@ func TestHandleSimulate_RejectsWhatItCannotStartFrom(t *testing.T) {
 // validation of fromTs/toTs pairs added in validateAbsoluteRange.
 func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 	t.Run("from_equals_to", func(t *testing.T) {
-		srv := &Server{Logger: testLogger(t)}
+		srv := &Server{Clock: clock.RealClock{}, Logger: testLogger(t)}
 		body := mustJSON(t, simulateRequest{
 			Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
 			FromTs: 1718000000, ToTs: 1718000000,
@@ -271,7 +277,7 @@ func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 	})
 
 	t.Run("from_after_to", func(t *testing.T) {
-		srv := &Server{Logger: testLogger(t)}
+		srv := &Server{Clock: clock.RealClock{}, Logger: testLogger(t)}
 		body := mustJSON(t, simulateRequest{
 			Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
 			FromTs: 1718003600, ToTs: 1718000000,
@@ -285,7 +291,7 @@ func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 	})
 
 	t.Run("only_from_set", func(t *testing.T) {
-		srv := &Server{Logger: testLogger(t)}
+		srv := &Server{Clock: clock.RealClock{}, Logger: testLogger(t)}
 		body := mustJSON(t, simulateRequest{
 			Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
 			FromTs: 1718000000,
@@ -299,7 +305,7 @@ func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 	})
 
 	t.Run("only_to_set", func(t *testing.T) {
-		srv := &Server{Logger: testLogger(t)}
+		srv := &Server{Clock: clock.RealClock{}, Logger: testLogger(t)}
 		body := mustJSON(t, simulateRequest{
 			Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
 			ToTs: 1718003600,
@@ -314,6 +320,7 @@ func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 
 	t.Run("valid_range_passes_validation", func(t *testing.T) {
 		srv := &Server{
+			Clock:      clock.RealClock{},
 			K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 			PromClient: &fakePromClient{},
 			Inputs:     recommendertest.NewStaticInputs(),

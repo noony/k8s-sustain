@@ -67,8 +67,8 @@ type PolicyReconciler struct {
 	// Inputs fetches the recommendation inputs of a Policy's identities,
 	// live OOM kills included when it is decorated by recommender.WithLiveOOMs.
 	Inputs recommender.InputsFetcher
-	// Clock is what a pass's recommendations are computed, and its inputs
-	// fetched, as of. Nil is the wall clock.
+	// Clock dates a pass: its snapshot, the instant its recommendations are
+	// computed and its inputs fetched as of, and its records. Required.
 	Clock clock.PassiveClock
 
 	// RecycleReplacementTimeout caps how long the patcher waits for a replacement
@@ -174,6 +174,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	if r.Inputs == nil {
 		return ctrl.Result{}, fmt.Errorf("recommendation inputs fetcher not configured")
+	}
+	if r.Clock == nil {
+		return ctrl.Result{}, fmt.Errorf("clock not configured")
 	}
 
 	policy := &sustainv1alpha1.Policy{}

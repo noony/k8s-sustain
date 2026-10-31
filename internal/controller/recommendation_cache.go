@@ -59,7 +59,7 @@ func standingIn(snap *inventory.Snapshot) wlrcache.Standings {
 // came back. Best-effort.
 func (r *PolicyReconciler) recordConflicted(ctx context.Context, policyName string, snap *inventory.Snapshot) {
 	logger := log.FromContext(ctx)
-	now := r.now()
+	now := r.Clock.Now()
 	for i := range snap.Identities {
 		id := &snap.Identities[i]
 		policies := id.MemberPolicies()

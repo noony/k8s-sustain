@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -456,7 +457,7 @@ func TestPolicySelectorMatchesThePodTemplateForInventoryAndWebhook(t *testing.T)
 					})).
 				WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
 
-			snap, err := inventory.Take(context.Background(), c, inventory.Options{})
+			snap, err := inventory.Take(context.Background(), c, inventory.Options{Basis: inventory.Basis{Clock: clock.RealClock{}}})
 			if err != nil {
 				t.Fatalf("Take: %v", err)
 			}

@@ -126,6 +126,17 @@ func TestReconcile_NoInputsFetcher_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestReconcile_NoClock_ReturnsError(t *testing.T) {
+	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
+	r := reconcilerForPolicy(t, policy)
+	r.Clock = nil
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
+	if err == nil {
+		t.Fatal("expected error when no clock is configured")
+	}
+}
+
 func TestReconcile_PolicyNotFound_NoError(t *testing.T) {
 	r := reconcilerForPolicy(t, &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "exists"}})
 

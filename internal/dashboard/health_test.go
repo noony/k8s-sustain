@@ -10,6 +10,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -141,7 +142,7 @@ func ownerNameGroupServer(t *testing.T, health memHealthSignals) *Server {
 		deploymentWithOwnerName("prod", "web-green", "web", base.Add(time.Hour)),
 	}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
-	return &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: health}
+	return &Server{Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: health}
 }
 
 // Owner-name groups are listed under their identity, so their health must be

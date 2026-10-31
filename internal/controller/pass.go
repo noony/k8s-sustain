@@ -172,7 +172,7 @@ func (r *PolicyReconciler) claim(ctx context.Context, policyName string, work []
 // identity, why its decision could not be stored.
 func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, claims []claimed, recs []recommendation) []error {
 	errs := make([]error, len(work))
-	now := r.now()
+	now := r.Clock.Now()
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
 	for i, w := range work {

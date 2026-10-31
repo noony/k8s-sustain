@@ -7,6 +7,7 @@ package inventory
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -39,15 +40,19 @@ type Basis struct {
 	// is compiled once per version of it rather than once per snapshot; nil
 	// lists through a lister of the snapshot's own.
 	Policies *governance.PolicyLister
-	// Clock dates the snapshot. Nil is the wall clock.
+	// Clock dates the snapshot. Required: the reader's own, so a test clock
+	// dates what it judges by the snapshot's instant.
 	Clock clock.PassiveClock
 }
 
-func (b Basis) now() time.Time {
+// errNoClock is a snapshot's answer to a Basis without a clock.
+var errNoClock = errors.New("inventory: the Basis has no clock to date the snapshot by")
+
+func (b Basis) validate() error {
 	if b.Clock == nil {
-		return time.Now()
+		return errNoClock
 	}
-	return b.Clock.Now()
+	return nil
 }
 
 // Options is a snapshot's Basis and what narrows it. Every member of an
@@ -165,7 +170,10 @@ type Member struct {
 // does not serve (no Argo Rollouts CRD) has no identities rather than failing
 // the snapshot.
 func Take(ctx context.Context, r client.Reader, opts Options) (*Snapshot, error) {
-	takenAt := opts.now()
+	if err := opts.validate(); err != nil {
+		return nil, err
+	}
+	takenAt := opts.Clock.Now()
 	b := &builder{
 		reader:     r,
 		opts:       opts,
@@ -204,6 +212,9 @@ func Take(ctx context.Context, r client.Reader, opts Options) (*Snapshot, error)
 // kind, so the narrowed read also sees what makes one Conflicted. A Policy
 // managing no kind reads nothing.
 func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1.Policy, b Basis) (*Snapshot, error) {
+	if err := b.validate(); err != nil {
+		return nil, err
+	}
 	opts := Options{Basis: b, Namespaces: policy.Spec.Selector.Namespaces}
 	for _, kind := range workload.SupportedKinds {
 		if policy.Spec.RightSizing.Update.Types.ModeForKind(kind) != nil {
@@ -212,7 +223,7 @@ func TakeForPolicy(ctx context.Context, r client.Reader, policy *sustainv1alpha1
 	}
 	// An empty Kinds would read every kind.
 	if len(opts.Kinds) == 0 {
-		return &Snapshot{TakenAt: b.now()}, nil
+		return &Snapshot{TakenAt: b.Clock.Now()}, nil
 	}
 	return Take(ctx, r, opts)
 }
