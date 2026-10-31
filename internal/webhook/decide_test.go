@@ -573,7 +573,7 @@ func TestAdmitTurnsAPanicIntoAnUnmutatedPod(t *testing.T) {
 			withSnapshot(wlr)
 			c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(podPolicy("p"), wlr).
 				WithInterceptorFuncs(tc.funcs).Build()
-			h := &Handler{Client: c}
+			h := &Handler{Policies: governance.NewPolicyLister(nil), Client: c}
 
 			before := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelAdmit))
 			resp := h.admit(log.IntoContext(context.Background(), tc.logger), admissionRequestFor(t, etlPod("p")))
@@ -616,7 +616,7 @@ func TestAdmitLogsTheDecision(t *testing.T) {
 			wlr := freshWLR("Pod", "default", "etl-daily", tc.recs)
 			withSnapshot(wlr)
 			c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(podPolicy("p"), wlr).Build()
-			h := &Handler{Client: c}
+			h := &Handler{Policies: governance.NewPolicyLister(nil), Client: c}
 			var mu sync.Mutex
 			var lines []string
 			logger := funcr.New(func(_, args string) {

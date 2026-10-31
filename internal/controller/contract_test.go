@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	whhandler "github.com/noony/k8s-sustain/internal/webhook"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
@@ -87,7 +88,7 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 	}
 
 	// The webhook has no Prometheus client at all to fall back from.
-	h := &whhandler.Handler{Client: c}
+	h := &whhandler.Handler{Policies: governance.NewPolicyLister(nil), Client: c}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -163,7 +164,7 @@ func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 		"app": {CPURequest: &wantCPU},
 	}, time.Now().Add(-2*24*time.Hour))
 
-	h := &whhandler.Handler{Client: c}
+	h := &whhandler.Handler{Policies: governance.NewPolicyLister(nil), Client: c}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

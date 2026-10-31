@@ -282,10 +282,11 @@ func reconcile(t *testing.T, c client.Client, sink Sink, handler EventHandler, p
 func reconcileResult(t *testing.T, c client.Client, sink Sink, handler EventHandler, pod *corev1.Pod, now time.Time) ctrl.Result {
 	t.Helper()
 	w := &Watcher{
-		Client:  c,
-		Sink:    sink,
-		Handler: handler,
-		Now:     func() time.Time { return now },
+		Policies: governance.NewPolicyLister(nil),
+		Client:   c,
+		Sink:     sink,
+		Handler:  handler,
+		Now:      func() time.Time { return now },
 	}
 	res, err := w.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name},
@@ -932,7 +933,7 @@ func TestReconcile_NotFoundNoError(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(sch).Build()
 	sink := &stubSink{}
 
-	w := &Watcher{Client: c, Sink: sink, Now: time.Now}
+	w := &Watcher{Policies: governance.NewPolicyLister(nil), Client: c, Sink: sink, Now: time.Now}
 	res, err := w.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "default", Name: "missing"},
 	})
@@ -1140,7 +1141,7 @@ func TestReconcile_OwnerAnnotationsReadError_ReturnsError(t *testing.T) {
 		}).Build()
 	sink := &stubSink{}
 
-	w := &Watcher{Client: c, Sink: sink, Now: time.Now}
+	w := &Watcher{Policies: governance.NewPolicyLister(nil), Client: c, Sink: sink, Now: time.Now}
 	_, err := w.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name},
 	})
@@ -1175,7 +1176,7 @@ func TestReconcile_NamespaceAnnotationsReadError_ReturnsError(t *testing.T) {
 		}).Build()
 	sink := &stubSink{}
 
-	w := &Watcher{Client: c, Sink: sink, Now: time.Now}
+	w := &Watcher{Policies: governance.NewPolicyLister(nil), Client: c, Sink: sink, Now: time.Now}
 	_, err := w.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name},
 	})

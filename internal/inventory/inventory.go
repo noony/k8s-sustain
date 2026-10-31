@@ -36,7 +36,7 @@ type Basis struct {
 	// Policies lists the Policies the snapshot decides with, and holds the
 	// namespaces no Policy governs. A caller taking snapshots for the life of
 	// the process keeps one, so a Policy's selector is compiled once per
-	// version of it rather than once per snapshot; nil excludes no namespace.
+	// version of it rather than once per snapshot. Required.
 	Policies *governance.PolicyLister
 	// Clock dates the snapshot. Required: the reader's own, so a test clock
 	// dates what it judges by the snapshot's instant.
@@ -47,7 +47,10 @@ type Basis struct {
 var errNoClock = errors.New("inventory: the Basis has no clock to date the snapshot by")
 
 func (b Basis) validate() error {
-	if b.Clock == nil {
+	switch {
+	case b.Policies == nil:
+		return fmt.Errorf("inventory: %w", governance.ErrNoPolicyLister)
+	case b.Clock == nil:
 		return errNoClock
 	}
 	return nil

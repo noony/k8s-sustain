@@ -148,7 +148,7 @@ func TestPolicyListerRecompilesARecreatedPolicy(t *testing.T) {
 // cache that would otherwise deep-copy each one.
 func TestPolicyListerListsWithoutDeepCopies(t *testing.T) {
 	src := &storedPolicies{items: []sustainv1alpha1.Policy{*selecting("web")}}
-	if _, err := new(governance.PolicyLister).List(context.Background(), src); err != nil {
+	if _, err := governance.NewPolicyLister(nil).List(context.Background(), src); err != nil {
 		t.Fatal(err)
 	}
 	if noCopy := src.listed.UnsafeDisableDeepCopy; noCopy == nil || !*noCopy {
@@ -165,12 +165,15 @@ func TestPolicyListerExcludesItsNamespaces(t *testing.T) {
 	}
 }
 
-func TestANilPolicyListerExcludesNoNamespace(t *testing.T) {
+// A lister NewPolicyLister did not build holds no excluded namespaces, so it
+// fails rather than govern a namespace every other reader excludes.
+func TestAPolicyListerNotBuiltByNewPolicyListerFails(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(selecting("web")).Build()
-	r := listingReader{client: c}
-	d, err := governance.Decide(context.Background(), webOptingInto("kube-system", "p", map[string]string{"tier": "web"}), r)
-	if err != nil || !d.Governed() {
-		t.Errorf("decision = %q, %v; want p governing", d.Refusal, err)
+	for name, lister := range map[string]*governance.PolicyLister{"nil": nil, "zero value": {}} {
+		r := listingReader{lister: lister, client: c}
+		if _, err := governance.Decide(context.Background(), webOptingInto("kube-system", "p", map[string]string{"tier": "web"}), r); !errors.Is(err, governance.ErrNoPolicyLister) {
+			t.Errorf("%s lister: err = %v, want %v", name, err, governance.ErrNoPolicyLister)
+		}
 	}
 }
 
@@ -179,7 +182,7 @@ func TestPolicyListerReturnsTheListError(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithInterceptorFuncs(interceptor.Funcs{
 		List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error { return errList },
 	}).Build()
-	if _, err := new(governance.PolicyLister).List(context.Background(), c); !errors.Is(err, errList) {
+	if _, err := governance.NewPolicyLister(nil).List(context.Background(), c); !errors.Is(err, errList) {
 		t.Errorf("err = %v, want the List error", err)
 	}
 }

@@ -26,6 +26,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
@@ -93,7 +94,7 @@ func TestResolveOwner_RolloutChain(t *testing.T) {
 		},
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rs).Build()
-	h := &Handler{Client: fakeClient}
+	h := &Handler{Policies: governance.NewPolicyLister(nil), Client: fakeClient}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -140,7 +141,7 @@ func TestResolveOwner_DeploymentChain(t *testing.T) {
 		},
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(rs).Build()
-	h := &Handler{Client: fakeClient}
+	h := &Handler{Policies: governance.NewPolicyLister(nil), Client: fakeClient}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -199,7 +200,7 @@ func newAdmitEnv(t *testing.T, objs ...runtime.Object) *admitTestEnv {
 		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
 
 	return &admitTestEnv{
-		handler: &Handler{Client: fc},
+		handler: &Handler{Policies: governance.NewPolicyLister(nil), Client: fc},
 	}
 }
 
@@ -395,7 +396,7 @@ func TestAdmit_PodTemplateAnnotated_ConcurrentAdmissionsCollapseToOneReplicaSetG
 				return cl.Get(ctx, key, obj, opts...)
 			},
 		}).Build()
-	h := &Handler{Client: c, sfJoinHook: joinHook}
+	h := &Handler{Policies: governance.NewPolicyLister(nil), Client: c, sfJoinHook: joinHook}
 
 	reqs := make([]*admissionv1.AdmissionRequest, n)
 	for i := range n {
@@ -457,7 +458,7 @@ func TestPolicySelectorMatchesThePodTemplateForInventoryAndWebhook(t *testing.T)
 					})).
 				WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
 
-			snap, err := inventory.Take(context.Background(), c, inventory.Options{Basis: inventory.Basis{Clock: clock.RealClock{}}})
+			snap, err := inventory.Take(context.Background(), c, inventory.Options{Basis: inventory.Basis{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}}})
 			if err != nil {
 				t.Fatalf("Take: %v", err)
 			}
@@ -467,7 +468,7 @@ func TestPolicySelectorMatchesThePodTemplateForInventoryAndWebhook(t *testing.T)
 			}
 			pod := podWithRSOwner("default", "my-app-rs-xyz", "my-app-rs", "p")
 			pod.Labels = d.Spec.Template.Labels
-			resp := (&Handler{Client: c}).admit(context.Background(), admissionRequestFor(t, pod))
+			resp := (&Handler{Policies: governance.NewPolicyLister(nil), Client: c}).admit(context.Background(), admissionRequestFor(t, pod))
 
 			governed, injected := id.Policy == "p", strings.Contains(string(resp.Patch), "/resources")
 			if governed != tc.onTemplate || injected != tc.onTemplate {

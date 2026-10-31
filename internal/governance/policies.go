@@ -2,6 +2,7 @@ package governance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -31,20 +32,26 @@ type compiled struct {
 // PolicyLister lists every Policy for a reader, compiling a Policy's label
 // selector once per stored version of it, so a reader that lists on every
 // admission or event recompiles only what changed. It holds the namespaces no
-// Policy may govern, so every reader of a process excludes the same ones. The
-// zero value excludes none; both are safe for concurrent use. A nil
-// PolicyLister excludes none either and compiles every Policy on every List.
+// Policy may govern, so every reader of a process excludes the same ones. It
+// is safe for concurrent use. Only NewPolicyLister builds one that lists: a
+// nil or zero-value PolicyLister fails, since it would silently exclude no
+// namespace.
 type PolicyLister struct {
 	excluded []string
+	built    bool
 
 	mu   sync.Mutex
 	last map[string]*compiled
 }
 
+// ErrNoPolicyLister is List's answer for a PolicyLister NewPolicyLister did
+// not build.
+var ErrNoPolicyLister = errors.New("governance: no PolicyLister built by NewPolicyLister, which holds the excluded namespaces")
+
 // NewPolicyLister returns a PolicyLister under which no Policy governs a
 // namespace of excludedNamespaces, whatever it opts into.
 func NewPolicyLister(excludedNamespaces []string) *PolicyLister {
-	return &PolicyLister{excluded: slices.Clone(excludedNamespaces)}
+	return &PolicyLister{excluded: slices.Clone(excludedNamespaces), built: true}
 }
 
 // List lists every Policy through r. It lists without deep copies, since the
@@ -52,12 +59,12 @@ func NewPolicyLister(excludedNamespaces []string) *PolicyLister {
 // returns shares its fields with the cache's own object, and with every other
 // call that saw the same version of it. Never modify it.
 func (l *PolicyLister) List(ctx context.Context, r client.Reader) (*Policies, error) {
+	if l == nil || !l.built {
+		return nil, ErrNoPolicyLister
+	}
 	var list sustainv1alpha1.PolicyList
 	if err := r.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 		return nil, fmt.Errorf("listing policies: %w", err)
-	}
-	if l == nil {
-		return index(list.Items, nil, nil), nil
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()

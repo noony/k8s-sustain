@@ -20,6 +20,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
+	"github.com/noony/k8s-sustain/internal/governance"
 	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -53,7 +54,7 @@ func TestAdmit_WorkloadLevelOptInCachesOwnerReadsAcrossPodsBehindSameOwner(t *te
 				return cl.Get(ctx, key, obj, opts...)
 			},
 		}).Build()
-	h := &Handler{Client: c}
+	h := &Handler{Policies: governance.NewPolicyLister(nil), Client: c}
 
 	for i := range 50 {
 		pod := podWithRSOwner("team-a", fmt.Sprintf("web-abc-%d", i), "web-abc", "")
@@ -81,7 +82,7 @@ func TestResolveCachedPodOwner_KeyIncludesUID(t *testing.T) {
 		},
 	}
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(rs1).Build()
-	h := &Handler{Client: c}
+	h := &Handler{Policies: governance.NewPolicyLister(nil), Client: c}
 
 	pod1 := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -559,7 +560,7 @@ func TestOwnerAnnotations_CacheRetainsOnlyPolicyKeys(t *testing.T) {
 		},
 	}}
 	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(d).Build()
-	h := &Handler{Client: c}
+	h := &Handler{Policies: governance.NewPolicyLister(nil), Client: c}
 
 	ann, err := h.ownerAnnotations(context.Background(), "team-a", "Deployment", "web")
 	if err != nil {

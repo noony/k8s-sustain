@@ -10,6 +10,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
+	"github.com/noony/k8s-sustain/internal/governance"
 )
 
 // recSourceDelta returns how much the source counter moved across fn. The
@@ -37,7 +38,7 @@ func TestAdmitCountsTheRecommendationSource(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(config.Scheme()).
 				WithObjects(basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate), webRS(), webWLR(withSnapshot)).
 				WithInterceptorFuncs(tc.funcs).Build()
-			h := &Handler{Client: c}
+			h := &Handler{Policies: governance.NewPolicyLister(nil), Client: c}
 			delta := recSourceDelta(t, tc.source, func() {
 				h.admit(context.Background(), admissionRequestFor(t, webPod("p")))
 			})
