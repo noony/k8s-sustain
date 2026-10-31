@@ -4,12 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,7 +19,6 @@ import (
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
@@ -361,68 +357,6 @@ func TestServeHTTP_BadBody_Returns400(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
-	}
-}
-
-// A pod annotated on its template reads its owner only for its identity, once
-// its Policy accepts it. That read must still go through resolveCachedPodOwner,
-// or a rolling restart pays N uncached ReplicaSet Gets on the admission hot
-// path.
-func TestAdmit_PodTemplateAnnotated_ConcurrentAdmissionsCollapseToOneReplicaSetGet(t *testing.T) {
-	const n = 50
-	policy := basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate)
-	rs := deploymentReplicaSet("team-a", "web-abc", "web")
-	wlr := freshWLR("Deployment", "team-a", "web", map[string]sustainv1alpha1.ContainerRecommendation{
-		"app": wlrRec("100m", "64Mi"),
-	})
-
-	var joined int32
-	allJoined := make(chan struct{})
-	joinHook := func(string) {
-		if atomic.AddInt32(&joined, 1) == n {
-			close(allJoined)
-		}
-	}
-
-	var rsGets int32
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(policy, rs, wlr).
-		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				if _, ok := obj.(*appsv1.ReplicaSet); ok {
-					atomic.AddInt32(&rsGets, 1)
-					<-allJoined // held open until every one of the N admissions has joined
-				}
-				return cl.Get(ctx, key, obj, opts...)
-			},
-		}).Build()
-	h := &Handler{Policies: governance.NewPolicyLister(nil), Client: c, sfJoinHook: joinHook}
-
-	reqs := make([]*admissionv1.AdmissionRequest, n)
-	for i := range n {
-		pod := podWithRSOwner("team-a", fmt.Sprintf("web-abc-%d", i), "web-abc", "p")
-		reqs[i] = admissionRequestFor(t, pod)
-	}
-
-	var wg sync.WaitGroup
-	allowed := make([]bool, n)
-	for i := range n {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			resp := h.admit(context.Background(), reqs[i])
-			allowed[i] = resp.Allowed
-		}(i)
-	}
-	wg.Wait()
-
-	if got := atomic.LoadInt32(&rsGets); got != 1 {
-		t.Errorf("expected exactly 1 ReplicaSet Get for %d pod-template-annotated admissions behind the same owner, got %d", n, got)
-	}
-	for i, a := range allowed {
-		if !a {
-			t.Errorf("admission %d not allowed", i)
-		}
 	}
 }
 

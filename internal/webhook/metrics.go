@@ -63,7 +63,7 @@ const (
 
 // Panic label values for PanicTotal that are not HTTP routes. The webhook
 // recovers these panics itself rather than leaving them to the httpx
-// middleware: the singleflight leaders in optin.go and the stub goroutine run
+// middleware: the owner-cache fetches in optin.go and the stub goroutine run
 // off the request goroutine, where nothing else would, and a panic admitting
 // a decoded pod still admits it instead of answering 500, which a
 // failurePolicy of Fail turns into a rejection. Constants, so they add

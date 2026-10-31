@@ -64,7 +64,7 @@ type admission struct {
 }
 
 // decide works out what admitting pod does. It writes nothing but the owner
-// caches its governance reads fill, from singleflight leaders that may outlive
+// caches its governance reads fill, from read-through fetches that may outlive
 // it; the stub request, the one effect an admission can call for, is left in
 // the admission it returns for admit to run. A pod is injected only when a
 // Policy governs it and its identity's WorkloadRecommendation holds a
