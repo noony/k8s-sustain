@@ -30,7 +30,8 @@ From **kube-state-metrics**:
 - `kube_replicaset_owner` — resolves ReplicaSet → Deployment (or Rollout)
 - `kube_pod_container_resource_requests` / `kube_pod_container_resource_limits` — current CPU/memory requests and limits
 - `kube_pod_init_container_resource_requests` / `kube_pod_init_container_resource_limits` — same, for init and sidecar containers (kube-state-metrics reports init containers under these separate metric names)
-- `kube_pod_container_status_restarts_total` / `kube_pod_container_status_last_terminated_reason` — OOMKill detection
+- `kube_pod_container_status_restarts_total` / `kube_pod_container_status_last_terminated_reason` — OOM kills of containers that restart after them
+- `kube_pod_container_status_terminated_reason` / `kube_pod_restart_policy` — OOM kills of containers that never restart (pods with `restartPolicy: Never`). Without them, those kills are not counted: no memory floor, no At risk state. See [`k8s_sustain:container_oom_kills`](../reference/recording-rules.md#k8s_sustaincontainer_oom_kills)
 - `kube_node_status_allocatable` — cluster capacity for the headroom panels
 
 From **cAdvisor**:

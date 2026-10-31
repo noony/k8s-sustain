@@ -1,0 +1,114 @@
+# Unit test for k8s_sustain:container_oom_kills, the one definition of an OOM
+# kill every OOM reader derives from.
+#
+# A kill is recorded once, at the evaluation that first sees it, and the series
+# has no sample otherwise: a restart whose last termination is OOMKilled, or,
+# for a pod whose restartPolicy is Never, its container's current termination
+# turning OOMKilled.
+rule_files:
+  - rules-only.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # A Deployment's container is OOM-killed and restarted at 5m, and
+  # kube-state-metrics keeps reporting that kill as its last termination.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_owner{namespace="shop",pod="api-6f9-a",owner_kind="ReplicaSet",owner_name="api-6f9",owner_is_controller="true"}'
+        values: '1x30'
+      - series: 'kube_replicaset_owner{namespace="shop",replicaset="api-6f9",owner_kind="Deployment",owner_name="api",owner_is_controller="true"}'
+        values: '1x30'
+      - series: 'kube_pod_restart_policy{namespace="shop",pod="api-6f9-a",type="Always"}'
+        values: '1x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="shop",pod="api-6f9-a",container="app"}'
+        values: '0x4 1x25'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="api-6f9-a",container="app",reason="OOMKilled"}'
+        values: '_x5 1x24'
+
+    promql_expr_test:
+      - expr: k8s_sustain:container_oom_kills
+        eval_time: 5m
+        exp_samples:
+          - labels: 'k8s_sustain:container_oom_kills{container="app",namespace="shop",owner_kind="Deployment",owner_name="api",pod="api-6f9-a"}'
+            value: 1
+      - expr: k8s_sustain:container_oom_kills
+        eval_time: 6m
+        exp_samples: []
+      - expr: count_over_time(k8s_sustain:container_oom_kills[1h])
+        eval_time: 30m
+        exp_samples:
+          - labels: '{container="app",namespace="shop",owner_kind="Deployment",owner_name="api",pod="api-6f9-a"}'
+            value: 1
+
+  # A standalone Job's pod with restartPolicy Never is OOM-killed at 3m. Its
+  # container never restarts: the kill stays its current termination for as
+  # long as the pod exists, through a failed kube-state-metrics scrape at 10m.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_owner{namespace="batch",pod="report-x7k",owner_kind="Job",owner_name="report",owner_is_controller="true"}'
+        values: '1x9 stale 1x30'
+      - series: 'kube_pod_restart_policy{namespace="batch",pod="report-x7k",type="Never"}'
+        values: '1x9 stale 1x30'
+      - series: 'kube_pod_container_status_restarts_total{namespace="batch",pod="report-x7k",container="main"}'
+        values: '0x9 stale 0x30'
+      - series: 'kube_pod_container_status_terminated_reason{namespace="batch",pod="report-x7k",container="main",reason="OOMKilled"}'
+        values: '_x3 1x6 stale 1x30'
+
+    promql_expr_test:
+      - expr: k8s_sustain:container_oom_kills
+        eval_time: 3m
+        exp_samples:
+          - labels: 'k8s_sustain:container_oom_kills{container="main",namespace="batch",owner_kind="Job",owner_name="report",pod="report-x7k"}'
+            value: 1
+      - expr: count_over_time(k8s_sustain:container_oom_kills[1h])
+        eval_time: 40m
+        exp_samples:
+          - labels: '{container="main",namespace="batch",owner_kind="Job",owner_name="report",pod="report-x7k"}'
+            value: 1
+
+  # A StatefulSet's container is OOM-killed at 3m, and a scrape catches its
+  # current termination before the kubelet restarts it at 4m. Under
+  # restartPolicy Always only the restart counts the kill.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_owner{namespace="shop",pod="db-0",owner_kind="StatefulSet",owner_name="db",owner_is_controller="true"}'
+        values: '1x20'
+      - series: 'kube_pod_restart_policy{namespace="shop",pod="db-0",type="Always"}'
+        values: '1x20'
+      - series: 'kube_pod_container_status_restarts_total{namespace="shop",pod="db-0",container="postgres"}'
+        values: '0x3 1x17'
+      - series: 'kube_pod_container_status_terminated_reason{namespace="shop",pod="db-0",container="postgres",reason="OOMKilled"}'
+        values: '_x3 1 stale'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="db-0",container="postgres",reason="OOMKilled"}'
+        values: '_x4 1x16'
+
+    promql_expr_test:
+      - expr: count_over_time(k8s_sustain:container_oom_kills[1h])
+        eval_time: 20m
+        exp_samples:
+          - labels: '{container="postgres",namespace="shop",owner_kind="StatefulSet",owner_name="db",pod="db-0"}'
+            value: 1
+
+  # The scrape after the restart fails: the kill is recorded one evaluation
+  # later instead of being lost.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_owner{namespace="shop",pod="db-0",owner_kind="StatefulSet",owner_name="db",owner_is_controller="true"}'
+        values: '1x3 stale 1x15'
+      - series: 'kube_pod_container_status_restarts_total{namespace="shop",pod="db-0",container="postgres"}'
+        values: '0x3 stale 1x15'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="db-0",container="postgres",reason="OOMKilled"}'
+        values: '_x4 stale 1x14'
+
+    promql_expr_test:
+      - expr: k8s_sustain:container_oom_kills
+        eval_time: 5m
+        exp_samples:
+          - labels: 'k8s_sustain:container_oom_kills{container="postgres",namespace="shop",owner_kind="StatefulSet",owner_name="db",pod="db-0"}'
+            value: 1
+      - expr: count_over_time(k8s_sustain:container_oom_kills[1h])
+        eval_time: 19m
+        exp_samples:
+          - labels: '{container="postgres",namespace="shop",owner_kind="StatefulSet",owner_name="db",pod="db-0"}'
+            value: 1

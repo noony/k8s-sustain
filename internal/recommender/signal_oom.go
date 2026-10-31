@@ -142,6 +142,8 @@ func (oomFloor) contract() PromContract {
 		KubeStateMetrics: append([]string{
 			"kube_pod_container_status_restarts_total",
 			"kube_pod_container_status_last_terminated_reason",
+			"kube_pod_container_status_terminated_reason",
+			"kube_pod_restart_policy",
 		}, podWorkloadMetrics...),
 	}
 }

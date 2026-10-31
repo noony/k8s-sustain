@@ -52,7 +52,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.groups[0].rules
-          count: 6
+          count: 7
       - equal:
           path: spec.groups[0].rules[4].record
           value: k8s_sustain:pod_owner_kind_internal
@@ -71,6 +71,19 @@ tests:
       - matchRegex:
           path: spec.groups[0].rules[0].expr
           pattern: 'unless on\(namespace, pod\) kube_pod_annotations\{annotation_k8s_sustain_io_owner_name=~"\[A-Za-z0-9\]\(\[-A-Za-z0-9_\.\]\{0,61\}\[A-Za-z0-9\]\)\?"\}'
+
+  - it: records OOM kills after every pod_workload rule of workload_mapping
+    set:
+      prometheusRule.enabled: true
+    asserts:
+      # Rules of one group run in order at the same instant, so a pod killed
+      # before its first scrape is already mapped when its kill is recorded.
+      - equal:
+          path: spec.groups[0].rules[6].record
+          value: k8s_sustain:container_oom_kills
+      - matchRegex:
+          path: spec.groups[0].rules[6].expr
+          pattern: 'k8s_sustain:pod_workload\s*$'
 
   - it: adds additionalLabels
     set:

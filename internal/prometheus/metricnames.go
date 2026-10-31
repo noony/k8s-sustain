@@ -34,6 +34,7 @@ const (
 	MetricWorkloadMaxPodMemoryBytes         = "k8s_sustain:workload_max_pod_memory:bytes"
 	MetricContainerPeakMemory24hBytes       = "k8s_sustain:container_peak_memory_24h:bytes"
 	MetricContainerOOMLimit24hBytes         = "k8s_sustain:container_oom_limit_24h:bytes"
+	MetricContainerOOMKills                 = "k8s_sustain:container_oom_kills"
 	MetricPodWorkload                       = "k8s_sustain:pod_workload"
 
 	MetricContainerCPURequestsByWorkloadCores    = "k8s_sustain:container_cpu_requests_by_workload:cores"
