@@ -211,4 +211,116 @@ describe('WorkloadDetailView', () => {
     expect(w.text()).toContain('Conflicted: p / q')
     expect(w.findComponent({ name: 'RiskBadge' }).text()).toBe('Conflicted')
   })
+
+  describe('usage lines', () => {
+    const average = [{ timestamp: '2026-10-05T12:00:00Z', value: 0.2 }]
+    const busiest = [
+      { timestamp: '2026-10-05T11:20:00Z', value: 0.5 },
+      { timestamp: '2026-10-05T12:00:00Z', value: 0.7 },
+    ]
+    const governed = {
+      automated: true,
+      policyName: 'p',
+      riskState: 'safe',
+      oom24h: 0,
+      stalePods: 0,
+      totalPods: 1,
+    }
+    const signal = {
+      policy: 'p',
+      stepSeconds: 2400,
+      cpu: { percentile: 90, window: '24h' },
+      memory: { percentile: 95, window: '168h' },
+      containers: { app: { cpu: busiest, memory: busiest } },
+    }
+
+    function drawn() {
+      return Object.fromEntries(
+        (chart.createTimeSeriesChart as any).mock.calls.map(
+          ([id, points, opts]: [string, unknown, chart.ChartOpts]) => [
+            id,
+            [[opts.label, points], ...(opts.extraSeries ?? []).map((s) => [s.label, s.data])],
+          ],
+        ),
+      )
+    }
+
+    function notes(w: ReturnType<typeof mountDetail>) {
+      return w.findAll('[data-test="signal-note"]').map((n) => n.text())
+    }
+
+    it('draws the replica average and what the usage signal reads on each chart', async () => {
+      ;(chart.createTimeSeriesChart as any).mockClear()
+      serve(governed, { cpu: { app: average }, memory: { app: average }, signal })
+      const w = mountDetail()
+      await flushPromises()
+
+      expect(drawn()).toEqual({
+        'cpu-app': [
+          ['Usage (replica average)', average],
+          ['Busiest replica, p90 over 24h: what the recommender reads', busiest],
+        ],
+        'mem-app': [
+          ['Usage (replica average)', average],
+          ['Busiest replica, p95 over 168h: what the recommender reads', busiest],
+        ],
+      })
+      const signalSeries = (chart.createTimeSeriesChart as any).mock.calls[0][2].extraSeries[0]
+      expect(signalSeries.stepMs).toBe(2400 * 1000)
+      expect(notes(w)).toEqual([])
+    })
+
+    it.each([
+      {
+        why: 'the signal history could not be read',
+        snapshot: governed,
+        metrics: { signal: null, signalError: 'too many samples' },
+        want: [
+          'Signal history unavailable: too many samples',
+          'Signal history unavailable: too many samples',
+        ],
+      },
+      {
+        why: 'no Policy governs a Conflicted identity',
+        snapshot: { conflictingPolicies: ['p', 'q'], riskState: 'conflicted' },
+        metrics: { signal: null },
+        want: [
+          'No signal line: Conflicted, no Policy governs this workload.',
+          'No signal line: Conflicted, no Policy governs this workload.',
+        ],
+      },
+      {
+        why: 'no Policy governs the identity',
+        snapshot: { riskState: 'safe' },
+        metrics: { signal: null },
+        want: [
+          'No signal line: no Policy governs this workload.',
+          'No signal line: no Policy governs this workload.',
+        ],
+      },
+      {
+        why: 'the Policy keeps the memory request',
+        snapshot: governed,
+        metrics: {
+          signal: {
+            ...signal,
+            memory: { window: '168h', keepRequest: true },
+            containers: { app: { cpu: busiest } },
+          },
+        },
+        want: ['No signal line: the Policy keeps the memory request.'],
+      },
+    ])('says why a chart has no signal line when $why', async ({ snapshot, metrics, want }) => {
+      ;(chart.createTimeSeriesChart as any).mockClear()
+      serve(
+        { oom24h: 0, stalePods: 0, totalPods: 1, ...snapshot },
+        { cpu: { app: average }, memory: { app: average }, ...metrics },
+      )
+      const w = mountDetail()
+      await flushPromises()
+
+      expect(notes(w)).toEqual(want)
+      expect(drawn()['mem-app']).toEqual([['Usage (replica average)', average]])
+    })
+  })
 })

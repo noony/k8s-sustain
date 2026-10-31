@@ -152,6 +152,47 @@ function oomByContainer() {
   return groupOOMEventsByContainer(metrics.value?.oomEvents)
 }
 
+type SignalResource = 'cpu' | 'memory'
+
+// What the usage signal read under the governing Policy's settings, next to
+// the replica average: the value the recommender sizes the request from.
+// Plotting it recomputes nothing.
+function signalSeries(resource: SignalResource, cname: string): ExtraSeries[] {
+  const signal = metrics.value?.signal
+  const data = signal?.containers[cname]?.[resource]
+  const percentile = signal?.[resource].percentile
+  if (!signal || !data?.length || !percentile) return []
+  return [
+    {
+      data,
+      label: `Busiest replica, p${percentile} over ${signal[resource].window}: what the recommender reads`,
+      color: resource === 'cpu' ? 'cpu' : 'mem',
+      dash: [6, 3],
+      stepped: false,
+      stepMs: signal.stepSeconds * 1000,
+    },
+  ]
+}
+
+// Why a chart has no signal line; empty when nothing explains its absence.
+function signalNote(resource: SignalResource, cname: string): string {
+  const m = metrics.value
+  if (!m) return ''
+  if (m.signalError) return 'Signal history unavailable: ' + m.signalError
+  if (!m.signal) {
+    return snapshot.data.value?.conflictingPolicies?.length
+      ? `No signal line: ${conflictedState.label}, no Policy governs this workload.`
+      : 'No signal line: no Policy governs this workload.'
+  }
+  if (m.signal[resource].keepRequest) {
+    return `No signal line: the Policy keeps the ${resource === 'cpu' ? 'CPU' : 'memory'} request.`
+  }
+  if (m.signal.excludeInitContainers && initContainerSet().has(cname)) {
+    return 'No signal line: the Policy excludes init containers.'
+  }
+  return ''
+}
+
 // The stored Recommendation's request and limit as flat lines: the detail page
 // never recomputes one at past instants (that is the Simulator's job).
 function storedAnnotations(
@@ -236,8 +277,9 @@ function renderCharts() {
           parseCPUQuantity,
         ),
       )
+      cpuExtra.unshift(...signalSeries('cpu', cname))
       createTimeSeriesChart('cpu-' + cname, metrics.value!.cpu[cname], {
-        label: 'CPU Usage',
+        label: 'Usage (replica average)',
         color: 'cpu',
         unit: 'cores',
         yFormat: (v) => v.toFixed(3),
@@ -289,8 +331,9 @@ function renderCharts() {
           parseMemoryQuantity,
         ),
       )
+      memExtra.unshift(...signalSeries('memory', cname))
       createTimeSeriesChart('mem-' + cname, metrics.value!.memory[cname], {
-        label: 'Memory Usage',
+        label: 'Usage (replica average)',
         color: 'mem',
         unit: 'MiB',
         transform: (v) => v / (1024 * 1024),
@@ -500,6 +543,9 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
               Reset zoom
             </button>
           </div>
+          <p v-if="signalNote('cpu', cname)" class="chart-note" data-test="signal-note">
+            {{ signalNote('cpu', cname) }}
+          </p>
           <div class="chart-wrapper">
             <div class="chart-container"><canvas :id="'cpu-' + cname"></canvas></div>
           </div>
@@ -519,6 +565,9 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
               Reset zoom
             </button>
           </div>
+          <p v-if="signalNote('memory', cname)" class="chart-note" data-test="signal-note">
+            {{ signalNote('memory', cname) }}
+          </p>
           <div class="chart-wrapper">
             <div class="chart-container"><canvas :id="'mem-' + cname"></canvas></div>
           </div>
@@ -544,6 +593,9 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
                 Reset zoom
               </button>
             </div>
+            <p v-if="signalNote('cpu', cname)" class="chart-note" data-test="signal-note">
+              {{ signalNote('cpu', cname) }}
+            </p>
             <div class="chart-wrapper">
               <div class="chart-container"><canvas :id="'cpu-' + cname"></canvas></div>
             </div>
@@ -563,6 +615,9 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
                 Reset zoom
               </button>
             </div>
+            <p v-if="signalNote('memory', cname)" class="chart-note" data-test="signal-note">
+              {{ signalNote('memory', cname) }}
+            </p>
             <div class="chart-wrapper">
               <div class="chart-container"><canvas :id="'mem-' + cname"></canvas></div>
             </div>

@@ -1741,6 +1741,12 @@ a.kpi-card {
 .chart-head .section-label {
   margin-bottom: 0;
 }
+.chart-note {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin: -4px 0 8px;
+}
 .reset-zoom-btn {
   margin-left: auto;
   flex-shrink: 0;

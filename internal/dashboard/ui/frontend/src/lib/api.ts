@@ -233,6 +233,7 @@ export interface ContainerResources {
 }
 
 export interface MetricsData {
+  /** Usage averaged over the replicas, per container. */
   cpu: Record<string, TimeValue[]>
   memory: Record<string, TimeValue[]>
   resources?: Record<string, ContainerResources>
@@ -242,6 +243,32 @@ export interface MetricsData {
   memoryLimits?: Record<string, TimeValue[]>
   oomEvents?: OOMEvent[]
   initContainers?: string[]
+  /** What the usage signals read; null when no Policy governs the identity or it could not be read. */
+  signal?: UsageSignal | null
+  /** Why the signal could not be read; the rest of the page stands without it. */
+  signalError?: string
+}
+
+/** What an identity's usage signals read over the chart range under its governing Policy's settings: what the recommender sizes each request from. */
+export interface UsageSignal {
+  policy: string
+  /** The step between its instants: the server derives it from the range, the requested step is only the finest. */
+  stepSeconds: number
+  cpu: UsageSignalSettings
+  memory: UsageSignalSettings
+  /** The Policy recommends no init container, so none has a series. */
+  excludeInitContainers?: boolean
+  /** Per container the Policy recommends, in cores or bytes. */
+  containers: Record<string, { cpu?: TimeValue[]; memory?: TimeValue[] }>
+}
+
+/** What one resource's usage signal read under, every default explicit. */
+export interface UsageSignalSettings {
+  /** Absent when the request is kept. */
+  percentile?: number
+  window: string
+  /** The Policy keeps the request: no signal sizes it, so it has no series. */
+  keepRequest?: boolean
 }
 
 export interface RecommendationContainer {

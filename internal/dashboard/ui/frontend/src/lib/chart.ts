@@ -191,6 +191,9 @@ export interface ExtraSeries {
   color?: string
   dash?: number[]
   stepped?: boolean | 'before'
+  // The series' own step, when it is read at a step other than the chart's,
+  // so its line breaks only across its own gaps.
+  stepMs?: number
 }
 
 export interface ChartAnnotation {
@@ -335,7 +338,7 @@ export function createTimeSeriesChart(
 
   ;(opts.extraSeries || []).forEach((s) => {
     if (!s.data || !s.data.length) return
-    const seriesData = withGaps(s.data, transform, opts.stepMs)
+    const seriesData = withGaps(s.data, transform, s.stepMs ?? opts.stepMs)
     const ds: any = {
       label: s.label,
       data: seriesData,
