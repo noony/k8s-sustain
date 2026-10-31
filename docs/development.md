@@ -150,6 +150,8 @@ k8s-sustain/
 │   └── k8s-sustain-policies/ # Policy objects chart
 ├── hack/
 │   ├── docscheck/         # Docs drift guards (run by go test)
+│   ├── kindcontract/      # Every place a workload kind is registered in, checked against workload.SupportedKinds (run by go test)
+│   ├── signalcontract/    # The chart checked against every recommendation signal's Prometheus contract (run by go test)
 │   └── scenarios/         # kind end-to-end scenarios
 ├── docs/                  # This documentation
 ├── Dockerfile
@@ -336,16 +338,35 @@ kube-state-metrics stops exporting the annotation
 
 ## Adding a new workload kind
 
-Every reader of workload objects goes through one table, so supporting a new
-kind (say `Rollout` from Argo) is mostly a matter of registering it there:
+`workload.SupportedKinds` (`internal/workload/kindobjects.go`) is the one kind
+table. The inventory lists its kinds for the controller and the dashboard,
+`GET /api/kinds` serves them to the SPA, which holds no kind list of its own,
+and `go test ./hack/kindcontract` checks every other place a kind is
+registered in against it, failing with a message that names the place to edit.
+Supporting a new kind (say `Rollout` from Argo) is these steps, in order; run
+`go test ./hack/kindcontract ./internal/workload` after the first and follow
+what fails:
 
-1. Add `<Kind> *UpdateMode` to `UpdateTypes` in `api/v1alpha1/policy_types.go`, add the case to `UpdateTypes.ModeForKind`, then run `make generate` and `make manifests`
-2. Add the kind to the `ownerKinds` table in `internal/workload/kindobjects.go` (object and list constructors plus its `GroupResource`) and, if the controller and dashboard should list it, to `workload.SupportedKinds`. This single table drives the inventory's listing (`internal/inventory`, which both the controller and the dashboard read identities from), the dashboard's NotFound errors, and the workload-level annotation reads in the webhook and the OOM watcher. A kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)
-3. Add the kind's pod template to `workload.PodTemplateOf` in `internal/workload/templates.go`: the inventory decides governance on it, so its annotations are the pod-template opt-in level and its labels what a Policy's label selector matches
-4. Add the same kind to `k8s.OwnerChainDisableFor()` in `internal/k8s/client.go`. Every kind in `ownerKinds` must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. `TestDisableForCoversOwnerAnnotationKinds` (`internal/webhook/optin_test.go`) cross-checks the two lists and fails if one is missing from the other
-5. If the kind is a CRD, register its scheme in `internal/config/config.go` and `internal/dashboard/server.go`
-6. Give the kind its apply rule in `applyRules` (`internal/workload/apply.go`): where a member's pods come from (`selectedPods` with the kind's selector for a workload whose pods it owns through a selector, a function of its own otherwise) and whether the kind is `inPlaceOnly`, its pods never evicted (like Job, CronJob and bare `Pod`). `TestApply_EveryKindHasAnApplyRule` fails for a kind of `SupportedKinds` without a rule, and `TestApply_EveryKindUnderEveryMode` (`internal/workload/apply_test.go`) needs a fixture for it
-7. Grant the kind's resource in both ClusterRoles of `charts/k8s-sustain/templates/rbac.yaml`: the chart's RBAC is the only one, nothing generates it
+1. Add the kind to `workload.SupportedKinds`.
+2. Add `<Kind> *UpdateMode` to `UpdateTypes` in `api/v1alpha1/policy_types.go` and a case returning it to `UpdateTypes.ModeForKind`, then run `make generate manifests`. Without one, `inventory.TakeForPolicy` never lists the kind and no Policy can manage it. *Kind contract: update modes.*
+3. Add the kind to the `ownerKinds` table in `internal/workload/kindobjects.go`: its object and list constructors and its `GroupResource`. The inventory lists the kind's objects through it, the dashboard names it in NotFound errors, and the webhook and the OOM watcher read workload-level opt-in through it. *Kind contract: objects.*
+4. Add the kind's pod template to `workload.PodTemplateOf` in `internal/workload/templates.go`. The inventory decides governance on it: its annotations are the pod-template opt-in level and its labels are what a Policy's label selector matches. Without it the inventory skips every object of the kind. *Kind contract: objects.*
+5. Give the kind its apply rule in `applyRules` (`internal/workload/apply.go`). The rule says where a member's pods come from: `selectedPods` with the kind's selector for a workload that owns its pods through a selector, a function of its own otherwise. It also says whether the kind is `inPlaceOnly`, its pods never evicted (like Job, CronJob and bare `Pod`). `/api/kinds` serves that flag. *`TestApply_EveryKindHasAnApplyRule`, and `TestApply_EveryKindUnderEveryMode` (`internal/workload/apply_test.go`), which needs a fixture for the kind.*
+6. Add the kind's object to `k8s.OwnerChainDisableFor()` in `internal/k8s/client.go`. The webhook reads it at most once per pod CREATE, so its first Get would otherwise stand up a cluster-wide informer on the admission path. *Kind contract: owner-chain reads.*
+7. If the kind is a custom resource, add its API group to `config.Scheme` in `internal/config/config.go`, the one scheme every binary reads through. *Kind contract: scheme.*
+8. Grant `get`, `list` and `watch` on the kind's resource in both ClusterRoles of `charts/k8s-sustain/templates/rbac.yaml`: the controller's, which the webhook shares, and the dashboard's. Nothing generates RBAC; the chart's is the only one. *Kind contract: RBAC.*
+9. Map the kind's pods in the recording rules, in `prometheusRule.groups` of `charts/k8s-sustain/values.yaml`, as `workload.ResolveControllerOwner` (`internal/workload/ownerref.go`) resolves them. Without this the kind has no usage, so its outcome stays NoData.
+    - A pod whose controller is the kind itself: add the kind to the `owner_kind` regex of the direct-owner `k8s_sustain:pod_workload` rule.
+    - A pod owned through an intermediate object, as a Deployment's is through a ReplicaSet: teach `ResolveControllerOwner` the walk. Add the kind to the `kube_<intermediate>_owner` selectors of both `k8s_sustain:pod_workload` and `k8s_sustain:pod_owner_kind_internal`. If the intermediate is itself a supported kind, as a CronJob's Job is, skip its objects owned by the new kind in the inventory's membership filter (`addWorkloads` in `internal/inventory/inventory.go`). Exclude their pods from the direct-owner rule too.
+
+    Cover the mapping with a promtool fixture in `charts/k8s-sustain/tests/promtool/`. *Kind contract: recording rules (the membership filter and the direct-owner rule's exclusion are guarded only by their own tests and fixtures).*
+
+Nothing guards the rest. Each step is optional or e2e:
+
+- Order the kind's evictions in `sortPodsForRecycle` (`internal/workload/patcher.go`), if its pods must be replaced in an order, as a StatefulSet's are.
+- Give the kind a `.kind-<Kind>` badge colour in the dashboard's `src/style.css`; without one its badge is plain.
+- Document it: the update types table in `docs/reference/policy.md` and the guides.
+- Add a scenario to `hack/scenarios/`, listed in `SCENARIOS` in `Makefile.scenarios` and in `hack/scenarios/status.sh`.
 
 ## Adding a recommendation signal
 
