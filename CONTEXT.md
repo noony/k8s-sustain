@@ -34,11 +34,11 @@ An identity younger than its Policy's minimum age, which gets no Recommendation 
 A cluster-wide rule set that governs the identities whose members it accepts: which kinds it manages, how it computes recommendations, and how it applies them. An identity is governed by at most one Policy.
 
 **WorkloadRecommendation**:
-The stored record of one identity's Recommendation, the Policy that computed it, and the outcome of the controller's last decision for it (Computed, NoData, Too young, FetchFailed, Conflicted). The governing Policy writes it; the webhook only asks for one, and records the containers of identities no reconcile sees alive.
+The stored record of one identity's Recommendation, the Policy that computed it, until when the webhook may serve it, and the outcome of the controller's last decision for it (Computed, NoData, Too young, FetchFailed, Conflicted). The governing Policy writes it; the webhook only asks for one, and records the containers of identities no reconcile sees alive.
 _Avoid_: cache entry, wlrec (outside kubectl)
 
 **Recommendation**:
-The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. It is served only to pods of the Policy that computed it: an identity another Policy adopts gets none until that Policy computes its own. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold; a change to limits alone resizes pods in place or waits for their replacements, never evicting one; and applying never leaves a container's request above its limit: where it would, the limit is raised to the request.
+The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. It is served only to pods of the Policy that computed it: an identity another Policy adopts gets none until that Policy computes its own. It is served until the time the controller stamped when storing it: a staleness budget past its last computation for a live identity, the retention window for a Departed or Conflicted one. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold; a change to limits alone resizes pods in place or waits for their replacements, never evicting one; and applying never leaves a container's request above its limit: where it would, the limit is raised to the request.
 _Avoid_: applied recommendation, current recommendation
 
 **Signal**:

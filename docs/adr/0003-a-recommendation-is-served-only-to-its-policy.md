@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-10-05
 - **Refines:** [ADR 0002](0002-conflicted-identity-freezes-its-recommendation.md)
+- **Refined by:** [ADR 0008](0008-a-recommendation-is-served-until-the-time-its-controller-stamped.md) — a Recommendation is also served only until the time its controller stamped, and the webhook holds no freshness setting
 
 ## Context
 

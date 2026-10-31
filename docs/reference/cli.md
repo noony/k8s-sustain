@@ -48,13 +48,13 @@ k8s-sustain start [flags]
 | `--leader-election-id` | `k8s-sustain-leader-election` | Lease name used for leader election. Override when running several installs in the same cluster. |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server used for metric queries |
-| `--reconcile-interval` | `5m` | How often policies are re-evaluated (e.g. `30m`, `6h`) |
+| `--reconcile-interval` | `5m` | How often policies are re-evaluated. Must be greater than zero. It also sizes the staleness budget: a live identity's recommendation is served for the larger of 30 minutes and three intervals past its last computation, so any interval keeps recommendations served between passes, and a pass can run late without pods losing them. See [How long a recommendation is served](../concepts/workload-recommendations.md#how-long-a-recommendation-is-served). |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
 | `--workload-concurrency-limit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
 | `--policy-concurrency-limit` | `10` | Maximum number of Policy objects reconciled in parallel |
 | `--prometheus-max-inflight` | `8` | Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own `--query.max-concurrency` (default 20) so k8s-sustain does not starve dashboards and alerting sharing the same server. A query that cannot get a slot within 2 minutes is abandoned rather than queued indefinitely; that is counted as a batch failure, not as a Prometheus failure, so it never trips the circuit breaker |
 | `--recycle-replacement-timeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) regularly takes longer than the default. |
-| `--recommendation-retention` | `168h` | How long a WorkloadRecommendation is kept after its workload object disappears (bare pods, deleted or finished Jobs), and how long a Conflicted identity's frozen one is kept. Set it above the longest gap between runs of a recurring workload; `0` sweeps on the next reconcile. See [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). |
+| `--recommendation-retention` | `168h` | How long a Departed identity's WorkloadRecommendation (bare pods, deleted or finished Jobs) is kept, and its recommendation served, past its last computation; the same for a Conflicted identity's frozen one. Set it above the longest gap between runs of a recurring workload. Must be greater than zero. The webhook has no such flag: it serves what the controller stamped. See [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). |
 | `--query-shard-max-samples` | `10000000` | Projected Prometheus sample budget (containers × samples per container, summed across a shard's workloads: window-minutes for the CPU and memory queries, one per rule for the OOM query) a single batched shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own `--query.max-samples` (default `50000000`): that server-side limit *rejects* an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default leaves a 5x margin. |
 
 ### Prometheus authentication and TLS flags
@@ -130,7 +130,6 @@ k8s-sustain webhook [flags]
 | `--tls-key-file` | `/tls/tls.key` | Path to the TLS private key file |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--excluded-namespaces` | — | Comma-separated list of namespaces no Policy governs: the webhook injects no resources into their pods, whatever they opt into, and never mutates them. Mirrors the controller flag so both components stay in lockstep. The chart also drops these namespaces from the `MutatingWebhookConfiguration`'s `namespaceSelector`, so the webhook never sees their pods. |
-| `--recommendation-retention` | `168h` | Must match the controller flag. A departed or Conflicted identity's recommendation older than this is treated as stale instead of injected. The chart renders both from `controller.recommendationRetention`. |
 
 The webhook also honours each Policy's `spec.selector.namespaces` and `spec.selector.labelSelector` (see [Policy reference](./policy.md#specselector)). A pod is admitted unmutated if any of the following holds: its namespace is in `--excluded-namespaces`, its namespace is not in a non-empty `selector.namespaces`, or its pod labels — its pod template's, which the controller matches too — do not satisfy `selector.labelSelector`. A malformed `labelSelector` causes the webhook to fail open (admit without injection, log a warning with reason `selector-invalid`, whichever level the pod opts in at) rather than deny.
 
@@ -214,7 +213,7 @@ Every flag except `--config` can be set with an environment variable: `K8SSUSTAI
     | `webhook` | `webhook.` + flag name | `K8SSUSTAIN_WEBHOOK_LOG_LEVEL` |
     | `dashboard` | `dashboard.` + flag name | `K8SSUSTAIN_DASHBOARD_LOG_LEVEL` |
 
-    Flags shared across subcommands (`--log-level`, `--excluded-namespaces`, `--recommendation-retention`, every `--prometheus-*` flag) have the same flag name but a different variable per subcommand. A variable with the wrong prefix is **silently ignored**. The Helm chart renders the right prefix for each component. See [Authenticated Prometheus: environment variables](../guides/authenticated-prometheus.md#environment-variables-the-prefixes-differ-per-subcommand) for the full Prometheus auth table.
+    Flags shared across subcommands (`--log-level`, `--excluded-namespaces`, every `--prometheus-*` flag) have the same flag name but a different variable per subcommand. A variable with the wrong prefix is **silently ignored**. The Helm chart renders the right prefix for each component. See [Authenticated Prometheus: environment variables](../guides/authenticated-prometheus.md#environment-variables-the-prefixes-differ-per-subcommand) for the full Prometheus auth table.
 
 ```bash
 K8SSUSTAIN_RECONCILE_INTERVAL=30m k8s-sustain start
