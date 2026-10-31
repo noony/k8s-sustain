@@ -1006,7 +1006,7 @@ prometheusRule:
         # min_over_time keeps k8s-sustain's own response out of the anchor.
         # The OOM watcher raises the limit within seconds of a kill, while the
         # kill reaches this rule up to a few minutes later: the restart, the
-        # kube-state-metrics scrape, the event rule's evaluation and this
+        # kube-state-metrics scrape, the kill rule's evaluation and this
         # subquery's step each add their delay. Sampling the limit at that
         # moment would record the raised limit as if the kernel had killed at
         # it, and the recommendation would derive its next anchor from its own
