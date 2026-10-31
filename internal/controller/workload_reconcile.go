@@ -97,7 +97,7 @@ func (r *PolicyReconciler) reconcileWorkload(
 		return applyResult{member: t, kind: applyFailed, phase: workload.StepPrometheus, err: rec.err}
 	}
 
-	res := r.patcher.Apply(ctx, t.member(), rec.recs, workload.ApplySettingsFor(policy, t.Kind, r.RecommendOnly))
+	res := r.patcher.Apply(ctx, t.Member, rec.recs, workload.ApplySettingsFor(policy, t.Kind, r.RecommendOnly))
 	if res.Kind == workload.ResultDone && res.Changed() > 0 {
 		r.recorder.Eventf(t.Object, nil, corev1.EventTypeNormal, "ResourcesUpdated", "ResourcesUpdated",
 			"Updated resources on %d pod(s) (%d resized in place, %d evicted) for containers: %v",

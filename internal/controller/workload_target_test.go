@@ -22,7 +22,7 @@ func TestTargetsOf_BarePodGroupHoldsOnlyItsGovernedPods(t *testing.T) {
 	theirs.Annotations[sustainv1alpha1.PolicyAnnotation] = "other-policy"
 	other := barePod("airflow", "other-run-1", "other-task")
 
-	m := barePodTarget(t, "airflow", "etl-daily", member, sibling, controlled, theirs, other).member()
+	m := barePodTarget(t, "airflow", "etl-daily", member, sibling, controlled, theirs, other).Member
 
 	if want := []string{"etl-run-1", "etl-run-2"}; !slices.Equal(names(m.Pods), want) {
 		t.Errorf("bare-pod members = %v, want %v", names(m.Pods), want)

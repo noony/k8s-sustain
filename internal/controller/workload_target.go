@@ -4,7 +4,6 @@ import (
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -12,32 +11,18 @@ import (
 )
 
 // workloadTarget is the unit the apply step works on: one governed member of
-// an identity, or every governed pod of a bare-pod identity together.
+// an identity, or every governed pod of a bare-pod identity together, held as
+// the Member's Pods: bare pods cannot be found from a label selector at apply
+// time, membership is the inventory's rule.
 type workloadTarget struct {
-	Kind           string
-	Name           string
-	Namespace      string
-	Containers     []corev1.Container
-	InitContainers []corev1.Container
-	Object         client.Object
-	// BarePodMembers is every governed pod of a bare-pod identity, set only
-	// for Kind == "Pod". Bare pods cannot be found from a label selector at
-	// apply time: membership is the inventory's rule, not a selector.
-	BarePodMembers []*corev1.Pod
+	workload.Member
+	Name, Namespace string
 }
 
 // key names the member in the ledger and the health tracker, across passes
 // and Policies.
 func (w *workloadTarget) key() string {
 	return w.Kind + "/" + w.Namespace + "/" + w.Name
-}
-
-// member is what the apply step drives toward the Recommendation.
-func (w *workloadTarget) member() workload.Member {
-	return workload.Member{
-		Kind: w.Kind, Object: w.Object, Pods: w.BarePodMembers,
-		Containers: w.Containers, InitContainers: w.InitContainers,
-	}
 }
 
 // targetsOf returns the apply targets of an identity policy governs: one per
@@ -63,23 +48,20 @@ func targetsOf(id *inventory.Identity, policyName string) []*workloadTarget {
 		return a.CreationTimestamp.Compare(b.CreationTimestamp.Time)
 	})
 	return append(targets, &workloadTarget{
-		Kind:           id.Key.OwnerKind,
-		Name:           id.Key.OwnerName,
-		Namespace:      id.Key.Namespace,
-		Containers:     id.Containers,
-		InitContainers: id.InitContainers,
-		Object:         newest,
-		BarePodMembers: pods,
+		Member: workload.Member{
+			Kind: id.Key.OwnerKind, Object: newest, Pods: pods,
+			Containers: id.Containers, InitContainers: id.InitContainers,
+		},
+		Name: id.Key.OwnerName, Namespace: id.Key.Namespace,
 	})
 }
 
 func targetFromMember(key promclient.WorkloadIdentity, m inventory.Member) *workloadTarget {
 	return &workloadTarget{
-		Kind:           key.OwnerKind,
-		Name:           m.Object.GetName(),
-		Namespace:      key.Namespace,
-		Containers:     m.Containers,
-		InitContainers: m.InitContainers,
-		Object:         m.Object,
+		Member: workload.Member{
+			Kind: key.OwnerKind, Object: m.Object,
+			Containers: m.Containers, InitContainers: m.InitContainers,
+		},
+		Name: m.Object.GetName(), Namespace: key.Namespace,
 	}
 }

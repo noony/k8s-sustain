@@ -291,5 +291,5 @@ func barePodTarget(t *testing.T, ns, ownerName string, pods ...*corev1.Pod) *wor
 			return targets[0]
 		}
 	}
-	return &workloadTarget{Kind: "Pod", Name: ownerName, Namespace: ns}
+	return &workloadTarget{Member: workload.Member{Kind: "Pod"}, Name: ownerName, Namespace: ns}
 }
