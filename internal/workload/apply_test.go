@@ -628,3 +628,112 @@ func TestApply_ContainersAreWhatChangedOnThePods(t *testing.T) {
 		})
 	}
 }
+
+// A change to limits alone never evicts a pod (docs/adr/0009): it is resized
+// in place where the cluster supports it, and otherwise waits for the pod's
+// replacement, which the webhook gives the new limits. Either way the pod is
+// not stale. A limit the guard raises with a rising request belongs to a
+// request change, applied as any other.
+func TestApply_LimitsAloneNeverEvict(t *testing.T) {
+	limitsAlone := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("100m"), CPULimit: qtyp("400m")}}
+	invalid := apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("Pod").GroupKind(), "p", nil)
+	for _, tc := range []struct {
+		name         string
+		member       Member
+		inPlace      bool
+		pending      bool
+		rejectResize bool
+		recs         map[string]ContainerRecommendation
+		wantResized  []string
+		wantEvicted  []string
+		wantStale    int
+	}{
+		{name: "limits alone, resized in place", member: testMember(), inPlace: true, recs: limitsAlone, wantResized: []string{"p"}},
+		{name: "limits alone without in-place resize", member: testMember(), recs: limitsAlone},
+		{name: "limits alone on a Pending pod", member: testMember(), inPlace: true, pending: true, recs: limitsAlone},
+		{name: "limits alone, resize rejected", member: testMember(), inPlace: true, rejectResize: true, recs: limitsAlone},
+		{
+			name: "limits alone beside a request decrease the tolerance withholds", member: testMember(),
+			recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("98m"), CPULimit: qtyp("400m")}},
+		},
+		{name: "limits alone on an in-place-only kind without in-place resize", member: jobMember(), recs: limitsAlone},
+		{
+			name: "a request rising past the limit the guard raises, evicted", member: testMember(),
+			recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("300m")}}, wantEvicted: []string{"p"},
+		},
+		{
+			name: "a request rising past the limit the guard raises, resized", member: testMember(), inPlace: true,
+			recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("300m")}}, wantResized: []string{"p"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newPod := runningPod
+			if tc.member.Kind == "Job" {
+				newPod = jobPod
+			}
+			pod := newPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")})
+			pod.Spec.Containers[0].Resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}
+			if tc.pending {
+				pod.Status.Phase, pod.Status.Conditions = corev1.PodPending, nil
+			}
+			var acts podActions
+			c := acts.client(t, pod)
+			if tc.rejectResize {
+				c = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+					SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
+						return invalid
+					},
+				})
+			}
+
+			out := New(c, tc.inPlace, testEvictionOpts()...).Apply(context.Background(), tc.member, tc.recs, ApplySettings{Tolerance: tol5})
+
+			if out.Kind != ResultDone {
+				t.Fatalf("result = %+v, want done", out)
+			}
+			if !slices.Equal(acts.resized, tc.wantResized) || !slices.Equal(acts.evicted, tc.wantEvicted) {
+				t.Errorf("resized %v evicted %v, want resized %v evicted %v", acts.resized, acts.evicted, tc.wantResized, tc.wantEvicted)
+			}
+			if out.Pods != (PodCounts{Total: 1, Stale: tc.wantStale}) {
+				t.Errorf("counts = %+v, want {1 %d}", out.Pods, tc.wantStale)
+			}
+		})
+	}
+}
+
+// A staged resize the kubelet cannot enact is evicted only when it changes a
+// request: the spec already carries the target, so the resources the kubelet
+// reports it enacted tell what is at stake.
+func TestApply_StagedResizeOfLimitsAloneIsNotEvicted(t *testing.T) {
+	enacted := func(request, limit string) *corev1.ResourceRequirements {
+		return &corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(request)},
+			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(limit)},
+		}
+	}
+	for _, tc := range []struct {
+		name        string
+		running     *corev1.ResourceRequirements
+		wantEvicted []string
+	}{
+		{name: "limits alone", running: enacted("100m", "200m")},
+		{name: "a request", running: enacted("50m", "200m"), wantEvicted: []string{"p"}},
+		{name: "nothing reported", wantEvicted: []string{"p"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := withResizeErrorCondition(runningPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")}))
+			pod.Spec.Containers[0].Resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("400m")}
+			pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "app", Resources: tc.running}}
+			var acts podActions
+			p := New(acts.client(t, pod), true, testEvictionOpts()...)
+			recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("100m"), CPULimit: qtyp("400m")}}
+
+			if out := p.Apply(context.Background(), testMember(), recs, ApplySettings{}); out.Err != nil {
+				t.Fatalf("Apply: %v", out.Err)
+			}
+			if !slices.Equal(acts.evicted, tc.wantEvicted) {
+				t.Errorf("evicted %v, want %v", acts.evicted, tc.wantEvicted)
+			}
+		})
+	}
+}

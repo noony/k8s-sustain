@@ -53,146 +53,56 @@ func evictionInterceptor(evictedNames *[]string) interceptor.Funcs {
 
 func qtyp(s string) *resource.Quantity { q := resource.MustParse(s); return &q }
 
-func TestPodIsStale_DetectsChangedCPU(t *testing.T) {
-	pod := &corev1.Pod{
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name: "app",
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceCPU: resource.MustParse("100m"),
-						},
-					},
-				},
-			},
+// A pod counts stale when a request differs from the Recommendation by more
+// than the Policy tolerates, in a regular or a sidecar container. A classic init
+// container has already exited, and a change to limits alone waits for the
+// pod's replacement: neither is drift.
+func TestApply_StaleCount(t *testing.T) {
+	cpu := func(request, limit string) corev1.ResourceRequirements {
+		r := corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(request)}}
+		if limit != "" {
+			r.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(limit)}
+		}
+		return r
+	}
+	sidecar := ptr.To(corev1.ContainerRestartPolicyAlways)
+	for _, tc := range []struct {
+		name      string
+		app       corev1.ResourceRequirements
+		init      []corev1.Container
+		recs      map[string]ContainerRecommendation
+		wantStale int
+	}{
+		{name: "a changed request", app: cpu("100m", ""), recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}, wantStale: 1},
+		{name: "a matching request", app: cpu("200m", ""), recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}},
+		{
+			name: "a sidecar's changed request", app: cpu("200m", ""),
+			init: []corev1.Container{{Name: "sidecar", RestartPolicy: sidecar, Resources: cpu("50m", "")}},
+			recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}, "sidecar": {CPURequest: qtyp("100m")}}, wantStale: 1,
 		},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app": {CPURequest: qtyp("200m")},
-	}
-	if !podIsStale(pod, recs) {
-		t.Error("expected pod to be stale")
-	}
-}
-
-func TestPodIsStale_NotStaleWhenMatching(t *testing.T) {
-	pod := &corev1.Pod{
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name: "app",
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceCPU: resource.MustParse("200m"),
-						},
-					},
-				},
-			},
+		{
+			name: "a classic init container's changed request", app: cpu("200m", ""),
+			init: []corev1.Container{{Name: "migrate", Resources: cpu("50m", "")}},
+			recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}, "migrate": {CPURequest: qtyp("100m")}},
 		},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app": {CPURequest: qtyp("200m")},
-	}
-	if podIsStale(pod, recs) {
-		t.Error("expected pod to not be stale")
-	}
-}
-
-// Sidecars run for the pod's lifetime, so drift in one must trigger a recycle.
-func TestPodIsStale_RestartableInitContainerDriftCountsAsStale(t *testing.T) {
-	always := corev1.ContainerRestartPolicyAlways
-	pod := &corev1.Pod{
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name:      "app",
-				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}},
-			}},
-			InitContainers: []corev1.Container{{
-				Name:          "sidecar",
-				RestartPolicy: &always,
-				Resources:     corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}},
-			}},
+		{name: "a changed limit alone", app: cpu("100m", "200m"), recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("100m"), CPULimit: qtyp("400m")}}},
+		{name: "a removed limit alone", app: cpu("100m", "500m"), recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("100m"), RemoveCPULimit: true}}},
+		{name: "a request the tolerance withholds", app: cpu("200m", ""), recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("195m")}}},
+		{
+			name: "a limit raised with its rising request", app: cpu("100m", "200m"),
+			recs: map[string]ContainerRecommendation{"app": {CPURequest: qtyp("300m"), CPULimit: qtyp("300m")}}, wantStale: 1,
 		},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app":     {CPURequest: qtyp("200m")},
-		"sidecar": {CPURequest: qtyp("100m")},
-	}
-	if !podIsStale(pod, recs) {
-		t.Error("expected pod to be stale due to sidecar drift")
-	}
-}
-
-// A recommendation that changes only a limit must still mark the pod stale, or
-// eviction-mode reconcile skips it and the stale limit persists forever.
-func TestPodIsStale_DetectsChangedLimit(t *testing.T) {
-	pod := &corev1.Pod{
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name: "app",
-				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("256Mi")},
-					Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
-				},
-			}},
-		},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app": {
-			MemoryRequest: qtyp("256Mi"),
-			MemoryLimit:   qtyp("1Gi"),
-		},
-	}
-	if !podIsStale(pod, recs) {
-		t.Error("expected pod to be stale: recommended limit differs from current")
-	}
-}
-
-func TestPodIsStale_DetectsRemovedLimit(t *testing.T) {
-	pod := &corev1.Pod{
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name: "app",
-				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m")},
-					Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
-				},
-			}},
-		},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app": {
-			CPURequest:     qtyp("100m"),
-			RemoveCPULimit: true,
-		},
-	}
-	if !podIsStale(pod, recs) {
-		t.Error("expected pod to be stale: recommendation removes a limit still present on the container")
-	}
-}
-
-// Drift in a classic init container must NOT recycle: it has already exited by
-// the time the pod is Running, and the webhook injects on the next creation.
-func TestPodIsStale_ClassicInitContainerDriftIsIgnored(t *testing.T) {
-	pod := &corev1.Pod{
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name:      "app",
-				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")}},
-			}},
-			InitContainers: []corev1.Container{{
-				Name:      "migrate",
-				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}},
-			}},
-		},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app":     {CPURequest: qtyp("200m")},
-		"migrate": {CPURequest: qtyp("100m")},
-	}
-	if podIsStale(pod, recs) {
-		t.Error("expected pod to NOT be stale: classic init container drift should not trigger recycle")
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pod := runningPod("p", nil)
+			pod.Spec.Containers[0].Resources = tc.app
+			pod.Spec.InitContainers = tc.init
+			c, _ := countsTestClient(t, pod)
+			out := New(c, true).Apply(context.Background(), declaring(testMember(), pod), tc.recs, ApplySettings{DryRun: true, Tolerance: tol5})
+			if out.Pods != (PodCounts{Total: 1, Stale: tc.wantStale}) {
+				t.Errorf("counts = %+v, want {1 %d}", out.Pods, tc.wantStale)
+			}
+		})
 	}
 }
 

@@ -18,30 +18,30 @@ func reqs(cpu, mem string) corev1.ResourceList {
 	return rl
 }
 
-func TestContainerMatches(t *testing.T) {
+func TestContainerChange(t *testing.T) {
 	cases := []struct {
 		name    string
 		current corev1.ResourceRequirements
 		rec     ContainerRecommendation
-		want    bool
+		want    podChange
 	}{
 		{
 			name:    "exact match cpu+mem requests",
 			current: corev1.ResourceRequirements{Requests: reqs("100m", "64Mi")},
 			rec:     ContainerRecommendation{CPURequest: qtyp("100m"), MemoryRequest: qtyp("64Mi")},
-			want:    true,
+			want:    noChange,
 		},
 		{
 			name:    "empty rec is no-op match",
 			current: corev1.ResourceRequirements{Requests: reqs("100m", "64Mi")},
 			rec:     ContainerRecommendation{},
-			want:    true,
+			want:    noChange,
 		},
 		{
 			name:    "off by one milli cpu request",
 			current: corev1.ResourceRequirements{Requests: reqs("100m", "")},
 			rec:     ContainerRecommendation{CPURequest: qtyp("101m")},
-			want:    false,
+			want:    requestChange,
 		},
 		{
 			// Unset request vs explicit zero rec: unset reads as zero, so applying
@@ -49,52 +49,52 @@ func TestContainerMatches(t *testing.T) {
 			name:    "unset request vs zero rec matches",
 			current: corev1.ResourceRequirements{},
 			rec:     ContainerRecommendation{CPURequest: qtyp("0")},
-			want:    true,
+			want:    noChange,
 		},
 		{
 			name:    "unset request vs nonzero rec differs",
 			current: corev1.ResourceRequirements{},
 			rec:     ContainerRecommendation{CPURequest: qtyp("100m")},
-			want:    false,
+			want:    requestChange,
 		},
 		{
 			// Unset limit vs explicit zero limit rec: both numerically zero → match.
 			name:    "unset limit vs zero rec matches",
 			current: corev1.ResourceRequirements{},
 			rec:     ContainerRecommendation{CPULimit: qtyp("0")},
-			want:    true,
+			want:    noChange,
 		},
 		{
 			name:    "unset limit vs nonzero rec differs",
 			current: corev1.ResourceRequirements{},
 			rec:     ContainerRecommendation{CPULimit: qtyp("500m")},
-			want:    false,
+			want:    limitChange,
 		},
 		{
 			name:    "limit matches",
 			current: corev1.ResourceRequirements{Limits: reqs("500m", "")},
 			rec:     ContainerRecommendation{CPULimit: qtyp("500m")},
-			want:    true,
+			want:    noChange,
 		},
 		{
 			name:    "limit drift",
 			current: corev1.ResourceRequirements{Limits: reqs("", "512Mi")},
 			rec:     ContainerRecommendation{MemoryLimit: qtyp("1Gi")},
-			want:    false,
+			want:    limitChange,
 		},
 		{
 			// RemoveCPULimit with a limit still present → applying deletes it → mismatch.
 			name:    "remove limit when present differs",
 			current: corev1.ResourceRequirements{Limits: reqs("500m", "")},
 			rec:     ContainerRecommendation{RemoveCPULimit: true},
-			want:    false,
+			want:    limitChange,
 		},
 		{
 			// RemoveCPULimit with no limit present → no-op → match.
 			name:    "remove limit when absent matches",
 			current: corev1.ResourceRequirements{},
 			rec:     ContainerRecommendation{RemoveCPULimit: true},
-			want:    true,
+			want:    noChange,
 		},
 		{
 			// RemoveCPULimit with an explicit zero limit present → deleting a
@@ -103,28 +103,28 @@ func TestContainerMatches(t *testing.T) {
 			name:    "remove limit when present-but-zero matches",
 			current: corev1.ResourceRequirements{Limits: reqs("0", "")},
 			rec:     ContainerRecommendation{RemoveCPULimit: true},
-			want:    true,
+			want:    noChange,
 		},
 		{
 			// CPU differs, memory matches: should be a mismatch (CPU-only drift).
 			name:    "cpu-only drift",
 			current: corev1.ResourceRequirements{Requests: reqs("100m", "64Mi")},
 			rec:     ContainerRecommendation{CPURequest: qtyp("200m"), MemoryRequest: qtyp("64Mi")},
-			want:    false,
+			want:    requestChange,
 		},
 		{
 			// Memory differs, CPU matches: mismatch (memory-only drift).
 			name:    "memory-only drift",
 			current: corev1.ResourceRequirements{Requests: reqs("100m", "64Mi")},
 			rec:     ContainerRecommendation{CPURequest: qtyp("100m"), MemoryRequest: qtyp("128Mi")},
-			want:    false,
+			want:    requestChange,
 		},
 		{
 			// Equal quantities written differently (1000m == 1) still match.
 			name:    "equivalent forms match",
 			current: corev1.ResourceRequirements{Requests: reqs("1000m", "")},
 			rec:     ContainerRecommendation{CPURequest: qtyp("1")},
-			want:    true,
+			want:    noChange,
 		},
 		{
 			// Applying would raise the recommended limit back to the running
@@ -133,14 +133,26 @@ func TestContainerMatches(t *testing.T) {
 			name:    "limit below the running request matches once raised",
 			current: reqsRR("500m", "", "500m", ""),
 			rec:     ContainerRecommendation{CPULimit: qtyp("400m")},
-			want:    true,
+			want:    noChange,
+		},
+		{
+			name:    "a request rising above the kept limit is a request change",
+			current: reqsRR("100m", "", "200m", ""),
+			rec:     ContainerRecommendation{CPURequest: qtyp("300m")},
+			want:    requestChange,
+		},
+		{
+			name:    "a limit lowered to the running request changes limits alone",
+			current: reqsRR("500m", "", "800m", ""),
+			rec:     ContainerRecommendation{CPULimit: qtyp("400m")},
+			want:    limitChange,
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := containerMatches(c.current, c.rec); got != c.want {
-				t.Errorf("containerMatches = %v, want %v", got, c.want)
+			if got := containerChange(c.current, c.rec); got != c.want {
+				t.Errorf("containerChange = %v, want %v", got, c.want)
 			}
 		})
 	}
@@ -251,14 +263,14 @@ func TestClampRecsToTolerance(t *testing.T) {
 	})
 }
 
-// containerMatches only ever sees a container that exists — the missing case is
-// handled by the caller's mapping and covered in the controller package.
+// containerChange only ever sees a container that exists: planFor skips a
+// recommendation for a container the pod does not run.
 func TestContainerMatches_MissingResourceMapEntries(t *testing.T) {
 	// Current has neither requests nor limits set at all (nil maps).
 	current := corev1.ResourceRequirements{}
 	// A rec that wants concrete values must report a mismatch.
 	rec := ContainerRecommendation{CPURequest: qtyp("100m"), MemoryLimit: qtyp("256Mi")}
-	if containerMatches(current, rec) {
-		t.Error("expected mismatch: nil resource maps vs concrete recommendation")
+	if containerChange(current, rec) != requestChange {
+		t.Error("expected a request change: nil resource maps vs concrete recommendation")
 	}
 }

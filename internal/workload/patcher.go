@@ -58,7 +58,7 @@ func countPods(pods []*corev1.Pod, recs map[string]ContainerRecommendation, tol 
 			continue
 		}
 		pc.Total++
-		if !fixed[pod.UID] && podIsStale(pod, clampRecsToTolerance(podContainers(pod), recs, tol)) {
+		if !fixed[pod.UID] && planFor(pod, recs, tol).stale() {
 			pc.Stale++
 		}
 	}
@@ -193,9 +193,9 @@ func (p *Patcher) resizeInPlaceOnly(ctx context.Context, pods []*corev1.Pod, rec
 			skipped++
 			continue
 		}
-		podRecs := clampRecsToTolerance(podContainers(pod), recs, s.Tolerance)
-		observeSuppressed(recs, podRecs, c.res.countSuppressed)
-		written, err := p.resizePodInPlaceNoEvict(ctx, pod, podRecs)
+		plan := planFor(pod, recs, s.Tolerance)
+		observeSuppressed(recs, plan.recs, c.res.countSuppressed)
+		written, err := p.resizePodInPlaceNoEvict(ctx, pod, plan.recs)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
 		}
@@ -211,10 +211,9 @@ func (p *Patcher) resizeInPlaceOnly(ctx context.Context, pods []*corev1.Pod, rec
 // unapplyStrategy decides what happens when an in-place resize cannot be
 // applied. Both hooks return (evicted, err).
 type unapplyStrategy struct {
-	unsatisfiableLog string
-	unappliedLog     string
-	onUnsatisfiable  func(ctx context.Context, pod *corev1.Pod, verdict string) (bool, error)
-	onUnapplied      func(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error)
+	unappliedLog    string
+	onUnsatisfiable func(ctx context.Context, pod *corev1.Pod, verdict string) (bool, error)
+	onUnapplied     func(ctx context.Context, pod *corev1.Pod) (bool, error)
 }
 
 // resizePendingReason returns the kubelet's verdict on a staged resize
@@ -237,15 +236,15 @@ func resizePendingReason(pod *corev1.Pod) string {
 }
 
 // resizePodInPlaceNoEvict mirrors patchPodInPlace but never evicts, for
-// in-place-only kinds.
+// in-place-only kinds and for a change to limits alone: a pod it cannot
+// resize keeps its resources until it is replaced.
 func (p *Patcher) resizePodInPlaceNoEvict(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) ([]string, error) {
 	written, _, err := p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
-		unsatisfiableLog: "staged in-place resize cannot complete for short-lived pod, skipping (next run will pick up new resources)",
-		unappliedLog:     "skipping short-lived pod (next run via webhook)",
+		unappliedLog: "in-place resize not applied, the pod keeps its resources until it is replaced",
 		onUnsatisfiable: func(context.Context, *corev1.Pod, string) (bool, error) {
 			return false, nil
 		},
-		onUnapplied: func(context.Context, *corev1.Pod, map[string]ContainerRecommendation) (bool, error) {
+		onUnapplied: func(context.Context, *corev1.Pod) (bool, error) {
 			return false, nil
 		},
 	})
@@ -267,7 +266,7 @@ func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, rec
 	if len(r.regular) == 0 && len(r.sidecars) == 0 {
 		switch verdict := resizePendingReason(pod); verdict {
 		case corev1.PodReasonInfeasible, corev1.PodReasonError:
-			logger.Info(strat.unsatisfiableLog, "verdict", verdict)
+			logger.Info("staged in-place resize cannot complete", "verdict", verdict)
 			evicted, err = strat.onUnsatisfiable(ctx, pod, verdict)
 			return nil, evicted, err
 		case corev1.PodReasonDeferred:
@@ -286,13 +285,14 @@ func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, rec
 	// gates and a rejection must not block the regular containers.
 	if len(r.regular) > 0 {
 		pod.Spec.Containers = r.containers
-		ok, err := p.submitInPlaceResize(ctx, pod, base)
-		if err != nil {
+		switch answer, err := p.submitInPlaceResize(ctx, pod, base); {
+		case err != nil:
 			return nil, false, err
-		}
-		if !ok {
+		case answer == resizeGone:
+			return nil, false, nil
+		case answer == resizeInvalid:
 			logger.Info(strat.unappliedLog)
-			evicted, err = strat.onUnapplied(ctx, pod, recs)
+			evicted, err = strat.onUnapplied(ctx, pod)
 			return nil, evicted, err
 		}
 		written = r.regular
@@ -339,21 +339,28 @@ func (p *Patcher) recycle(ctx context.Context, set podSet, recs map[string]Conta
 			skipped++
 			continue
 		}
-		// Clamp per pod: siblings may carry different current allocations.
-		podRecs := clampRecsToTolerance(podContainers(pod), recs, s.Tolerance)
-		observeSuppressed(recs, podRecs, c.res.countSuppressed)
+		// Plan per pod: siblings may carry different current allocations.
+		plan := planFor(pod, recs, s.Tolerance)
+		observeSuppressed(recs, plan.recs, c.res.countSuppressed)
 		var (
 			written []string
 			evicted bool
 			err     error
 		)
-		// A pod that is not Running cannot be resized in place, so it is evicted
-		// in both modes: one stuck Pending on an oversized request is exactly
-		// what the webhook should re-inject.
-		if p.inPlace && pod.Status.Phase == corev1.PodRunning {
-			written, evicted, err = p.patchPodInPlace(ctx, pod, podRecs, gate)
-		} else {
-			evicted, err = p.evictPod(ctx, pod, podRecs, gate)
+		switch inPlace := p.inPlace && pod.Status.Phase == corev1.PodRunning; {
+		case inPlace && plan.change == limitChange:
+			written, err = p.resizePodInPlaceNoEvict(ctx, pod, plan.recs)
+		case inPlace:
+			written, evicted, err = p.patchPodInPlace(ctx, pod, plan.recs, gate)
+		// A pod that is not Running cannot be resized in place, so a stale one
+		// is evicted in both modes: one stuck Pending on an oversized request
+		// is exactly what the webhook should re-inject.
+		case plan.stale():
+			evicted, err = p.submitEviction(ctx, pod, "stale resources", gate)
+		case plan.change == limitChange:
+			logger.V(1).Info("only limits differ, left to the pod's replacement", "pod", pod.Name)
+		default:
+			logger.V(1).Info("pod already running recommended resources, eviction skipped", "pod", pod.Name)
 		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("pod %s: %w", pod.Name, err))
@@ -381,28 +388,61 @@ func (p *Patcher) recycle(ctx context.Context, set podSet, recs map[string]Conta
 	return c.result(pods, recs, s.Tolerance, errors.Join(errs...))
 }
 
-// patchPodInPlace resizes a pod in place, falling back to eviction when the
-// resize is Infeasible/Error or rejected as Invalid. It returns what
+// patchPodInPlace resizes a pod whose requests change in place, falling back
+// to eviction when the resize is rejected as Invalid, or when the kubelet
+// reports a staged resize of a request Infeasible or Error. It returns what
 // resizePodInPlaceWith does.
 func (p *Patcher) patchPodInPlace(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, gate evictionGate) ([]string, bool, error) {
 	return p.resizePodInPlaceWith(ctx, pod, recs, unapplyStrategy{
-		unsatisfiableLog: "staged in-place resize cannot complete, falling back to eviction",
-		unappliedLog:     "falling back to eviction",
-		// submitEviction, not evictPod: the spec already matches the
-		// recommendation, so evictPod's staleness gate would skip it.
+		unappliedLog: "falling back to eviction",
+		// The spec already matches the recommendation: only the resources
+		// the kubelet failed to enact tell whether a request is at stake.
 		onUnsatisfiable: func(ctx context.Context, pod *corev1.Pod, verdict string) (bool, error) {
+			if !stagedRequests(pod) {
+				log.FromContext(ctx).Info("the staged resize changes limits alone, left to the pod's replacement",
+					"pod", pod.Name, "namespace", pod.Namespace, "verdict", verdict)
+				return false, nil
+			}
 			return p.submitEviction(ctx, pod, "in-place resize verdict "+verdict, gate)
 		},
-		onUnapplied: func(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation) (bool, error) {
-			return p.evictPod(ctx, pod, recs, gate)
+		onUnapplied: func(ctx context.Context, pod *corev1.Pod) (bool, error) {
+			return p.submitEviction(ctx, pod, "stale resources", gate)
 		},
 	})
 }
 
+// stagedRequests reports whether the resize staged on pod changes a request:
+// the kubelet reports, for a regular or sidecar container, requests other
+// than its spec's, or none at all, which may hide one.
+func stagedRequests(pod *corev1.Pod) bool {
+	enacted := map[string]*corev1.ResourceRequirements{}
+	for _, s := range slices.Concat(pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses) {
+		enacted[s.Name] = s.Resources
+	}
+	staged := func(c corev1.Container) bool {
+		r := enacted[c.Name]
+		return r == nil || !requestsEqual(c.Resources, *r)
+	}
+	return slices.ContainsFunc(pod.Spec.Containers, staged) ||
+		slices.ContainsFunc(pod.Spec.InitContainers, func(c corev1.Container) bool {
+			return isRestartableInitContainer(c) && staged(c)
+		})
+}
+
+// resizeAnswer is how the apiserver answered a submitted resize.
+type resizeAnswer int
+
+const (
+	resizeAccepted resizeAnswer = iota
+	// resizeInvalid: rejected for this pod, which is reverted to base.
+	resizeInvalid
+	// resizeGone: the pod no longer exists.
+	resizeGone
+)
+
 // submitInPlaceResize patches the /resize subresource with the diff from
-// base to pod. It returns (false, nil) when the resize was rejected as
-// Invalid (pod reverted to base) or the pod is gone.
-func (p *Patcher) submitInPlaceResize(ctx context.Context, pod, base *corev1.Pod) (bool, error) {
+// base to pod.
+func (p *Patcher) submitInPlaceResize(ctx context.Context, pod, base *corev1.Pod) (resizeAnswer, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
 	logger.V(1).Info("attempting in-place resize via /resize subresource")
@@ -410,16 +450,16 @@ func (p *Patcher) submitInPlaceResize(ctx context.Context, pod, base *corev1.Pod
 	switch {
 	case err == nil:
 		logger.Info("in-place resize applied")
-		return true, nil
+		return resizeAccepted, nil
 	case apierrors.IsInvalid(err):
 		logger.Info("in-place resize rejected as invalid for this pod (e.g. QoS class change)", "err", err.Error())
 		revertStagedResize(pod, base)
-		return false, nil
+		return resizeInvalid, nil
 	case apierrors.IsNotFound(err):
 		logger.Info("pod gone before in-place resize, skipping")
-		return false, nil
+		return resizeGone, nil
 	default:
-		return false, err
+		return resizeAccepted, err
 	}
 }
 
@@ -454,20 +494,10 @@ type evictionGate struct {
 	halted error
 }
 
-// evictPod evicts a pod running stale resources. Returns (evicted, err);
-// evicted=false covers pods already fresh, gone, or PDB-blocked.
-func (p *Patcher) evictPod(ctx context.Context, pod *corev1.Pod, recs map[string]ContainerRecommendation, gate evictionGate) (bool, error) {
-	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
-
-	if !podIsStale(pod, recs) {
-		logger.V(1).Info("pod already running recommended resources, eviction skipped")
-		return false, nil
-	}
-	return p.submitEviction(ctx, pod, "stale resources", gate)
-}
-
-// submitEviction creates the Eviction without a staleness gate. It is the
-// single gate check for both eviction triggers.
+// submitEviction creates the Eviction without a staleness gate: the caller
+// decided the pod's plan allows one. It is the single gate check for every
+// eviction trigger, and returns false for a pod gone, PDB-blocked or
+// annotated safe-to-evict=false.
 func (p *Patcher) submitEviction(ctx context.Context, pod *corev1.Pod, why string, gate evictionGate) (bool, error) {
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
@@ -521,7 +551,7 @@ func updatedPodCrashLooping(pods []*corev1.Pod, recs map[string]ContainerRecomme
 		if !countable(pod) || !hasCrashLoopBackOff(pod) {
 			continue
 		}
-		if podIsStale(pod, clampRecsToTolerance(podContainers(pod), recs, tol)) {
+		if planFor(pod, recs, tol).stale() {
 			continue
 		}
 		return fmt.Errorf("%w: %s already runs the recommendation", errCrashLoopBackOff, pod.Name)
@@ -667,36 +697,6 @@ func podOrdinal(pod *corev1.Pod) (int, bool) {
 		return 0, false
 	}
 	return n, true
-}
-
-// podIsStale reports whether any container differs from its recommendation.
-// Only sidecar init containers count; classic ones have already exited.
-func podIsStale(pod *corev1.Pod, recs map[string]ContainerRecommendation) bool {
-	if anyContainerStale(pod.Spec.Containers, recs) {
-		return true
-	}
-	for _, c := range pod.Spec.InitContainers {
-		if !isRestartableInitContainer(c) {
-			continue
-		}
-		if anyContainerStale([]corev1.Container{c}, recs) {
-			return true
-		}
-	}
-	return false
-}
-
-func anyContainerStale(cs []corev1.Container, recs map[string]ContainerRecommendation) bool {
-	for _, c := range cs {
-		rec, ok := recs[c.Name]
-		if !ok {
-			continue
-		}
-		if !containerMatches(c.Resources, rec) {
-			return true
-		}
-	}
-	return false
 }
 
 // isRestartableInitContainer reports whether an init container is a sidecar
