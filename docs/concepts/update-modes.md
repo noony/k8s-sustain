@@ -102,7 +102,7 @@ To avoid churning pods over noise, the controller ignores small **decreases**. A
 - Setting both `percent` and `minDecrease` to `0` acts on every decrease.
 - The threshold only gates resizing and eviction of running pods; new pods still receive the exact recommendation from the webhook.
 
-See the [Policy reference](../reference/policy.md#cpudownsizethreshold-memorydownsizethreshold).
+See the [Policy reference](../reference/policy.md#downsize-threshold).
 
 ---
 

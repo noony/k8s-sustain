@@ -215,9 +215,9 @@ At most one of the following fields may be set (enforced by CRD validation). If 
 | `noLimit` | bool | Remove the limit entirely |
 | `requestsLimitsRatio` | float64 | Set limit = request × ratio (e.g. `1.5` sets limit to 150% of request). Must be `>= 1`. |
 
-Whatever the strategy, a limit never ends below the request: the API server rejects such a pod and such a resize, so a kept limit the new request outgrows (an OOM floor, headroom, `minAllowed` or autoscaler coordination can each push it there) is raised to the request. The request is never lowered to fit the limit. The `WorkloadRecommendation`'s trace records the raise as its `guard` stage. The webhook and the in-place resize hold the same line when they write a container: when the limit it would end up with is below its request — a limit kept from a pod whose running limit differs from its template, or a limit decrease applied while the [downsize threshold](#cpudownsizethreshold-memorydownsizethreshold) withholds the request's — they raise that limit to the request.
+Whatever the strategy, a limit never ends below the request: the API server rejects such a pod and such a resize, so a kept limit the new request outgrows (an OOM floor, headroom, `minAllowed` or autoscaler coordination can each push it there) is raised to the request. The request is never lowered to fit the limit. The `WorkloadRecommendation`'s trace records the raise as its `guard` stage. The webhook and the in-place resize hold the same line when they write a container: when the limit it would end up with is below its request — a limit kept from a pod whose running limit differs from its template, or a limit decrease applied while the [downsize threshold](#downsize-threshold) withholds the request's — they raise that limit to the request.
 
-#### `cpu.downsizeThreshold` / `memory.downsizeThreshold`
+#### `cpu.downsizeThreshold` / `memory.downsizeThreshold` {#downsize-threshold}
 
 Suppresses pod recycling for resource **decreases** that are too small to be
 worth the disruption. **Increases always apply immediately** (under-provisioning
