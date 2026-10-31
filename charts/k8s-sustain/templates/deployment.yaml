@@ -71,7 +71,7 @@ spec:
             {{- with (include "k8s-sustain.prometheusAuthArgs" . | trim) }}
             {{- . | nindent 12 }}
             {{- end }}
-          {{- with (include "k8s-sustain.prometheusAuthEnv" (dict "ctx" . "envPrefix" "K8SSUSTAIN_") | trim) }}
+          {{- with (include "k8s-sustain.prometheusAuthEnv" . | trim) }}
           env:
             {{- . | nindent 12 }}
           {{- end }}

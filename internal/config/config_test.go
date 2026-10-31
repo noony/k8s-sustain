@@ -32,6 +32,26 @@ func mustLoadDashboard(t *testing.T) DashboardConfig {
 	return cfg
 }
 
+// newRoot binds the flags the way the binary does: the global flags on the
+// root, each subcommand's own on a command under it.
+func newRoot(t *testing.T) *cobra.Command {
+	t.Helper()
+	t.Cleanup(viper.Reset)
+	viper.Reset()
+	root := &cobra.Command{Use: "k8s-sustain", SilenceUsage: true, SilenceErrors: true}
+	BindGlobalFlags(root)
+	for use, bind := range map[string]func(*cobra.Command){
+		"start":     BindControllerFlags,
+		"webhook":   BindWebhookFlags,
+		"dashboard": BindDashboardFlags,
+	} {
+		cmd := &cobra.Command{Use: use, RunE: func(*cobra.Command, []string) error { return nil }}
+		bind(cmd)
+		root.AddCommand(cmd)
+	}
+	return root
+}
+
 // Without an env key replacer, viper upper-cases the key as-is, so
 // `dashboard.bind-address` -> `K8SSUSTAIN_DASHBOARD.BIND-ADDRESS`, which is not
 // a legal POSIX env var name and never matches what users set.
@@ -103,21 +123,6 @@ func TestLoadWebhookConfig_RoundTripsBoundFlags(t *testing.T) {
 	}
 }
 
-// The webhook reads recommendations exclusively from the cached
-// WorkloadRecommendation; a bound --prometheus-address would be a dead knob
-// that looks like it does something.
-func TestBindWebhookFlags_NoPrometheusAddress(t *testing.T) {
-	t.Cleanup(viper.Reset)
-	viper.Reset()
-
-	cmd := &cobra.Command{Use: "webhook"}
-	BindWebhookFlags(cmd)
-
-	if f := cmd.Flags().Lookup("prometheus-address"); f != nil {
-		t.Errorf("BindWebhookFlags registered --prometheus-address, want it gone")
-	}
-}
-
 // Viper hands env values back as a single raw string, and GetStringSlice splits
 // on whitespace rather than commas, so getStringSlice splits them itself.
 func TestStringSlice_EnvOverride(t *testing.T) {
@@ -133,12 +138,7 @@ func TestStringSlice_EnvOverride(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Cleanup(viper.Reset)
-			viper.Reset()
-
-			cmd := &cobra.Command{Use: "start"}
-			BindControllerFlags(cmd)
-
+			newRoot(t)
 			t.Setenv("K8SSUSTAIN_EXCLUDED_NAMESPACES", tc.envVal)
 			InitViper()
 
@@ -150,40 +150,72 @@ func TestStringSlice_EnvOverride(t *testing.T) {
 	}
 }
 
-func TestStringSlice_EnvOverride_SubcommandKey(t *testing.T) {
-	t.Cleanup(viper.Reset)
-	viper.Reset()
-
-	cmd := &cobra.Command{Use: "webhook"}
-	BindWebhookFlags(cmd)
-
-	t.Setenv("K8SSUSTAIN_WEBHOOK_EXCLUDED_NAMESPACES", "kube-system,monitoring")
+// A cluster-scope setting is one root flag, one key and one env var: set once,
+// every subcommand reads it, so no component can run with its own copy.
+func TestClusterScopeSettingsAreSetOnceForEverySubcommand(t *testing.T) {
+	newRoot(t)
+	t.Setenv("K8SSUSTAIN_RECOMMEND_ONLY", "true")
+	t.Setenv("K8SSUSTAIN_EXCLUDED_NAMESPACES", "kube-system,monitoring")
+	t.Setenv("K8SSUSTAIN_PROMETHEUS_ADDRESS", "https://thanos.example:10902")
+	t.Setenv("K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE", "/var/run/secrets/token")
+	t.Setenv("K8SSUSTAIN_PROMETHEUS_HEADERS", "X-Scope-OrgID=tenant-a")
+	t.Setenv("K8SSUSTAIN_PROMETHEUS_TLS_INSECURE_SKIP_VERIFY", "true")
 	InitViper()
 
-	got := LoadWebhookConfig().ExcludedNamespaces
-	want := []string{"kube-system", "monitoring"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ExcludedNamespaces = %v, want %v", got, want)
+	controllerCfg, webhookCfg, dashboardCfg := mustLoadController(t), LoadWebhookConfig(), mustLoadDashboard(t)
+
+	wantNamespaces := []string{"kube-system", "monitoring"}
+	for name, got := range map[string][]string{
+		"start":     controllerCfg.ExcludedNamespaces,
+		"webhook":   webhookCfg.ExcludedNamespaces,
+		"dashboard": dashboardCfg.ExcludedNamespaces,
+	} {
+		if !reflect.DeepEqual(got, wantNamespaces) {
+			t.Errorf("%s: ExcludedNamespaces = %v, want %v", name, got, wantNamespaces)
+		}
+	}
+	if !controllerCfg.RecommendOnly || !webhookCfg.RecommendOnly {
+		t.Errorf("RecommendOnly = %v (start), %v (webhook), want true for both", controllerCfg.RecommendOnly, webhookCfg.RecommendOnly)
+	}
+	wantTransport := promclient.TransportConfig{
+		BearerTokenFile: "/var/run/secrets/token",
+		Headers:         map[string]string{"X-Scope-OrgID": "tenant-a"},
+		TLS:             promclient.TLSConfig{InsecureSkipVerify: true},
+	}
+	for name, got := range map[string]struct {
+		address   string
+		transport promclient.TransportConfig
+	}{
+		"start":     {controllerCfg.PrometheusAddress, controllerCfg.PrometheusTransport},
+		"dashboard": {dashboardCfg.PrometheusAddress, dashboardCfg.PrometheusTransport},
+	} {
+		if got.address != "https://thanos.example:10902" {
+			t.Errorf("%s: PrometheusAddress = %q, want https://thanos.example:10902", name, got.address)
+		}
+		if !reflect.DeepEqual(got.transport, wantTransport) {
+			t.Errorf("%s: PrometheusTransport = %+v, want %+v", name, got.transport, wantTransport)
+		}
 	}
 }
 
-// The flag path already parses CSV via pflag; the env-side comma splitting must
-// not regress it.
-func TestStringSlice_FlagStillWorks(t *testing.T) {
-	t.Cleanup(viper.Reset)
-	viper.Reset()
-
-	cmd := &cobra.Command{Use: "start"}
-	BindControllerFlags(cmd)
-	if err := cmd.Flags().Set("excluded-namespaces", "kube-system,monitoring"); err != nil {
-		t.Fatalf("setting flag: %v", err)
-	}
-	InitViper()
-
-	got := mustLoadController(t).ExcludedNamespaces
-	want := []string{"kube-system", "monitoring"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ExcludedNamespaces = %v, want %v", got, want)
+// The flag form is the root's persistent flag, given after any subcommand;
+// the webhook accepts the Prometheus ones too, and ignores them.
+func TestClusterScopeFlagsParseAfterEverySubcommand(t *testing.T) {
+	for subcommand, load := range map[string]func(*testing.T) []string{
+		"start":     func(t *testing.T) []string { return mustLoadController(t).ExcludedNamespaces },
+		"webhook":   func(*testing.T) []string { return LoadWebhookConfig().ExcludedNamespaces },
+		"dashboard": func(t *testing.T) []string { return mustLoadDashboard(t).ExcludedNamespaces },
+	} {
+		t.Run(subcommand, func(t *testing.T) {
+			root := newRoot(t)
+			root.SetArgs([]string{subcommand, "--excluded-namespaces=kube-system,monitoring", "--prometheus-address=http://prometheus.example"})
+			if err := root.Execute(); err != nil {
+				t.Fatalf("execute: %v", err)
+			}
+			if got, want := load(t), []string{"kube-system", "monitoring"}; !reflect.DeepEqual(got, want) {
+				t.Errorf("ExcludedNamespaces = %v, want %v", got, want)
+			}
+		})
 	}
 }
 
@@ -379,10 +411,7 @@ func TestParseHeaders(t *testing.T) {
 }
 
 func TestControllerConfig_PrometheusTransportEnvOverrides(t *testing.T) {
-	t.Cleanup(viper.Reset)
-	viper.Reset()
-	cmd := &cobra.Command{}
-	BindControllerFlags(cmd)
+	newRoot(t)
 
 	t.Setenv("K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE", "/var/run/secrets/token")
 	t.Setenv("K8SSUSTAIN_PROMETHEUS_HEADERS", "X-Scope-OrgID=tenant-a,X-Extra=v")
@@ -413,10 +442,7 @@ func TestControllerConfig_PrometheusTransportEnvOverrides(t *testing.T) {
 // The bearer-token test above leaves these unset: the two are mutually
 // exclusive in the client.
 func TestControllerConfig_PrometheusBasicAuthEnvOverrides(t *testing.T) {
-	t.Cleanup(viper.Reset)
-	viper.Reset()
-	cmd := &cobra.Command{}
-	BindControllerFlags(cmd)
+	newRoot(t)
 
 	t.Setenv("K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN", "inline-token")
 	t.Setenv("K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_USERNAME", "user")
@@ -437,64 +463,38 @@ func TestControllerConfig_PrometheusBasicAuthEnvOverrides(t *testing.T) {
 // An install setting none of these flags must produce the zero TransportConfig,
 // which internal/prometheus resolves to "no RoundTripper".
 func TestControllerConfig_PrometheusTransportDefaultIsEmpty(t *testing.T) {
-	t.Cleanup(viper.Reset)
-	viper.Reset()
-	cmd := &cobra.Command{}
-	BindControllerFlags(cmd)
+	newRoot(t)
 
 	if got := mustLoadController(t).PrometheusTransport; !reflect.DeepEqual(got, promclient.TransportConfig{}) {
 		t.Fatalf("PrometheusTransport = %+v, want the zero value", got)
 	}
 }
 
-// A malformed entry must fail LoadControllerConfig itself, so no call site can
+// A malformed entry must fail every Load that reads it, so no call site can
 // start the process with the headers silently missing.
-func TestControllerConfig_PrometheusHeadersParseError(t *testing.T) {
-	t.Cleanup(viper.Reset)
-	viper.Reset()
-	cmd := &cobra.Command{}
-	BindControllerFlags(cmd)
-
+func TestPrometheusHeadersParseErrorFailsTheLoad(t *testing.T) {
+	newRoot(t)
 	t.Setenv("K8SSUSTAIN_PROMETHEUS_HEADERS", "not-a-header")
 	InitViper()
 
-	if _, err := LoadControllerConfig(); err == nil {
-		t.Fatal("LoadControllerConfig succeeded, want a parse error")
-	} else if !strings.Contains(err.Error(), "expected Key=Value") {
-		t.Fatalf("error = %v, want it to explain the Key=Value grammar", err)
-	}
-}
-
-// The dashboard binds the same flag names under "dashboard."-prefixed viper
-// keys so the two subcommands are configurable independently; see
-// bindPrometheusTransportFlags for why they cannot share one flat key.
-func TestDashboardConfig_PrometheusTransportEnvOverrides(t *testing.T) {
-	t.Cleanup(viper.Reset)
-	viper.Reset()
-	cmd := &cobra.Command{Use: "dashboard"}
-	BindDashboardFlags(cmd)
-
-	t.Setenv("K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE", "/var/run/secrets/dash-token")
-	t.Setenv("K8SSUSTAIN_DASHBOARD_PROMETHEUS_HEADERS", "X-Scope-OrgID=tenant-b")
-	t.Setenv("K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_INSECURE_SKIP_VERIFY", "true")
-	InitViper()
-
-	got := mustLoadDashboard(t).PrometheusTransport
-	if got.BearerTokenFile != "/var/run/secrets/dash-token" {
-		t.Errorf("BearerTokenFile = %q, want /var/run/secrets/dash-token", got.BearerTokenFile)
-	}
-	if !reflect.DeepEqual(got.Headers, map[string]string{"X-Scope-OrgID": "tenant-b"}) {
-		t.Errorf("Headers = %v, want X-Scope-OrgID=tenant-b", got.Headers)
-	}
-	if !got.TLS.InsecureSkipVerify {
-		t.Error("TLS.InsecureSkipVerify = false, want true")
+	_, controllerErr := LoadControllerConfig()
+	_, dashboardErr := LoadDashboardConfig()
+	for name, err := range map[string]error{"start": controllerErr, "dashboard": dashboardErr} {
+		if err == nil || !strings.Contains(err.Error(), "expected Key=Value") {
+			t.Errorf("%s: err = %v, want one explaining the Key=Value grammar", name, err)
+		}
 	}
 }
 
 // Pins the exact flag names, so a rename is a deliberate act rather than a
-// silent break of the Helm chart and docs that reference them.
-func TestPrometheusTransportFlagsRegisteredOnBothCommands(t *testing.T) {
-	want := []string{
+// silent break of the Helm chart and docs that reference them, and keeps each
+// a root persistent flag no subcommand shadows with a flag of its own.
+func TestClusterScopeFlagsAreRootPersistentFlags(t *testing.T) {
+	root := newRoot(t)
+	for _, name := range []string{
+		"recommend-only",
+		"excluded-namespaces",
+		"prometheus-address",
 		"prometheus-bearer-token",
 		"prometheus-bearer-token-file",
 		"prometheus-basic-auth-username",
@@ -506,26 +506,15 @@ func TestPrometheusTransportFlagsRegisteredOnBothCommands(t *testing.T) {
 		"prometheus-tls-key-file",
 		"prometheus-tls-server-name",
 		"prometheus-tls-insecure-skip-verify",
-	}
-
-	for _, tc := range []struct {
-		name string
-		bind func(*cobra.Command)
-	}{
-		{"controller", BindControllerFlags},
-		{"dashboard", BindDashboardFlags},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Cleanup(viper.Reset)
-			viper.Reset()
-			cmd := &cobra.Command{Use: tc.name}
-			tc.bind(cmd)
-			for _, flagName := range want {
-				if cmd.Flags().Lookup(flagName) == nil {
-					t.Errorf("--%s is not registered on the %s command", flagName, tc.name)
-				}
+		if root.PersistentFlags().Lookup(name) == nil {
+			t.Errorf("--%s is not a root persistent flag", name)
+		}
+		for _, sub := range root.Commands() {
+			if sub.LocalNonPersistentFlags().Lookup(name) != nil {
+				t.Errorf("%s registers its own --%s", sub.Name(), name)
 			}
-		})
+		}
 	}
 }
 
@@ -533,11 +522,8 @@ func TestPrometheusTransportFlagsRegisteredOnBothCommands(t *testing.T) {
 // NOT a CSV StringSlice, so a header value may contain a comma. The chart
 // renders one flag per header and relies on exactly this.
 func TestPrometheusHeadersFlagIsRepeatableAndCommaSafe(t *testing.T) {
-	t.Cleanup(viper.Reset)
-	viper.Reset()
-	cmd := &cobra.Command{}
-	BindControllerFlags(cmd)
-	if err := cmd.Flags().Parse([]string{
+	root := newRoot(t)
+	if err := root.PersistentFlags().Parse([]string{
 		"--prometheus-headers=Accept=application/json,text/plain",
 		`--prometheus-headers=X-Quoted=say "hi"`,
 	}); err != nil {

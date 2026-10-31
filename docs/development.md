@@ -764,9 +764,9 @@ Before touching `internal/prometheus/transport.go`:
 - `--prometheus-headers` is a pflag **StringArray** (one element per flag
   occurrence, no CSV splitting); the env-var path (`getStringSlice`) still
   splits on commas.
-- A new transport flag goes in `bindPrometheusTransportFlags` (called with `""`
-  for the controller and `"dashboard."` for the dashboard, which keeps the two
-  flag sets from drifting) and `loadPrometheusTransport` in
+- A new transport flag goes in `bindPrometheusTransportFlags` (registered once,
+  as a root persistent flag, by `BindGlobalFlags`, so the controller and the
+  dashboard read one key and one env var) and `loadPrometheusTransport` in
   `internal/config/config.go`, plus the field on `promclient.TransportConfig`.
   Mirror it in `charts/k8s-sustain/templates/_helpers.tpl`
   (`k8s-sustain.prometheusAuthArgs` / `…Env` / `…AuthSecretVolumes`),
