@@ -620,10 +620,11 @@ func TestReconcile_UnreadableOwnerRetryIsBoundedByTheWindow(t *testing.T) {
 			statusOOM("main", now.Add(-tc.killedAgo), 0).
 			build()
 		w := &Watcher{
-			Client: clientWith(newScheme(t), pod).Build(),
-			Sink:   NewCache(time.Hour),
-			Now:    func() time.Time { return now },
-			Window: 30 * time.Minute,
+			Policies: governance.NewPolicyLister(nil),
+			Client:   clientWith(newScheme(t), pod).Build(),
+			Sink:     NewCache(time.Hour),
+			Now:      func() time.Time { return now },
+			Window:   30 * time.Minute,
 		}
 
 		res, err := w.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pod)})
