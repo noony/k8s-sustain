@@ -3,8 +3,8 @@ package recommender
 import (
 	"context"
 	"errors"
-	"maps"
 	"math"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -65,7 +65,7 @@ func fetchLive(t *testing.T, in *WorkloadInputs, live oomSource) *WorkloadInputs
 // ignores an older one. The decorated fetcher's inputs are left as they were,
 // and an identity whose inputs could not be read stays failed.
 func TestWithLiveOOMs_MergesKillsSeenWithinTheWindow(t *testing.T) {
-	prom := &WorkloadInputs{OOM: map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}}}
+	prom := NewInputs(WithOOMKills(map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}}))
 	live := oomSource{
 		"app":   liveKill("app", 10*time.Second, 184<<20),
 		"side":  liveKill("side", LiveOOMWindow, 50<<20),
@@ -76,15 +76,15 @@ func TestWithLiveOOMs_MergesKillsSeenWithinTheWindow(t *testing.T) {
 	got := WithLiveOOMs(fixedInputs{in: prom, failed: failed}, live, func() time.Time { return now }).
 		FetchInputs(context.Background(), sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}, {Identity: failed}})
 
-	want := map[string]OOM{
+	want := NewInputs(WithOOMKills(map[string]OOM{
 		"app":  {Kills: 1, LimitBytes: 184 << 20, LiveAt: now.Add(-10 * time.Second)},
 		"side": {LimitBytes: 50 << 20, LiveAt: now.Add(-LiveOOMWindow)},
+	}))
+	if in := got[liveID].Inputs; !reflect.DeepEqual(in, want) {
+		t.Errorf("inputs = %+v, want %+v", in, want)
 	}
-	if in := got[liveID].Inputs; in == nil || !maps.Equal(in.OOM, want) {
-		t.Errorf("OOM = %+v, want %+v", got[liveID].Inputs, want)
-	}
-	if !maps.Equal(prom.OOM, map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}}) {
-		t.Errorf("decorated inputs = %+v, want them untouched", prom.OOM)
+	if untouched := NewInputs(WithOOMKills(map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}})); !reflect.DeepEqual(prom, untouched) {
+		t.Errorf("decorated inputs = %+v, want them untouched", prom)
 	}
 	if r := got[failed]; r.Err == nil || r.Inputs != nil {
 		t.Errorf("failed identity = %+v, want its error", r)
@@ -93,9 +93,9 @@ func TestWithLiveOOMs_MergesKillsSeenWithinTheWindow(t *testing.T) {
 
 // A kill the kubelet left undated is dated when the watcher saw it.
 func TestWithLiveOOMs_UndatedKillIsDatedWhenSeen(t *testing.T) {
-	in := fetchLive(t, &WorkloadInputs{}, oomSource{"app": {Container: "app", ObservedAt: now.Add(-time.Minute), OOMLimitBytes: 1}})
+	in := fetchLive(t, NewInputs(), oomSource{"app": {Container: "app", ObservedAt: now.Add(-time.Minute), OOMLimitBytes: 1}})
 
-	if got := in.OOM["app"].LiveAt; !got.Equal(now.Add(-time.Minute)) {
+	if got := valuesOf[oomValues](in, oomFloor{})["app"].LiveAt; !got.Equal(now.Add(-time.Minute)) {
 		t.Errorf("LiveAt = %v, want when the watcher saw it", got)
 	}
 }
@@ -145,25 +145,20 @@ func TestOOMFloor_CollectFoldsEachContainer(t *testing.T) {
 		{Container: "app", Metric: "k8s_sustain:unrelated", Value: 99},
 		{Container: "sidecar", Metric: promclient.MetricContainerPeakMemory24hBytes, Value: 0},
 	}
-	in := &WorkloadInputs{}
+	got := oomFloor{}.collect(samples)
 
-	oomFloor{}.collect(in, samples)
-
-	want := map[string]OOM{
+	want := oomValues{
 		"app":     {Kills: 5, PeakBytes: 2000, HasPeak: true, LimitBytes: 4096},
 		"sidecar": {HasPeak: true},
 	}
-	if !maps.Equal(in.OOM, want) {
-		t.Errorf("OOM = %+v, want %+v", in.OOM, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("OOM = %+v, want %+v", got, want)
 	}
-	if got := (oomFloor{}).observed(in); !slices.Equal(got, []string{"app"}) {
-		t.Errorf("observed = %v, want the killed container only", got)
+	if observed := got.observed(); !slices.Equal(observed, []string{"app"}) {
+		t.Errorf("observed = %v, want the killed container only", observed)
 	}
-
-	oomFloor{}.collect(in, nil)
-
-	if in.OOM == nil || len(in.OOM) != 0 {
-		t.Errorf("OOM = %v, want empty and non-nil after no samples", in.OOM)
+	if none := (oomFloor{}).collect(nil); !reflect.DeepEqual(none, oomValues{}) {
+		t.Errorf("OOM = %v, want empty after no samples", none)
 	}
 }
 
@@ -188,7 +183,7 @@ func TestOOMFloor_Stage(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c, ok := oomFloor{}.contribute(stageFor(&WorkloadInputs{OOM: map[string]OOM{"app": tc.oom}}, "app"))
+			c, ok := oomFloor{}.contribute(stageFor(NewInputs(WithOOMKills(map[string]OOM{"app": tc.oom})), "app"))
 
 			if ok != tc.wantOK {
 				t.Fatalf("contributed = %v, want %v", ok, tc.wantOK)
@@ -205,7 +200,7 @@ func TestOOMFloor_Stage(t *testing.T) {
 // reader the controller's metrics use reads them back.
 func TestOOMFloor_StageRecordsItsFactsAndReadsBack(t *testing.T) {
 	killedAt := now.Add(-10 * time.Second)
-	in := &WorkloadInputs{OOM: map[string]OOM{"app": {Kills: 1, LimitBytes: 200 * mib, LiveAt: killedAt}}}
+	in := NewInputs(WithOOMKills(map[string]OOM{"app": {Kills: 1, LimitBytes: 200 * mib, LiveAt: killedAt}}))
 
 	st := oomFloor{}.stage(stageFor(in, "app"), 240*mib, true)
 
@@ -231,10 +226,10 @@ func TestOOMFloor_StageRecordsItsFactsAndReadsBack(t *testing.T) {
 // floors the killed container above its limit at the kill. Only that
 // container is floored.
 func TestOOMFloor_LiveKillWithinTheWindow(t *testing.T) {
-	in := fetchLive(t, &WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"app": 0.1, "side": 0.05},
-		MemPerPod: promclient.ContainerValues{"app": 100 * mib, "side": 100 * mib},
-	}, oomSource{"app": liveKill("app", 10*time.Second, 200<<20)})
+	in := fetchLive(t, NewInputs(
+		WithCPUUsage(promclient.ContainerValues{"app": 0.1, "side": 0.05}),
+		WithMemoryUsage(promclient.ContainerValues{"app": 100 * mib, "side": 100 * mib}),
+	), oomSource{"app": liveKill("app", 10*time.Second, 200<<20)})
 
 	res := Compute(Request{containers: containers("app", "side"), inputs: in, since: now.Add(-time.Minute), now: now})
 
@@ -258,10 +253,10 @@ func TestOOMFloor_LiveKillWithinTheWindow(t *testing.T) {
 // A kill the watcher saw longer than LiveOOMWindow ago is no longer recent:
 // it neither excuses the age gate nor floors the container.
 func TestOOMFloor_StaleLiveKillIsIgnored(t *testing.T) {
-	in := fetchLive(t, &WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"app": 0.1},
-		MemPerPod: promclient.ContainerValues{"app": 100 * mib},
-	}, oomSource{"app": liveKill("app", LiveOOMWindow+time.Minute, 200<<20)})
+	in := fetchLive(t, NewInputs(
+		WithCPUUsage(promclient.ContainerValues{"app": 0.1}),
+		WithMemoryUsage(promclient.ContainerValues{"app": 100 * mib}),
+	), oomSource{"app": liveKill("app", LiveOOMWindow+time.Minute, 200<<20)})
 
 	res := Compute(Request{containers: containers("app"), inputs: in, since: now.Add(-time.Minute), now: now})
 
@@ -282,7 +277,7 @@ func TestOOMFloor_StaleLiveKillIsIgnored(t *testing.T) {
 func TestOOMFloor_PrometheusKills(t *testing.T) {
 	res := Compute(Request{
 		containers: containers("app", "side"),
-		inputs:     &WorkloadInputs{OOM: map[string]OOM{"app": {Kills: 1, PeakBytes: 80 * mib, HasPeak: true}}},
+		inputs:     NewInputs(WithOOMKills(map[string]OOM{"app": {Kills: 1, PeakBytes: 80 * mib, HasPeak: true}})),
 		since:      now.Add(-time.Minute),
 		now:        now,
 	})
@@ -302,11 +297,11 @@ func TestOOMFloor_PrometheusKills(t *testing.T) {
 // before a resize; the live record has the limit applied at the kill. The
 // higher one is the limit the container died at.
 func TestOOMFloor_AnchorsOnTheHigherOfPrometheusAndLiveLimits(t *testing.T) {
-	in := fetchLive(t, &WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"app": 0.1},
-		MemPerPod: promclient.ContainerValues{"app": 50 * mib},
-		OOM:       map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}},
-	}, oomSource{"app": liveKill("app", 0, 184<<20)})
+	in := fetchLive(t, NewInputs(
+		WithCPUUsage(promclient.ContainerValues{"app": 0.1}),
+		WithMemoryUsage(promclient.ContainerValues{"app": 50 * mib}),
+		WithOOMKills(map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}}),
+	), oomSource{"app": liveKill("app", 0, 184<<20)})
 
 	rec, _ := computeApp(in, sustainv1alpha1.ResourcesConfigs{})
 
@@ -321,14 +316,14 @@ func TestOOMFloor_AnchorsOnTheHigherOfPrometheusAndLiveLimits(t *testing.T) {
 func TestOOMFloor_SiblingKillDoesNotFloorInnocentContainer(t *testing.T) {
 	res := Compute(Request{
 		containers: containers("app", "side", "nodata"),
-		inputs: &WorkloadInputs{
-			MemPerPod: promclient.ContainerValues{"app": 64 * mib, "side": 50 * mib},
-			OOM: map[string]OOM{
+		inputs: NewInputs(
+			WithMemoryUsage(promclient.ContainerValues{"app": 64 * mib, "side": 50 * mib}),
+			WithOOMKills(map[string]OOM{
 				"app":    {Kills: 2, PeakBytes: 200 * mib, HasPeak: true},
 				"side":   {PeakBytes: 180 * mib, HasPeak: true},
 				"nodata": {PeakBytes: 150 * mib, HasPeak: true},
-			},
-		},
+			}),
+		),
 		now: now,
 	})
 
@@ -353,7 +348,7 @@ func TestOOMFloor_SiblingKillDoesNotFloorInnocentContainer(t *testing.T) {
 // emits nothing: the only possible value is the 1Mi floor, which guarantees
 // the next kill. With the OOM-time limit as its only anchor it bumps above it.
 func TestOOMFloor_LiveKillNeedsAnAnchor(t *testing.T) {
-	empty := &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}}
+	empty := NewInputs()
 
 	none, _ := computeApp(fetchLive(t, empty, oomSource{"app": liveKill("app", 0, 0)}), sustainv1alpha1.ResourcesConfigs{})
 	if none.MemoryRequest != nil {
@@ -387,10 +382,10 @@ func TestOOMFloor_FloorsTheMemoryRequest(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rec, _ := computeApp(&WorkloadInputs{
-				MemPerPod: promclient.ContainerValues{"app": tc.rawBytes},
-				OOM:       map[string]OOM{"app": tc.oom},
-			}, sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.cfg}})
+			rec, _ := computeApp(NewInputs(
+				WithMemoryUsage(promclient.ContainerValues{"app": tc.rawBytes}),
+				WithOOMKills(map[string]OOM{"app": tc.oom}),
+			), sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.cfg}})
 
 			if tc.wantNil {
 				if rec.MemoryRequest != nil {
@@ -425,10 +420,10 @@ func TestOOMFloor_TracesWhetherItDetermined(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, tr := computeApp(&WorkloadInputs{
-				MemPerPod: promclient.ContainerValues{"app": tc.rawBytes},
-				OOM:       map[string]OOM{"app": tc.oom},
-			}, sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.cfg}})
+			_, tr := computeApp(NewInputs(
+				WithMemoryUsage(promclient.ContainerValues{"app": tc.rawBytes}),
+				WithOOMKills(map[string]OOM{"app": tc.oom}),
+			), sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.cfg}})
 
 			floor, ok := TracedOOMFloor(tr)
 			if ok != tc.wantFloor {
@@ -460,10 +455,10 @@ func TestOOMFloor_TracesThroughCoordination(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			res := Compute(Request{
 				containers: containers("app"),
-				inputs: &WorkloadInputs{
-					MemPerPod: promclient.ContainerValues{"app": 100 * mib},
-					OOM:       map[string]OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}},
-				},
+				inputs: NewInputs(
+					WithMemoryUsage(promclient.ContainerValues{"app": 100 * mib}),
+					WithOOMKills(map[string]OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}}),
+				),
 				resources:    sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: tc.requests}},
 				coordination: sustainv1alpha1.AutoscalerCoordination{Enabled: true},
 				autoInfo:     autoscaler.Info{Kind: autoscaler.KindKEDA, ConfiguredTargets: map[string]int32{autoscaler.ResourceMemory: 80}},

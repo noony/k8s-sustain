@@ -101,7 +101,7 @@ func TestBatchSimulateFetchesEveryWorkloadInOneCall(t *testing.T) {
 func TestBatchSimulateReportsFetchFailurePerWorkload(t *testing.T) {
 	inputs := recommendertest.NewStaticInputs().
 		Fail(batchID("wl-a"), errors.New("prometheus down")).
-		Set(batchID("wl-b"), &recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"main": 0.2}})
+		Set(batchID("wl-b"), recommender.WithCPUUsage(promclient.ContainerValues{"main": 0.2}))
 	srv := newBatchSimulateServer(t, inputs, 2)
 
 	rec := httptest.NewRecorder()
@@ -132,11 +132,10 @@ func TestBatchSimulateReportsFetchFailurePerWorkload(t *testing.T) {
 // recommendation but stays out of the totals.
 func TestBatchSimulateSavingsAreAgainstTheCurrentRequests(t *testing.T) {
 	inputs := recommendertest.NewStaticInputs().
-		Set(batchID("wl-a"), &recommender.WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"main": 0.2},
-			MemPerPod: promclient.ContainerValues{"main": 64 << 20},
-		}).
-		Set(batchID("wl-b"), &recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"main": 0.3}})
+		Set(batchID("wl-a"),
+			recommender.WithCPUUsage(promclient.ContainerValues{"main": 0.2}),
+			recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 << 20})).
+		Set(batchID("wl-b"), recommender.WithCPUUsage(promclient.ContainerValues{"main": 0.3}))
 	srv := newBatchSimulateServer(t, inputs, 2, requesting("500m", "256Mi"))
 
 	rows, resp := batchSimulate(t, srv)
@@ -163,7 +162,7 @@ func TestBatchSimulateSavingsAreAgainstTheCurrentRequests(t *testing.T) {
 // numbers, as its Simulation does, but the controller would not apply them, so
 // they stay out of the savings; a NoData one has none.
 func TestBatchSimulateSavingsCountComputedIdentitiesOnly(t *testing.T) {
-	usage := &recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"main": 0.2}}
+	usage := recommender.WithCPUUsage(promclient.ContainerValues{"main": 0.2})
 	inputs := recommendertest.NewStaticInputs().Set(batchID("wl-a"), usage).Set(batchID("wl-b"), usage)
 	young := func(d *appsv1.Deployment) {
 		requesting("500m", "256Mi")(d)

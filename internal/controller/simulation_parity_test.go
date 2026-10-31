@@ -223,14 +223,12 @@ func TestSimulationRecommendsWhatTheControllerStores(t *testing.T) {
 			c := parityCluster(t, excludeInit)
 			clock := clocktesting.NewFakePassiveClock(parityInstant)
 			inputs := recommendertest.NewStaticInputs().
-				Set(webKey, &recommender.WorkloadInputs{
-					CPUPerPod: promclient.ContainerValues{"main": 1, "migrate": 0.5},
-					MemPerPod: promclient.ContainerValues{"main": 64 << 20, "migrate": 32 << 20},
-				}).
-				Set(freshKey, &recommender.WorkloadInputs{
-					CPUPerPod: promclient.ContainerValues{"main": 1},
-					MemPerPod: promclient.ContainerValues{"main": 64 << 20},
-				})
+				Set(webKey,
+					recommender.WithCPUUsage(promclient.ContainerValues{"main": 1, "migrate": 0.5}),
+					recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 << 20, "migrate": 32 << 20})).
+				Set(freshKey,
+					recommender.WithCPUUsage(promclient.ContainerValues{"main": 1}),
+					recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 << 20}))
 
 			r := controller.ReconcilerForTest(c, inputs)
 			r.Clock = clock

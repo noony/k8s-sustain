@@ -62,7 +62,7 @@ func newCoordinatedSimulateServer(t *testing.T) *Server {
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(append(objs, hpa)...).Build()
 	inputs := recommendertest.NewStaticInputs().Set(
 		promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
-		&recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"main": 1}})
+		recommender.WithCPUUsage(promclient.ContainerValues{"main": 1}))
 	return &Server{K8sClient: c, PromClient: &fakePromClient{}, Inputs: inputs, Logger: testLogger(t)}
 }
 
@@ -74,11 +74,10 @@ func TestRecommendationSeries_ComputesEachPointWithTheIdentitysOOMs(t *testing.T
 	spec := sustainv1alpha1.RightSizingSpec{ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
 		CPU: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)}},
 	}}
-	inputs := recommendertest.NewStaticInputs().Set(key, &recommender.WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"app": 0.2, "side": 0.2},
-		MemPerPod: promclient.ContainerValues{"app": 150 * mib, "side": 150 * mib},
-		OOM:       map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}},
-	})
+	inputs := recommendertest.NewStaticInputs().Set(key,
+		recommender.WithCPUUsage(promclient.ContainerValues{"app": 0.2, "side": 0.2}),
+		recommender.WithMemoryUsage(promclient.ContainerValues{"app": 150 * mib, "side": 150 * mib}),
+		recommender.WithOOMKills(map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}}))
 	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
 	req := recommender.Assemble(context.Background(), inputs, autoscaler.NewNamespacedSnapshot(c), time.Now, spec, []*inventory.Identity{{Key: key}})[0].Request
 	at := time.Unix(1_700_000_000, 0)
@@ -158,10 +157,9 @@ func TestRunSimulation_AKeptRequestDrawsNoSeries(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	key := promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"}
-	srv.Inputs = recommendertest.NewStaticInputs().Set(key, &recommender.WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"main": 1},
-		MemPerPod: promclient.ContainerValues{"main": 64 << 20},
-	})
+	srv.Inputs = recommendertest.NewStaticInputs().Set(key,
+		recommender.WithCPUUsage(promclient.ContainerValues{"main": 1}),
+		recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 << 20}))
 
 	res, err := srv.runSimulation(ctx, simulateRequest{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"})
 	if err != nil {

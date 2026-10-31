@@ -49,10 +49,10 @@ func limited(requests, limits corev1.ResourceList) corev1.Container {
 func TestCompute_DeclaredContainersBoundTheResult(t *testing.T) {
 	res := Compute(Request{
 		containers: containers("app", "nodata"),
-		inputs: &WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"app": 1, "renamed-away": 1},
-			MemPerPod: promclient.ContainerValues{"app": 64 * mib},
-		},
+		inputs: NewInputs(
+			WithCPUUsage(promclient.ContainerValues{"app": 1, "renamed-away": 1}),
+			WithMemoryUsage(promclient.ContainerValues{"app": 64 * mib}),
+		),
 		now: now,
 	})
 
@@ -74,11 +74,11 @@ func TestRequest_RequestAt(t *testing.T) {
 		resources: sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{
 			Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)},
 		}},
-		inputs: &WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"app": 1, "side": 0.2},
-			MemPerPod: promclient.ContainerValues{"app": 64 * mib, "side": 32 * mib},
-			OOM:       map[string]OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}},
-		},
+		inputs: NewInputs(
+			WithCPUUsage(promclient.ContainerValues{"app": 1, "side": 0.2}),
+			WithMemoryUsage(promclient.ContainerValues{"app": 64 * mib, "side": 32 * mib}),
+			WithOOMKills(map[string]OOM{"app": {Kills: 1, PeakBytes: 200 * mib, HasPeak: true}}),
+		),
 		since: now.Add(-time.Minute),
 		now:   now,
 	}
@@ -88,10 +88,10 @@ func TestRequest_RequestAt(t *testing.T) {
 
 	for _, name := range []string{"app", "side"} {
 		rec := whole.Recs[name]
-		if got, want := req.RequestAt(name, corev1.ResourceCPU, req.inputs.CPUPerPod[name]), float64(rec.CPURequest.MilliValue())/1000; got != want {
+		if got, want := req.RequestAt(name, corev1.ResourceCPU, req.inputs.Usage(name, corev1.ResourceCPU)), float64(rec.CPURequest.MilliValue())/1000; got != want {
 			t.Errorf("%s cpu = %v, want Compute's %v", name, got, want)
 		}
-		if got, want := req.RequestAt(name, corev1.ResourceMemory, req.inputs.MemPerPod[name]), float64(rec.MemoryRequest.Value()); got != want {
+		if got, want := req.RequestAt(name, corev1.ResourceMemory, req.inputs.Usage(name, corev1.ResourceMemory)), float64(rec.MemoryRequest.Value()); got != want {
 			t.Errorf("%s memory = %v, want Compute's %v", name, got, want)
 		}
 	}
@@ -126,12 +126,12 @@ func TestCompute_AgeGate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			in := &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 1}}
+			values := []InputsOption{WithCPUUsage(promclient.ContainerValues{"app": 1})}
 			if tc.oom != nil {
-				in.OOM = map[string]OOM{"side": *tc.oom}
+				values = append(values, WithOOMKills(map[string]OOM{"side": *tc.oom}))
 			}
 
-			res := Compute(Request{containers: containers("app"), inputs: in, since: tc.since, now: now})
+			res := Compute(Request{containers: containers("app"), inputs: NewInputs(values...), since: tc.since, now: now})
 
 			if got := res.Outcome == TooYoung; got != tc.wantTooYoung {
 				t.Errorf("TooYoung = %v, want %v (outcome %v)", got, tc.wantTooYoung, res.Outcome)
@@ -153,7 +153,7 @@ func computeApp(in *WorkloadInputs, rs sustainv1alpha1.ResourcesConfigs) (worklo
 func TestCompute_NoDataWhenNothingToRecommendFrom(t *testing.T) {
 	res := Compute(Request{
 		containers: containers("app"),
-		inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{}, MemPerPod: promclient.ContainerValues{}},
+		inputs:     NewInputs(),
 		since:      old,
 		now:        now,
 	})
@@ -173,7 +173,7 @@ func TestCompute_TracesCPUStages(t *testing.T) {
 	anchor := 0.0
 	res := Compute(Request{
 		containers: containers("app"),
-		inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 0.1234}},
+		inputs:     NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.1234})),
 		resources: sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{
 			Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](10), MinAllowed: qtyp("150m")},
 			Limits:   sustainv1alpha1.ResourceLimitsConfig{EqualsToRequest: true},
@@ -211,10 +211,10 @@ func TestCompute_TracesCPUStages(t *testing.T) {
 // kept request has no trace at all.
 func TestCompute_TracesCoordinationOnlyWhenItRan(t *testing.T) {
 	hpa := autoscaler.Info{Kind: autoscaler.KindHPA, ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 50}}
-	inputs := &WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"app": 1},
-		MemPerPod: promclient.ContainerValues{"app": 128 * mib},
-	}
+	inputs := NewInputs(
+		WithCPUUsage(promclient.ContainerValues{"app": 1}),
+		WithMemoryUsage(promclient.ContainerValues{"app": 128 * mib}),
+	)
 	compute := func(enabled bool, info autoscaler.Info, res sustainv1alpha1.ResourcesConfigs) sustainv1alpha1.ContainerTrace {
 		return Compute(Request{
 			containers:   containers("app"),
@@ -272,7 +272,7 @@ func computeLimited(t *testing.T, c corev1.Container, cores float64, cfg sustain
 	t.Helper()
 	res := Compute(Request{
 		containers: []corev1.Container{c},
-		inputs:     &WorkloadInputs{CPUPerPod: promclient.ContainerValues{c.Name: cores}},
+		inputs:     NewInputs(WithCPUUsage(promclient.ContainerValues{c.Name: cores})),
 		resources:  sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Limits: cfg}},
 		now:        now,
 	})

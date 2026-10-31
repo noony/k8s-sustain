@@ -162,17 +162,17 @@ func identityOf(ns, kind, name string) promclient.WorkloadIdentity {
 }
 
 // appUsage is a per-pod p95 of 100m CPU and 64Mi memory for container "app".
-func appUsage() *recommender.WorkloadInputs {
-	return &recommender.WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"app": 0.1},
-		MemPerPod: promclient.ContainerValues{"app": 64 << 20},
+func appUsage() []recommender.InputsOption {
+	return []recommender.InputsOption{
+		recommender.WithCPUUsage(promclient.ContainerValues{"app": 0.1}),
+		recommender.WithMemoryUsage(promclient.ContainerValues{"app": 64 << 20}),
 	}
 }
 
 // usageFor serves appUsage for one identity, so the reconciler computes a
 // recommendation for it deterministically.
 func usageFor(ns, kind, name string) *recommendertest.StaticInputs {
-	return recommendertest.NewStaticInputs().Set(identityOf(ns, kind, name), appUsage())
+	return recommendertest.NewStaticInputs().Set(identityOf(ns, kind, name), appUsage()...)
 }
 
 // deploymentTarget is the apply target of Deployment ns/name, whose pods are

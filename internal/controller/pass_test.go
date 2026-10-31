@@ -441,10 +441,9 @@ func TestGroupedIdentityStopsWritingStatusAfterTheFirstCycle(t *testing.T) {
 	blue := dep("api-blue", withCPU("main", "100m"))
 	green := dep("api-green", withCPU("main", "250m"), corev1.Container{Name: "sidecar"})
 
-	inputs := recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "api"), &recommender.WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"main": 0.1, "sidecar": 0.05},
-		MemPerPod: promclient.ContainerValues{"main": 64 << 20, "sidecar": 32 << 20},
-	})
+	inputs := recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "api"),
+		recommender.WithCPUUsage(promclient.ContainerValues{"main": 0.1, "sidecar": 0.05}),
+		recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 << 20, "sidecar": 32 << 20}))
 	var statusWrites atomic.Int32
 	r := reconcilerCountingWLRStatusWrites(t, inputs, &statusWrites, ongoingDeployments("p"), blue, green)
 

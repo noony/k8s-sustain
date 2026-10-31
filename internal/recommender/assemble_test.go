@@ -45,7 +45,7 @@ func (f *recordedInputs) FetchInputs(_ context.Context, cfg sustainv1alpha1.Reso
 		}
 		in := f.inputs[r.Identity]
 		if in == nil {
-			in = &WorkloadInputs{}
+			in = NewInputs()
 		}
 		out[r.Identity] = InputsResult{Inputs: in}
 	}
@@ -373,11 +373,11 @@ func TestAssemble_OneBatchUnderThePolicysResources(t *testing.T) {
 // to recommend.
 func TestAssemble_ContainersOfAnUnseenIdentityComeFromItsInputs(t *testing.T) {
 	key := promclient.WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "gone"}
-	inputs := &recordedInputs{inputs: map[promclient.WorkloadIdentity]*WorkloadInputs{key: {
-		CPUPerPod: promclient.ContainerValues{"app": 0.5},
-		MemPerPod: promclient.ContainerValues{"app": 100 * mib},
-		OOM:       map[string]OOM{"crashy": {Kills: 1, PeakBytes: 300 * mib, HasPeak: true}},
-	}}}
+	inputs := &recordedInputs{inputs: map[promclient.WorkloadIdentity]*WorkloadInputs{key: NewInputs(
+		WithCPUUsage(promclient.ContainerValues{"app": 0.5}),
+		WithMemoryUsage(promclient.ContainerValues{"app": 100 * mib}),
+		WithOOMKills(map[string]OOM{"crashy": {Kills: 1, PeakBytes: 300 * mib, HasPeak: true}}),
+	)}}
 
 	unseen := Assemble(context.Background(), inputs, &memberAutoscalers{}, time.Now, sustainv1alpha1.RightSizingSpec{},
 		[]*inventory.Identity{{Key: key}})[0]
@@ -407,10 +407,10 @@ func TestAssemble_ContainersOfAnUnseenIdentityComeFromItsInputs(t *testing.T) {
 // for that resource.
 func TestAssemble_KeptRequestIsNotRecommended(t *testing.T) {
 	id := governed("prod", "api")
-	inputs := &recordedInputs{inputs: map[promclient.WorkloadIdentity]*WorkloadInputs{id.Key: {
-		CPUPerPod: promclient.ContainerValues{"app": 0.2},
-		MemPerPod: promclient.ContainerValues{"app": 64 * mib},
-	}}}
+	inputs := &recordedInputs{inputs: map[promclient.WorkloadIdentity]*WorkloadInputs{id.Key: NewInputs(
+		WithCPUUsage(promclient.ContainerValues{"app": 0.2}),
+		WithMemoryUsage(promclient.ContainerValues{"app": 64 * mib}),
+	)}}
 	spec := sustainv1alpha1.RightSizingSpec{ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
 		Memory: sustainv1alpha1.ResourceConfig{Requests: sustainv1alpha1.ResourceRequestsConfig{KeepRequest: true}},
 	}}

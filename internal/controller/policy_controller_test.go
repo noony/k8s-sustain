@@ -822,7 +822,7 @@ func TestReconcile_ConflictedIdentityFreezesItsRecommendation(t *testing.T) {
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{"app": {CPURequest: qty("250m")}},
 		},
 	}
-	inputs := usageFor(ns, "Deployment", "api").Set(identityOf(ns, "Deployment", "solo"), appUsage())
+	inputs := usageFor(ns, "Deployment", "api").Set(identityOf(ns, "Deployment", "solo"), appUsage()...)
 	r := reconcilerWithInputs(t, inputs, true,
 		ongoingDeployments("p"), ongoingDeployments("q"), blue, green, frozen,
 		runningPod(ns, "blue-pod", "api-blue"), runningPod(ns, "green-pod", "api-green"),

@@ -14,13 +14,13 @@ func qty(s string) resource.Quantity   { return resource.MustParse(s) }
 func qtyp(s string) *resource.Quantity { q := qty(s); return &q }
 
 func cpuRequestOf(rawCores float64, cfg sustainv1alpha1.ResourceRequestsConfig) *resource.Quantity {
-	rec, _ := computeApp(&WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": rawCores}},
+	rec, _ := computeApp(NewInputs(WithCPUUsage(promclient.ContainerValues{"app": rawCores})),
 		sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Requests: cfg}})
 	return rec.CPURequest
 }
 
 func memoryRequestOf(rawBytes float64, cfg sustainv1alpha1.ResourceRequestsConfig) *resource.Quantity {
-	rec, _ := computeApp(&WorkloadInputs{MemPerPod: promclient.ContainerValues{"app": rawBytes}},
+	rec, _ := computeApp(NewInputs(WithMemoryUsage(promclient.ContainerValues{"app": rawBytes})),
 		sustainv1alpha1.ResourcesConfigs{Memory: sustainv1alpha1.ResourceConfig{Requests: cfg}})
 	return rec.MemoryRequest
 }

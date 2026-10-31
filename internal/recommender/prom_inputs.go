@@ -55,14 +55,9 @@ func (p *PromInputs) FetchInputs(
 
 	inputs := make(map[promclient.WorkloadIdentity]*WorkloadInputs, len(reqs))
 	for _, r := range reqs {
-		if inputs[r.Identity] != nil {
-			continue
+		if inputs[r.Identity] == nil {
+			inputs[r.Identity] = emptyInputs()
 		}
-		in := &WorkloadInputs{}
-		for _, s := range signals {
-			s.collect(in, nil)
-		}
-		inputs[r.Identity] = in
 	}
 
 	failed := make(map[promclient.WorkloadIdentity]error)
@@ -165,7 +160,7 @@ func (p *PromInputs) fetchSignal(
 		defer mu.Unlock()
 		for _, name := range shard.Names {
 			id := promclient.WorkloadIdentity{Namespace: shard.Namespace, OwnerKind: shard.OwnerKind, OwnerName: name}
-			s.collect(inputs[id], byIdentity[id])
+			inputs[id].set(s, s.collect(byIdentity[id]))
 		}
 		return nil
 	}

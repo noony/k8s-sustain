@@ -403,7 +403,7 @@ func TestReconcile_FailedApplyBlocksOnItsFamilyStep(t *testing.T) {
 		establishedDeployment(deployNS, "web", "p"), runningPodAt(deployNS, "web-pod", "web", "999m"), job, jobPod).
 		WithInterceptorFuncs(failPods).
 		Build()
-	inputs := usageFor(deployNS, "Deployment", "web").Set(identityOf(jobNS, "Job", "batch-1"), appUsage())
+	inputs := usageFor(deployNS, "Deployment", "web").Set(identityOf(jobNS, "Job", "batch-1"), appUsage()...)
 	r := reconcilerOn(c, scheme, inputs, true)
 
 	reconcileOnce(t, r, "p")

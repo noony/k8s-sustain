@@ -271,10 +271,9 @@ func TestSeries_RemovedContainerLosesItsSeries(t *testing.T) {
 	const ns = "series-container"
 	dep := establishedDeployment(ns, "web", "p")
 	dep.Spec.Template.Spec.Containers = append(dep.Spec.Template.Spec.Containers, corev1.Container{Name: "side"})
-	inputs := recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "web"), &recommender.WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"app": 0.1, "side": 0.05},
-		MemPerPod: promclient.ContainerValues{"app": 64 << 20, "side": 32 << 20},
-	})
+	inputs := recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "web"),
+		recommender.WithCPUUsage(promclient.ContainerValues{"app": 0.1, "side": 0.05}),
+		recommender.WithMemoryUsage(promclient.ContainerValues{"app": 64 << 20, "side": 32 << 20}))
 	r := reconcilerWithInputs(t, inputs, true, ongoingDeployments("p"), dep)
 
 	reconcileOnce(t, r, "p")
@@ -393,7 +392,7 @@ func TestSeries_ConflictedIdentityLosesEverySeries(t *testing.T) {
 func TestSeries_PolicyDeletionRemovesEverything(t *testing.T) {
 	const ns, doomed, survivor = "series-policy-deleted", "series-doomed", "series-survivor"
 	web, broken := identityOf(ns, "Deployment", "web"), identityOf(ns, "Deployment", "broken")
-	inputs := usageFor(ns, "Deployment", "web").Set(identityOf(ns, "Deployment", "kept"), appUsage()).Fail(broken, errors.New("prometheus down"))
+	inputs := usageFor(ns, "Deployment", "web").Set(identityOf(ns, "Deployment", "kept"), appUsage()...).Fail(broken, errors.New("prometheus down"))
 	r := reconcilerWithInputs(t, inputs, true,
 		ongoingDeployments(doomed), ongoingDeployments(survivor),
 		withMemoryRequest(establishedDeployment(ns, "web", doomed)), runningPod(ns, "web-pod", "web"),
@@ -652,7 +651,7 @@ func TestSeries_FollowTheLastComputation(t *testing.T) {
 	}
 
 	remove(t, r, hpa)
-	inputs.Set(web, appUsage())
+	inputs.Set(web, appUsage()...)
 	clk.SetTime(clk.Now().Add(maxRetryDelay))
 	reconcileOnce(t, r, "p")
 	if got := autoscalerSeries(); got != 0 {

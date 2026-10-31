@@ -15,11 +15,11 @@ import (
 // A signal is an observed input that contributes one stage to a
 // Recommendation. It owns everything about that input: the Policy settings it
 // reads, the PromQL that reads it for a shard of identities and what that
-// costs, how samples become per-container values, whether an identity can be
-// recommended without them, whether they excuse an identity's age, its stage
-// and trace entry, and what it needs from Prometheus. PromInputs fetches every
-// signal in signals and Compute runs their stages, so adding a signal is
-// adding its module and listing it.
+// costs, how samples become its values, of a type of its own, whether an
+// identity can be recommended without them, whether they excuse an identity's
+// age, its stage and trace entry, and what it needs from Prometheus.
+// PromInputs fetches every signal in signals and Compute runs their stages,
+// so adding a signal is adding its module and listing it.
 type signal interface {
 	// name labels the signal in errors and logs.
 	name() string
@@ -33,15 +33,10 @@ type signal interface {
 	query(cfg sustainv1alpha1.ResourcesConfigs, shard promclient.Shard) string
 	// contract is what query reads from Prometheus and what that rests on.
 	contract() PromContract
-	// collect replaces the signal's values in in with those of one identity's
-	// samples. No samples leaves it holding empty values. It reads a sample
-	// of every rule contract declares, named as the query returns it.
-	collect(in *WorkloadInputs, samples []promclient.ShardSample)
-	// observed lists the containers in holds values of the signal for.
-	observed(in *WorkloadInputs) []string
-	// excusesAge reports whether the signal's values let a Too young identity
-	// through the age gate.
-	excusesAge(in *WorkloadInputs) bool
+	// collect is the signal's values from one identity's samples, empty
+	// values from none. It reads a sample of every rule contract declares,
+	// named as the query returns it.
+	collect(samples []promclient.ShardSample) signalValues
 	// slot is where the signal's stage runs.
 	slot() slot
 	// contribute is the signal's value for the request of the container sc
@@ -165,12 +160,13 @@ type contribution struct {
 	anchors bool
 }
 
-// observedContainers lists, sorted, every container any signal holds values
-// for: all an identity with no known containers has to recommend for.
+// observedContainers lists, sorted, every container any signal's values give
+// something to recommend from: all an identity with no known containers has to
+// recommend for.
 func observedContainers(in *WorkloadInputs) []corev1.Container {
 	names := make(map[string]struct{})
-	for _, s := range signals {
-		for _, n := range s.observed(in) {
+	for _, v := range in.values {
+		for _, n := range v.observed() {
 			names[n] = struct{}{}
 		}
 	}

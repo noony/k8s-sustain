@@ -96,7 +96,7 @@ func (r *PolicyReconciler) runPass(ctx context.Context, policy *sustainv1alpha1.
 			rep.members = leftAlone(rep.members)
 		}
 		if in := recs[i].inputs; in != nil {
-			rep.resolved = len(in.CPUPerPod) > 0 || len(in.MemPerPod) > 0
+			rep.resolved = in.Resolved()
 		}
 		switch {
 		case rep.departed:

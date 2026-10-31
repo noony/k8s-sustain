@@ -9,7 +9,6 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -52,8 +51,8 @@ func tooYoung(since, now time.Time, in *WorkloadInputs) bool {
 	if since.IsZero() || now.Sub(since) >= MinWorkloadAge {
 		return false
 	}
-	for _, s := range signals {
-		if s.excusesAge(in) {
+	for _, v := range in.values {
+		if v.excusesAge() {
 			return false
 		}
 	}
@@ -132,16 +131,12 @@ func (r Request) Resources() sustainv1alpha1.ResourcesConfigs { return r.resourc
 // container, not a whole computation.
 func (r Request) RequestAt(name string, res corev1.ResourceName, usage float64) float64 {
 	kind := resourceKind(res)
+	u, ok := usageOf(kind)
 	i := slices.IndexFunc(r.containers, func(c corev1.Container) bool { return c.Name == name })
-	if i < 0 || (kind != cpuResource && kind != memoryResource) {
+	if i < 0 || !ok {
 		return 0
 	}
-	var point WorkloadInputs
-	if r.inputs != nil {
-		point = *r.inputs
-	}
-	*kind.usage(&point) = promclient.ContainerValues{name: usage}
-	r.inputs = &point
+	r.inputs = r.inputs.with(u, usageValues{name: usage})
 	sized, _ := size(kind, r.containers[i], r)
 	if sized == nil {
 		return 0

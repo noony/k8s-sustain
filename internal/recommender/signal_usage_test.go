@@ -1,9 +1,10 @@
 package recommender
 
 import (
-	"maps"
+	"reflect"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -64,28 +65,45 @@ func TestUsage_IsRequired(t *testing.T) {
 	}
 }
 
-// Each usage signal keeps one value per container in its own field, leaves
-// the other alone, and holds empty values when the identity had no samples.
+// Each usage signal keeps one value per container, and empty values when the
+// identity had no samples.
 func TestUsage_CollectsOneValuePerContainer(t *testing.T) {
 	samples := []promclient.ShardSample{
 		{Container: "app", Value: 0.5},
 		{Container: "sidecar", Value: 0.05},
 	}
-	in := &WorkloadInputs{MemPerPod: promclient.ContainerValues{"app": 64}}
 
-	cpuUsage.collect(in, samples)
-
-	if want := (promclient.ContainerValues{"app": 0.5, "sidecar": 0.05}); !maps.Equal(in.CPUPerPod, want) {
-		t.Errorf("cpu = %v, want %v", in.CPUPerPod, want)
+	if got, want := cpuUsage.collect(samples), (usageValues{"app": 0.5, "sidecar": 0.05}); !reflect.DeepEqual(got, want) {
+		t.Errorf("cpu = %v, want %v", got, want)
 	}
-	if in.MemPerPod["app"] != 64 {
-		t.Errorf("memory = %v, want it untouched", in.MemPerPod)
+	if got := memoryUsage.collect(nil); !reflect.DeepEqual(got, usageValues{}) {
+		t.Errorf("memory = %v, want empty after no samples", got)
 	}
+}
 
-	memoryUsage.collect(in, nil)
+// Code outside the recommender asks the inputs only shared questions: the
+// usage observed for a container per resource, zero when none was or no usage
+// signal reads the resource, and whether any container's CPU or memory usage
+// was observed at all, which OOM kills alone are not.
+func TestUsage_InputsAnswerTheSharedQuestions(t *testing.T) {
+	kills := WithOOMKills(map[string]OOM{"crashy": {Kills: 1}})
+	in := NewInputs(WithMemoryUsage(promclient.ContainerValues{"app": 64 * mib}), kills)
 
-	if in.MemPerPod == nil || len(in.MemPerPod) != 0 {
-		t.Errorf("memory = %v, want empty and non-nil after no samples", in.MemPerPod)
+	for what, tc := range map[string]struct{ got, want float64 }{
+		"app memory":            {in.Usage("app", corev1.ResourceMemory), 64 * mib},
+		"app cpu":               {in.Usage("app", corev1.ResourceCPU), 0},
+		"crashy memory":         {in.Usage("crashy", corev1.ResourceMemory), 0},
+		"app ephemeral storage": {in.Usage("app", corev1.ResourceEphemeralStorage), 0},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v", what, tc.got, tc.want)
+		}
+	}
+	if !in.Resolved() {
+		t.Error("inputs with memory usage are not resolved")
+	}
+	if NewInputs(kills).Resolved() {
+		t.Error("inputs with OOM kills alone are resolved")
 	}
 }
 
@@ -93,10 +111,10 @@ func TestUsage_CollectsOneValuePerContainer(t *testing.T) {
 // which justifies a request on its own, records it as the trace's percentile
 // stage at its resource's precision, and never excuses an identity's age.
 func TestUsage_StageAndTrace(t *testing.T) {
-	in := &WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"app": 0.1234},
-		MemPerPod: promclient.ContainerValues{"app": 100.7 * mib},
-	}
+	in := NewInputs(
+		WithCPUUsage(promclient.ContainerValues{"app": 0.1234}),
+		WithMemoryUsage(promclient.ContainerValues{"app": 100.7 * mib}),
+	)
 
 	for _, tc := range []struct {
 		signal usage
@@ -118,7 +136,7 @@ func TestUsage_StageAndTrace(t *testing.T) {
 				t.Errorf("stage = %+v, want a bare percentile", st)
 			}
 			assertQty(t, "percentile", st.Value, tc.want)
-			if tc.signal.excusesAge(in) {
+			if valuesOf[usageValues](in, tc.signal).excusesAge() {
 				t.Error("usage excused the identity's age")
 			}
 		})

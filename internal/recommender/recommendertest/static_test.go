@@ -3,6 +3,7 @@ package recommendertest
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -16,7 +17,7 @@ func TestStaticInputs_AnswersEveryRequestAndRecordsIt(t *testing.T) {
 	unknown := promclient.WorkloadIdentity{Namespace: "ns", OwnerKind: "Deployment", OwnerName: "unknown"}
 	boom := errors.New("boom")
 	s := NewStaticInputs().
-		Set(known, &recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 1}}).
+		Set(known, recommender.WithCPUUsage(promclient.ContainerValues{"app": 1})).
 		Fail(broken, boom)
 
 	cfg := sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Window: "24h"}}
@@ -25,13 +26,13 @@ func TestStaticInputs_AnswersEveryRequestAndRecordsIt(t *testing.T) {
 		{Identity: known, Containers: 1}, {Identity: broken}, {Identity: unknown},
 	})
 
-	if r := got[known]; r.Err != nil || r.Inputs.CPUPerPod["app"] != 1 || r.Inputs.MemPerPod == nil {
-		t.Errorf("known = %+v, want its inputs with non-nil maps", r)
+	if r := got[known]; r.Err != nil || !reflect.DeepEqual(r.Inputs, recommender.NewInputs(recommender.WithCPUUsage(promclient.ContainerValues{"app": 1}))) {
+		t.Errorf("known = %+v, want its inputs", r)
 	}
 	if r := got[broken]; !errors.Is(r.Err, boom) || r.Inputs != nil {
 		t.Errorf("broken = %+v, want its error", r)
 	}
-	if r := got[unknown]; r.Err != nil || r.Inputs == nil || len(r.Inputs.CPUPerPod) != 0 {
+	if r := got[unknown]; r.Err != nil || !reflect.DeepEqual(r.Inputs, recommender.NewInputs()) {
 		t.Errorf("unknown = %+v, want empty inputs", r)
 	}
 	if calls := s.Calls(); len(calls) != 1 || len(calls[0].Requests) != 3 || calls[0].Resources.CPU.Window != "24h" {

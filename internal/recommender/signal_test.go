@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/ptr"
+
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
@@ -18,10 +21,16 @@ const listedSignalRule = "k8s_sustain:listed_signal"
 // listedSignal is a signal that exists only in this file: a required memory
 // limit adjuster costing ten samples per container, raising a container's
 // memory limit to factor times the limit its rule says the container was
-// killed at. A signal defined in a test cannot add a field to WorkloadInputs,
-// so it keeps its values in the OOM floor's, and a test that fetches it lists
-// it instead of the OOM floor.
+// killed at. Its values are of its own type, kept in WorkloadInputs under the
+// signal like any other's.
 type listedSignal struct{ factor float64 }
+
+// listedValues are listedSignal's values: the limit each container was killed
+// at, by its rule.
+type listedValues map[string]float64
+
+func (listedValues) observed() []string { return nil }
+func (listedValues) excusesAge() bool   { return false }
 
 func (listedSignal) name() string   { return "listed" }
 func (listedSignal) required() bool { return true }
@@ -36,27 +45,24 @@ func (listedSignal) contract() PromContract {
 	return PromContract{Rules: []string{listedSignalRule}, Labels: shardLabels}
 }
 
-func (listedSignal) collect(in *WorkloadInputs, samples []promclient.ShardSample) {
-	killedAt := make(map[string]OOM, len(samples))
+func (listedSignal) collect(samples []promclient.ShardSample) signalValues {
+	killedAt := make(listedValues, len(samples))
 	for _, s := range samples {
 		if s.Metric == listedSignalRule {
-			killedAt[s.Container] = OOM{LimitBytes: s.Value}
+			killedAt[s.Container] = s.Value
 		}
 	}
-	in.OOM = killedAt
+	return killedAt
 }
-
-func (listedSignal) observed(*WorkloadInputs) []string { return nil }
-func (listedSignal) excusesAge(*WorkloadInputs) bool   { return false }
 
 func (listedSignal) slot() slot { return slot{role: limitAdjuster, resource: memoryResource} }
 
 func (l listedSignal) contribute(sc stageContext) (contribution, bool) {
-	o, ok := sc.inputs.OOM[sc.container.Name]
-	if !ok || o.LimitBytes == 0 {
+	killedAt := valuesOf[listedValues](sc.inputs, l)[sc.container.Name]
+	if killedAt == 0 {
 		return contribution{}, false
 	}
-	return contribution{value: o.LimitBytes * l.factor}, true
+	return contribution{value: killedAt * l.factor}, true
 }
 
 func (l listedSignal) stage(_ stageContext, value float64, determined bool) sustainv1alpha1.TraceStage {
@@ -78,12 +84,12 @@ func withSignals(t *testing.T, list ...signal) {
 
 // Listing a signal is enough for PromInputs to fetch it, in shards sized by
 // its own cost and under its failure policy, and for Compute to run its stage
-// in its slot from the inputs fetched, with its own trace entry and no CRD
-// change: as a memory limit adjuster it raises the limit the strategy set and
-// determines it, never lowers a limit already above, and never adds one to a
-// container without.
+// in its slot from the values it fetched, next to every other signal's, with
+// its own trace entry and no CRD change: as a memory limit adjuster it raises
+// the limit the strategy set and determines it, never lowers a limit already
+// above, and never adds one to a container without.
 func TestSignals_AListedSignalIsFetchedAndComputed(t *testing.T) {
-	withSignals(t, cpuUsage, memoryUsage, listedSignal{factor: 2})
+	withSignals(t, cpuUsage, memoryUsage, oomFloor{}, listedSignal{factor: 2})
 	prom, c := startFakeShardProm(t, func(q shardQuery) ([]string, bool) {
 		switch {
 		case q.signal == "memory" && slices.Equal(q.names, []string{"api"}):
@@ -138,6 +144,82 @@ func TestSignals_AListedSignalIsFetchedAndComputed(t *testing.T) {
 	}
 }
 
+// probe is a signal that exists only in this file: in its slot it contributes
+// nothing to any container, a value no other stage ever loses to, and keeps
+// the context of each of its stages, contribution and trace entry alike.
+type probe struct {
+	label string
+	at    slot
+	seen  *[]stageContext
+}
+
+// noValues are the values of a signal that reads nothing.
+type noValues struct{}
+
+func (noValues) observed() []string { return nil }
+func (noValues) excusesAge() bool   { return false }
+
+func (p probe) name() string                                                  { return p.label }
+func (probe) required() bool                                                  { return false }
+func (probe) samplesPerContainer(sustainv1alpha1.ResourcesConfigs) int        { return 0 }
+func (probe) query(sustainv1alpha1.ResourcesConfigs, promclient.Shard) string { return "" }
+func (probe) contract() PromContract                                          { return PromContract{} }
+func (probe) collect([]promclient.ShardSample) signalValues                   { return noValues{} }
+func (p probe) slot() slot                                                    { return p.at }
+
+func (p probe) contribute(sc stageContext) (contribution, bool) {
+	*p.seen = append(*p.seen, sc)
+	return contribution{}, true
+}
+
+func (p probe) stage(sc stageContext, value float64, _ bool) sustainv1alpha1.TraceStage {
+	*p.seen = append(*p.seen, sc)
+	return sustainv1alpha1.TraceStage{Stage: p.label, Value: cpuResource.quantity(value)}
+}
+
+// Every stage of a signal sizes with one context, on either side of the chain:
+// the resource's Policy config, the container as the identity holds it with
+// its requests and limits, and the instant computed as of; on the limit side
+// the final request too.
+func TestSignals_StagesSizeWithTheirContext(t *testing.T) {
+	var requestSide, limitSide []stageContext
+	withSignals(t, cpuUsage,
+		probe{label: "request", at: slot{role: adjuster, resource: cpuResource}, seen: &requestSide},
+		probe{label: "limit", at: slot{role: limitAdjuster, resource: cpuResource}, seen: &limitSide})
+	app := limited(corev1.ResourceList{corev1.ResourceCPU: qty("100m")}, corev1.ResourceList{corev1.ResourceCPU: qty("1")})
+	cfg := sustainv1alpha1.ResourceConfig{
+		Window:   "24h",
+		Requests: sustainv1alpha1.ResourceRequestsConfig{Headroom: ptr.To[int32](50)},
+		Limits:   sustainv1alpha1.ResourceLimitsConfig{KeepLimit: true},
+	}
+
+	res := Compute(Request{
+		containers: []corev1.Container{app},
+		inputs:     NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.2})),
+		resources:  sustainv1alpha1.ResourcesConfigs{CPU: cfg},
+		now:        now,
+	})
+
+	request := res.Recs["app"].CPURequest
+	assertQty(t, "request", request, "300m")
+	for side, seen := range map[string][]stageContext{"request": requestSide, "limit": limitSide} {
+		if len(seen) != 2 {
+			t.Fatalf("%s side: %d stages ran, want the contribution and the trace entry", side, len(seen))
+		}
+		for _, sc := range seen {
+			if !reflect.DeepEqual(sc.config, cfg) || !reflect.DeepEqual(sc.container, app) || !sc.now.Equal(now) {
+				t.Errorf("%s side: context = %+v, want the CPU config, the container and the instant", side, sc)
+			}
+			switch {
+			case side == "request" && sc.request != nil:
+				t.Errorf("request side: request = %s, want none before it is computed", sc.request)
+			case side == "limit" && (sc.request == nil || sc.request.Cmp(*request) != 0):
+				t.Errorf("limit side: request = %v, want the final %s", sc.request, request)
+			}
+		}
+	}
+}
+
 var ruleRef = regexp.MustCompile(`k8s_sustain:[a-z0-9_:]+`)
 
 // Listing a signal is enough for its contract to be checked against the
@@ -170,10 +252,9 @@ func TestSignals_CollectReadsEveryRuleItsContractDeclares(t *testing.T) {
 	for _, s := range signals {
 		for _, rule := range s.contract().Rules {
 			t.Run(s.name()+"/"+rule, func(t *testing.T) {
-				var none, read WorkloadInputs
-				s.collect(&none, nil)
+				none := s.collect(nil)
 
-				s.collect(&read, []promclient.ShardSample{{Identity: prodID("api"), Container: "app", Metric: rule, Value: 1}})
+				read := s.collect([]promclient.ShardSample{{Identity: prodID("api"), Container: "app", Metric: rule, Value: 1}})
 
 				if reflect.DeepEqual(read, none) {
 					t.Errorf("collect left %+v as no samples would: it drops %s", read, rule)
