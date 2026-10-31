@@ -386,12 +386,15 @@ The conjunction (`min_over_time(container_spec_memory_limit_bytes) AND restart_c
 
 ```promql
 sum by (namespace, owner_kind, owner_name, container) (
-  max by (namespace, pod, container) (
-    increase(kube_pod_container_status_restarts_total{container!="", container!="POD"}[24h])
-  )
-  * on(namespace, pod, container)
-  max by (namespace, pod, container) (
-    kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
+  (
+    max by (namespace, pod, container) (
+      increase(kube_pod_container_status_restarts_total{container!="", container!="POD"}[24h])
+    )
+    * on(namespace, pod, container)
+    max by (namespace, pod, container) (
+      kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
+    )
+    > 0
   )
   * on(namespace, pod) group_left(owner_kind, owner_name)
   k8s_sustain:pod_workload
@@ -400,7 +403,7 @@ sum by (namespace, owner_kind, owner_name, container) (
 
 OOM kills in the last 24h, per (workload, container): the container's restarts in the window, counted when its last termination is `OOMKilled`. A kill counts when its container restarts after it, as the kubelet restarts a container in place in a Deployment, StatefulSet, DaemonSet or Rollout pod, or in a Job pod with `restartPolicy: OnFailure`. The `container` label is kept through the outer sum so the OOM recency signal is per-container: the recommender floors the memory of only the containers that actually OOMed — an innocent sidecar in the same pod keeps its pure percentile recommendation. Workload-level consumers (dashboard risk badge, attention queue, detail-page count, and the young-workload age-gate bypass) re-aggregate at query time with `sum by (namespace, owner_kind, owner_name)`. Each side is reduced by `(namespace, pod, container)` first, so a container that several kube-state-metrics targets report is counted once.
 
-`kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}` only gates the restart count and never stands alone: kube-state-metrics keeps it at 1 for as long as that kill is the container's last termination, which is the rest of the pod's life if the container never fails again. On its own it would keep a pod that was OOM-killed once and then ran clean At risk, with its memory floored, for as long as the pod lives. `charts/k8s-sustain/tests/promtool/workload_oom_24h_test.yaml` pins that a kill stops counting once its restart leaves the window.
+`kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}` only gates the restart count and never stands alone: kube-state-metrics keeps it at 1 for as long as that kill is the container's last termination, which is the rest of the pod's life if the container never fails again. On its own it would keep a pod that was OOM-killed once and then ran clean At risk, with its memory floored, for as long as the pod lives. A container whose last kill left the window has no series, rather than a 0 held for the pod's life. `charts/k8s-sustain/tests/promtool/workload_oom_24h_test.yaml` pins that a kill stops counting once its restart leaves the window.
 
 **Caveats:**
 

@@ -36,7 +36,8 @@ tests:
 
   # A container OOM-killed once at 5m and restarted, then running clean for over
   # a day: kube-state-metrics keeps reporting that kill as its last termination
-  # the whole time. The kill counts until its restart leaves the 24h window.
+  # the whole time. The kill counts until its restart leaves the 24h window,
+  # and then the container has no series.
   - interval: 1m
     input_series:
       - series: 'kube_pod_owner{namespace="shop",pod="db-0",owner_kind="StatefulSet",owner_name="db",owner_is_controller="true"}'
@@ -54,6 +55,4 @@ tests:
             value: 1
       - expr: k8s_sustain:workload_oom_24h
         eval_time: 26h
-        exp_samples:
-          - labels: 'k8s_sustain:workload_oom_24h{container="postgres",namespace="shop",owner_kind="StatefulSet",owner_name="db"}'
-            value: 0
+        exp_samples: []

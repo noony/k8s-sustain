@@ -985,6 +985,10 @@ prometheusRule:
         # kube-state-metrics scrape target's labels, so a container several
         # targets report is counted once and the one-to-one match holds.
         #
+        # A container whose restarts left the window would count 0 for as long
+        # as last_terminated_reason stays OOMKilled: `> 0` drops it, so only a
+        # container killed in the window has a series.
+        #
         # The `container` label is kept through the outer sum so the OOM
         # recency signal is per-container: the recommender only floors the
         # memory of containers that actually OOMed, not innocent siblings in
@@ -993,14 +997,17 @@ prometheusRule:
         - record: k8s_sustain:workload_oom_24h
           expr: |
             sum by (namespace, owner_kind, owner_name, container) (
-              max by (namespace, pod, container) (
-                increase(
-                  kube_pod_container_status_restarts_total{container!="", container!="POD"}[24h]
+              (
+                max by (namespace, pod, container) (
+                  increase(
+                    kube_pod_container_status_restarts_total{container!="", container!="POD"}[24h]
+                  )
                 )
-              )
-              * on(namespace, pod, container)
-              max by (namespace, pod, container) (
-                kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
+                * on(namespace, pod, container)
+                max by (namespace, pod, container) (
+                  kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
+                )
+                > 0
               )
               * on(namespace, pod) group_left(owner_kind, owner_name)
               k8s_sustain:pod_workload
