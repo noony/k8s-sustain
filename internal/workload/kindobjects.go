@@ -8,8 +8,6 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
 // kindSpec is everything the codebase needs to know about one workload kind
@@ -67,29 +65,6 @@ var ownerKinds = map[string]kindSpec{
 // deliberately absent from ownerKinds, since a bare pod has no separate owner
 // object to read.
 var SupportedKinds = []string{"Deployment", "StatefulSet", "DaemonSet", "Rollout", "CronJob", "Job", "Pod"}
-
-// Kind is one of SupportedKinds as the dashboard describes it.
-type Kind struct {
-	Name string
-	// UpdateField is the Policy's spec.rightSizing.update.types field that
-	// manages the kind.
-	UpdateField string
-	// InPlaceOnly kinds never have a pod evicted.
-	InPlaceOnly bool
-}
-
-// Kinds describes SupportedKinds, in their order.
-func Kinds() []Kind {
-	out := make([]Kind, 0, len(SupportedKinds))
-	for _, name := range SupportedKinds {
-		out = append(out, Kind{
-			Name:        name,
-			UpdateField: sustainv1alpha1.UpdateTypesField(name),
-			InPlaceOnly: applyRules[name].inPlaceOnly,
-		})
-	}
-	return out
-}
 
 // ObjectForKind returns a fresh, empty client.Object for a workload kind, or
 // nil when the kind is unknown — an unknown kind (a custom controller) is not

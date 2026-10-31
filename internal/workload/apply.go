@@ -237,6 +237,12 @@ var applyRules = map[string]applyRule{
 	"Pod": {inPlaceOnly: true, podsOf: barePods},
 }
 
+// InPlaceOnly reports whether Apply never evicts a pod of kind, only resizing
+// it in place.
+func InPlaceOnly(kind string) bool {
+	return applyRules[kind].inPlaceOnly
+}
+
 // memberObject returns the member's workload object as T. A member without a
 // UID is refused: the UID is what tells its pods from a bystander's.
 func memberObject[T client.Object](m Member) (T, error) {
