@@ -930,7 +930,7 @@ func TestRecordingConflictedFreezesTheRecommendationAndClearsDeparted(t *testing
 	}
 }
 
-// Every record stamps until when its Recommendation is served, from what it
+// A record restamps until when its Recommendation is served, from what it
 // stores: the staleness budget past observedAt for a live identity, the
 // retention window for a departed or Conflicted one. Only Computed moves
 // observedAt, so no other outcome extends the stamp.
@@ -963,6 +963,68 @@ func TestRecordStampsServableUntilByWhereTheIdentityStands(t *testing.T) {
 			}
 		})
 	}
+}
+
+// An object without servableUntil, written before the field existed, is
+// served nothing until its next Computed record: neither the claim nor any
+// other outcome gives it a stamp, which would extend what it is served for.
+func TestOnlyAComputedRecordStampsAnUnstampedObject(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	unstamped := func() *sustainv1alpha1.WorkloadRecommendation {
+		w := computed(10*time.Minute, now)
+		w.Labels = map[string]string{sustainv1alpha1.WLRPolicyLabel: "p"}
+		w.Status.ServableUntil = metav1.Time{}
+		return w
+	}
+	servedNothing := func(t *testing.T, got *sustainv1alpha1.WorkloadRecommendation) {
+		t.Helper()
+		if !got.Status.ServableUntil.IsZero() {
+			t.Errorf("servableUntil = %v, want none", got.Status.ServableUntil)
+		}
+		if v := wlrcache.Read(got, "p", now).Verdict; v != wlrcache.Stale {
+			t.Errorf("verdict = %s, want stale", v)
+		}
+	}
+
+	t.Run("Ensure", func(t *testing.T) {
+		w := unstamped()
+		w.Status.Departed = true
+		c := newCluster(t, w)
+		if _, err := wlrcache.Ensure(context.Background(), c, web, "p", nil, lifetimes); err != nil {
+			t.Fatalf("Ensure: %v", err)
+		}
+		got := c.mustStored(t, web)
+		if got.Status.Departed {
+			t.Fatal("test setup: the claim wrote no status")
+		}
+		servedNothing(t, got)
+	})
+	for _, outcome := range []sustainv1alpha1.RecommendationOutcome{
+		sustainv1alpha1.OutcomeNoData, sustainv1alpha1.OutcomeTooYoung,
+		sustainv1alpha1.OutcomeFetchFailed, sustainv1alpha1.OutcomeConflicted,
+	} {
+		t.Run(string(outcome), func(t *testing.T) {
+			c := newCluster(t, unstamped())
+			d := wlrcache.Decision{Outcome: outcome}
+			if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, now, lifetimes); err != nil {
+				t.Fatalf("Record: %v", err)
+			}
+			servedNothing(t, c.mustStored(t, web))
+		})
+	}
+	t.Run(string(sustainv1alpha1.OutcomeComputed), func(t *testing.T) {
+		c := newCluster(t, unstamped())
+		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), computedDecision("250m"), now, lifetimes); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+		got := c.mustStored(t, web)
+		if want := now.Add(lifetimes.StalenessBudget()); !got.Status.ServableUntil.Time.Equal(want) {
+			t.Errorf("servableUntil = %v, want %v", got.Status.ServableUntil, want)
+		}
+		if v := wlrcache.Read(got, "p", now).Verdict; v != wlrcache.Fresh {
+			t.Errorf("verdict = %s, want fresh", v)
+		}
+	})
 }
 
 func TestTheStalenessBudgetIsThreeReconcileIntervalsAndAtLeastThirtyMinutes(t *testing.T) {

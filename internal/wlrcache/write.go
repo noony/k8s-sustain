@@ -104,10 +104,10 @@ func writeSnapshot(
 // policy), replaces the observed snapshot when it differs (nil leaves it), and
 // clears departed: an identity with a live member is by definition not
 // departed, so clearing it restamps the Recommendation servable for the
-// staleness budget l gives, not the retention window. It never touches the
-// Recommendation, the outcome or computedBy: an adopted object keeps the
-// previous Policy's numbers, which Read withholds until policy records its
-// own.
+// staleness budget l gives, not the retention window; an object without a
+// stamp stays without one. It never touches the Recommendation, the outcome
+// or computedBy: an adopted object keeps the previous Policy's numbers, which
+// Read withholds until policy records its own.
 //
 // It returns the object as written, for Record to record into: nothing later
 // re-reads it from a cache that may not have seen the write yet.
@@ -146,7 +146,7 @@ func Ensure(
 	if observed != nil {
 		patched.Status.ObservedResources = observed
 	}
-	patched.Status.ServableUntil = l.servableUntil(known.CreationTimestamp, patched.Status)
+	patched.Status.ServableUntil = l.stamp(known, patched.Status, false)
 	if err := c.Status().Patch(ctx, patched, client.MergeFrom(known)); err != nil {
 		return nil, fmt.Errorf("patching WorkloadRecommendation %s status: %w", key, err)
 	}
@@ -234,10 +234,11 @@ type Decision struct {
 // samples age out of the query window, and clearing the Recommendation then
 // would strip exactly what retention exists to preserve.
 //
-// Every record stamps servableUntil from what it stores and l: past observedAt
-// by the staleness budget for a live identity, by the retention window for a
+// A record stamps servableUntil from what it stores and l: past observedAt by
+// the staleness budget for a live identity, by the retention window for a
 // departed or Conflicted one. Since only Computed moves observedAt, no other
-// outcome extends it.
+// outcome extends it, and only Computed gives a stamp to an object without
+// one.
 //
 // An unchanged decision costs no write, except that a Computed one rewrites
 // observedAt, and so servableUntil, once it is RefreshInterval old, so a
@@ -263,7 +264,7 @@ func Record(ctx context.Context, c client.Client, known *sustainv1alpha1.Workloa
 			desired.ObservedAt = metav1.NewTime(now)
 		}
 	}
-	desired.ServableUntil = l.servableUntil(known.CreationTimestamp, desired)
+	desired.ServableUntil = l.stamp(known, desired, d.Outcome == sustainv1alpha1.OutcomeComputed)
 	if statusEquivalent(known.Status, desired) &&
 		desired.ObservedAt.Equal(&known.Status.ObservedAt) &&
 		desired.ServableUntil.Equal(&known.Status.ServableUntil) {

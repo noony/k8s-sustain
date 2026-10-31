@@ -51,7 +51,7 @@ Every status write of the controller stamps `status.servableUntil`, the time the
 - **A live identity**: `observedAt` plus the staleness budget, the larger of 30 minutes and three times `--reconcile-interval`.
 - **A Departed or Conflicted identity**: its last computation plus `--recommendation-retention`, the same window the [sweep](#garbage-collection) keeps its object for.
 
-Only a `Computed` outcome moves `observedAt`, so `NoData`, `TooYoung`, `FetchFailed` and `Conflicted` never extend the stamp. A stable `Computed` Recommendation is rewritten every 10 minutes, so whatever the interval it stays served through a reconcile that runs one interval late:
+Only a `Computed` outcome moves `observedAt`, so `NoData`, `TooYoung`, `FetchFailed` and `Conflicted` never extend the stamp. An object without one, written before the field existed, gets its first only from a `Computed` record: until then nothing is injected from it, whatever else the controller writes. A stable `Computed` Recommendation is rewritten every 10 minutes, so whatever the interval it stays served through a reconcile that runs one interval late:
 
 | `--reconcile-interval` | Staleness budget |
 | --- | --- |

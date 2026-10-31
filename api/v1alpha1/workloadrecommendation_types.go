@@ -69,7 +69,7 @@ type WorkloadRecommendationStatus struct {
 	// +optional
 	Departed bool `json:"departed,omitempty"`
 
-	// ServableUntil is when the webhook stops injecting containers, stamped by the controller with every status write: the staleness budget (the larger of 30m and three reconcile intervals) past ObservedAt for a live identity, the retention window past ObservedAt for a Departed or Conflicted one. Unset when there is no Recommendation; a Recommendation without it is not injected.
+	// ServableUntil is when the webhook stops injecting containers, stamped by the controller with every status write once a Computed record has set it: the staleness budget (the larger of 30m and three reconcile intervals) past ObservedAt for a live identity, the retention window past ObservedAt for a Departed or Conflicted one. Unset when there is no Recommendation; a Recommendation without it is not injected.
 	// +optional
 	ServableUntil metav1.Time `json:"servableUntil,omitempty"`
 

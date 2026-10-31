@@ -18,7 +18,8 @@
 //
 // Every status write of Ensure and Record stamps servableUntil from the same
 // formula over the status it writes (ADR 0008), so Read needs no setting of
-// its own and a wedged controller stops injection. Request writes only the
+// its own and a wedged controller stops injection; only a Computed record
+// gives an object without a stamp its first. Request writes only the
 // snapshot, which the formula does not read.
 //
 // # Never re-read after a write
@@ -134,6 +135,17 @@ func (l Lifetimes) servableUntil(created metav1.Time, status sustainv1alpha1.Wor
 		window = l.Retention
 	}
 	return metav1.NewTime(last.Rfc3339Copy().Add(window)).Rfc3339Copy()
+}
+
+// stamp is servableUntil for status written over known. Only a Computed
+// record creates the stamp: an object without one, written before it
+// existed, is served nothing, and any other write stamping it would extend
+// what its Recommendation is served for (ADR 0008).
+func (l Lifetimes) stamp(known *sustainv1alpha1.WorkloadRecommendation, status sustainv1alpha1.WorkloadRecommendationStatus, computed bool) metav1.Time {
+	if known.Status.ServableUntil.IsZero() && !computed {
+		return metav1.Time{}
+	}
+	return l.servableUntil(known.CreationTimestamp, status)
 }
 
 // lastComputed is observedAt, or the creation time when nothing was computed
