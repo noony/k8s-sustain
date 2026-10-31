@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
@@ -28,7 +29,7 @@ func TestHandleWorkloadMetrics_BadWindow(t *testing.T) {
 	srv := &Server{
 		Policies:   governance.NewPolicyLister(nil),
 		Clock:      clock.RealClock{},
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
@@ -48,7 +49,7 @@ func TestHandleWorkloadMetrics_BadStep(t *testing.T) {
 	srv := &Server{
 		Policies:   governance.NewPolicyLister(nil),
 		Clock:      clock.RealClock{},
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
@@ -68,7 +69,7 @@ func TestHandleWorkloadMetrics_ReturnsAllKeys(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
 	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
 	d.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "wait-db"}}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(d).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
@@ -102,7 +103,7 @@ func mapKeys(m map[string]any) []string {
 
 func TestWorkloadMetricsAbsoluteRange(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(d).Build()
 	prom := &fakePromClient{}
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, PromClient: prom, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
@@ -182,7 +183,7 @@ func TestHandleWorkloadMetrics_CarriesTheAverageTheSignalAndTheKills(t *testing.
 	srv := &Server{
 		Policies:  governance.NewPolicyLister(nil),
 		Clock:     clock.RealClock{},
-		K8sClient: fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, d).Build(),
+		K8sClient: fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(policy, d).Build(),
 		PromClient: &fakePromClient{rangeByLabel: map[string]map[string][]promclient.TimeValue{
 			perContainer("avg", promclient.MetricContainerCPUUsageByWorkloadRate1m, webKey): {"app": average},
 		}},
@@ -229,7 +230,7 @@ func TestHandleWorkloadMetrics_AnUnreadableSignalKeepsTheAverage(t *testing.T) {
 	srv := &Server{
 		Policies:  governance.NewPolicyLister(nil),
 		Clock:     clock.RealClock{},
-		K8sClient: fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, d).Build(),
+		K8sClient: fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(policy, d).Build(),
 		PromClient: &fakePromClient{rangeByLabel: map[string]map[string][]promclient.TimeValue{
 			perContainer("avg", promclient.MetricContainerCPUUsageByWorkloadRate1m, webKey): {"app": average},
 		}},
@@ -278,7 +279,7 @@ func TestHandleWorkloadMetrics_NoSignalWithoutAGoverningPolicy(t *testing.T) {
 			srv := &Server{
 				Policies:   governance.NewPolicyLister(nil),
 				Clock:      clock.RealClock{},
-				K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build(),
+				K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(objs...).Build(),
 				PromClient: &fakePromClient{},
 				Inputs:     inputs,
 				Logger:     testLogger(t),

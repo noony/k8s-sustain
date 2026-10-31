@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/governance"
 )
 
@@ -30,7 +31,7 @@ func newTestServerWithDeployment(t *testing.T, ns, name string) *Server {
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Annotations: map[string]string{}},
 	}
 	d.Spec.Template.Annotations = map[string]string{"k8s.sustain.io/policy": "p"}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(d).Build()
 	return &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 }
 
@@ -58,7 +59,7 @@ func TestAllWorkloadsIncludesStandaloneJobButSkipsCronJobOwned(t *testing.T) {
 	owned.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "scenario-cronjob"}
 	owned.Spec.Template.Spec.Containers = []corev1.Container{{Name: "stress"}}
 
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(standalone, owned).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(standalone, owned).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
 	rec := httptest.NewRecorder()
@@ -89,7 +90,7 @@ func TestAllWorkloadsNamespaceFilterKeepsFacets(t *testing.T) {
 	dA := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-a", Name: "web"}}
 	dB := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-b", Name: "api"}}
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-b", Name: "oneshot"}}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(dA, dB, job).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(dA, dB, job).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
 	rec := httptest.NewRecorder()
@@ -120,7 +121,7 @@ func TestAllWorkloadsNamespaceFilterKeepsFacets(t *testing.T) {
 // Error responses must not carry Cache-Control, or intermediaries pin a
 // transient failure for the success max-age.
 func TestPolicyWorkloadsMissingPolicyIs404WithoutCacheControl(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(Scheme()).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
 	rec := httptest.NewRecorder()
@@ -134,7 +135,7 @@ func TestPolicyWorkloadsMissingPolicyIs404WithoutCacheControl(t *testing.T) {
 }
 
 func TestPolicyWorkloadsAPIServerErrorIs500(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(Scheme()).
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
 				return errors.New("apiserver is down")
@@ -160,7 +161,7 @@ func TestPolicyWorkloadsIncludesStandaloneJob(t *testing.T) {
 	job.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "scenario-job"}
 	job.Spec.Template.Spec.Containers = []corev1.Container{{Name: "stress"}}
 
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, job).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(policy, job).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
 	rec := httptest.NewRecorder()
@@ -206,7 +207,7 @@ func retainedWLR(policy, ns, kind, name string) *sustainv1alpha1.WorkloadRecomme
 func TestAllWorkloadsListsDepartedIdentity(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	policy.Spec.RightSizing.Update.Types.Pod = ptrMode(sustainv1alpha1.UpdateModeOngoing)
-	c := fake.NewClientBuilder().WithScheme(Scheme()).
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
 		WithObjects(policy, retainedWLR("p", "airflow", "Pod", "etl")).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
@@ -253,7 +254,7 @@ func TestAllWorkloadsListsDepartedIdentity(t *testing.T) {
 func TestAllWorkloadsLiveRowSuppressesWLRTwin(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
 	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
 		WithObjects(d, retainedWLR("p", "prod", "Deployment", "web")).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
@@ -276,7 +277,7 @@ func TestAllWorkloadsLiveRowSuppressesWLRTwin(t *testing.T) {
 func TestAllWorkloadsDepartedFilter(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: "web"}}
 	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
 		WithObjects(d, retainedWLR("p", "airflow", "Pod", "etl")).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
@@ -299,7 +300,7 @@ func TestPolicyWorkloadsIncludesDepartedScopedToPolicy(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
 	onCreate := sustainv1alpha1.UpdateModeOnCreate
 	policy.Spec.RightSizing.Update.Types.Pod = &onCreate
-	c := fake.NewClientBuilder().WithScheme(Scheme()).
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
 		WithObjects(policy,
 			retainedWLR("p", "airflow", "Pod", "etl"),
 			retainedWLR("other", "airflow", "Pod", "other-etl")).
@@ -321,7 +322,7 @@ func TestPolicyWorkloadsIncludesDepartedScopedToPolicy(t *testing.T) {
 }
 
 func TestAllWorkloadsSort(t *testing.T) {
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-b", Name: "web"}},
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-a", Name: "web"}},
 		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-c", Name: "api"}},
@@ -379,7 +380,7 @@ func TestAllWorkloadsSearchAcrossPages(t *testing.T) {
 	for _, n := range []string{"web-1", "api", "web-2", "db", "WEB-3", "web-4", "cache"} {
 		objs = append(objs, &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: strings.ToLower(n)}})
 	}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(objs...).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
 	for _, tc := range []struct {
@@ -421,7 +422,7 @@ func TestPolicyWorkloadsSortAndSearch(t *testing.T) {
 		d.Spec.Template.Annotations = map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}
 		objs = append(objs, d)
 	}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(objs...).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
 	for _, tc := range []struct {
@@ -468,7 +469,7 @@ func TestPolicyWorkloadsSortAndSearch(t *testing.T) {
 
 func TestPolicyWorkloadsRejectsUnknownSort(t *testing.T) {
 	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(policy).Build()
 	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 	rec := httptest.NewRecorder()
 	srv.handlePolicyWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/policies/p/workloads?sort=policyName", nil), "p")

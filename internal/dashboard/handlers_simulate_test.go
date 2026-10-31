@@ -12,6 +12,7 @@ import (
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -105,7 +106,7 @@ func TestHandleSimulate_AcceptsJob(t *testing.T) {
 	srv := &Server{
 		Policies:   governance.NewPolicyLister(nil),
 		Clock:      clock.RealClock{},
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
@@ -126,7 +127,7 @@ func TestHandleSimulate_AcceptsRollout(t *testing.T) {
 	srv := &Server{
 		Policies:   governance.NewPolicyLister(nil),
 		Clock:      clock.RealClock{},
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
@@ -149,7 +150,7 @@ func TestHandleSimulate_AcceptsPod(t *testing.T) {
 	srv := &Server{
 		Policies:   governance.NewPolicyLister(nil),
 		Clock:      clock.RealClock{},
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
@@ -169,7 +170,7 @@ func TestHandleSimulate_SendsTheLiveOOMWindow(t *testing.T) {
 	srv := &Server{
 		Policies:   governance.NewPolicyLister(nil),
 		Clock:      clock.RealClock{},
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
@@ -221,7 +222,7 @@ func TestHandleSimulate_RejectsWhatItCannotStartFrom(t *testing.T) {
 	srv := &Server{
 		Policies:   governance.NewPolicyLister(nil),
 		Clock:      clock.RealClock{},
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     recommendertest.NewStaticInputs(),
 		Logger:     testLogger(t),
@@ -328,7 +329,7 @@ func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 		srv := &Server{
 			Policies:   governance.NewPolicyLister(nil),
 			Clock:      clock.RealClock{},
-			K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+			K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 			PromClient: &fakePromClient{},
 			Inputs:     recommendertest.NewStaticInputs(),
 			Logger:     testLogger(t),
@@ -353,7 +354,7 @@ func TestHandleSimulate_AnAbsoluteRangesHistoryEndsAtItsEnd(t *testing.T) {
 	srv := &Server{
 		Policies:   governance.NewPolicyLister(nil),
 		Clock:      clock.RealClock{},
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     inputs,
 		Logger:     testLogger(t),

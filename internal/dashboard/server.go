@@ -9,17 +9,12 @@ import (
 	"sync"
 	"time"
 
-	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"k8s.io/apimachinery/pkg/runtime"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/cache"
 	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
@@ -42,17 +37,6 @@ type PromQuerier interface {
 	// and the replica-averaged usage its detail page charts, per container.
 	QueryRangeByLabel(ctx context.Context, expr, label string, r promclient.TimeRange, step time.Duration) (map[string][]promclient.TimeValue, error)
 }
-
-var dashboardScheme = runtime.NewScheme()
-
-func init() {
-	utilruntime.Must(clientgoscheme.AddToScheme(dashboardScheme))
-	utilruntime.Must(sustainv1alpha1.AddToScheme(dashboardScheme))
-	utilruntime.Must(rolloutsv1alpha1.AddToScheme(dashboardScheme))
-}
-
-// Scheme returns the runtime scheme with all needed types registered.
-func Scheme() *runtime.Scheme { return dashboardScheme }
 
 // Server is the dashboard HTTP server.
 type Server struct {

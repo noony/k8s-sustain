@@ -10,6 +10,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/noony/k8s-sustain/internal/config"
 )
 
 func TestEventTimestampPrefersFreshestField(t *testing.T) {
@@ -58,7 +60,7 @@ func TestEventTimestampPrefersFreshestField(t *testing.T) {
 // selector support for Events.
 func newActivityClient(objs ...client.Object) client.Client {
 	return fake.NewClientBuilder().
-		WithScheme(Scheme()).
+		WithScheme(config.Scheme()).
 		WithIndex(&corev1.Event{}, "source", func(o client.Object) []string {
 			return []string{o.(*corev1.Event).Source.Component}
 		}).

@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
@@ -65,7 +66,7 @@ func newCoordinatedSimulateServer(t *testing.T) *Server {
 			}},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(append(objs, hpa)...).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(append(objs, hpa)...).Build()
 	inputs := recommendertest.NewStaticInputs().Set(
 		promclient.WorkloadIdentity{Namespace: "default", OwnerKind: "Deployment", OwnerName: "web"},
 		recommender.WithCPUUsage(promclient.ContainerValues{"main": 1}))

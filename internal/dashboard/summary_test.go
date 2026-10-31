@@ -14,6 +14,7 @@ import (
 	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
@@ -84,7 +85,7 @@ func TestHandleSummaryShape(t *testing.T) {
 	}
 
 	srv := &Server{
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: fp,
 		Health:     memHealthSignals{},
 		Logger:     testr.New(t),
@@ -127,7 +128,7 @@ func TestHandleSummaryHeadroomAndPolicies(t *testing.T) {
 		},
 	}
 	srv := &Server{
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: fp,
 		Health:     memHealthSignals{},
 		Logger:     testr.New(t),
@@ -175,7 +176,7 @@ func TestHandleSummaryCacheHit(t *testing.T) {
 	}
 	clk := clocktesting.NewFakePassiveClock(time.Now())
 	srv := &Server{
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: fp,
 		Health:     memHealthSignals{},
 		Clock:      clk,
@@ -228,7 +229,7 @@ func TestHandleSummaryDoesNotCacheOnPromError(t *testing.T) {
 		},
 	}
 	srv := &Server{
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: fp,
 		Health:     memHealthSignals{},
 		Logger:     testr.New(t),
@@ -259,7 +260,7 @@ func TestHandleSummaryServesRecentLastGoodOnPartialError(t *testing.T) {
 	}
 	clk := clocktesting.NewFakePassiveClock(time.Now())
 	srv := &Server{
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: fp,
 		Health:     memHealthSignals{},
 		Clock:      clk,
@@ -297,7 +298,7 @@ func TestHandleSummaryServesFreshPartialWhenLastGoodTooOld(t *testing.T) {
 	}
 	clk := clocktesting.NewFakePassiveClock(time.Now())
 	srv := &Server{
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: fp,
 		Health:     memHealthSignals{},
 		Clock:      clk,
@@ -362,7 +363,7 @@ func TestHandleSummaryRequestGivingUpWithoutLastGoodIs503(t *testing.T) {
 		started:        make(chan struct{}),
 	}
 	srv := &Server{
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		K8sClient:  fake.NewClientBuilder().WithScheme(config.Scheme()).Build(),
 		PromClient: bp,
 		Health:     memHealthSignals{},
 		Logger:     testr.New(t),

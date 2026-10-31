@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/controller"
 	"github.com/noony/k8s-sustain/internal/dashboard"
 	"github.com/noony/k8s-sustain/internal/governance"
@@ -108,7 +109,7 @@ func parityCluster(t *testing.T, excludeInit bool) client.Client {
 		},
 	})
 	return fake.NewClientBuilder().
-		WithScheme(dashboard.Scheme()).
+		WithScheme(config.Scheme()).
 		WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
 		WithObjects(objs...).
 		Build()
