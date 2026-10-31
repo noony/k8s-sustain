@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -13,11 +12,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
@@ -26,160 +24,64 @@ import (
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-func TestReconcileWorkload_HappyPath_ProducesRecommendationsAndPatchesPods(t *testing.T) {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:       "default",
-			Name:            "web-pod",
-			Labels:          map[string]string{"app": "web"},
-			OwnerReferences: controllerRef("Deployment", "web"),
-		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
-			},
-		}}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
-	}
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true /* in-place */, pod)
-
-	tgt := deploymentTarget("default", "web")
-	policy := policyForReconcileWorkload(t, "p")
-
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
-
-	// Retry tracker should record success (no entry, or attempts=0).
-	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {
-		t.Errorf("expected attempts=0 on success, got %d", state.attempts)
-	}
-}
+func updateMode(m sustainv1alpha1.UpdateMode) *sustainv1alpha1.UpdateMode { return &m }
 
 // The pod template is never patched, so it always differs from the
 // recommendation: the event must follow what happened to pods, or it fires on
 // every reconcile.
-func TestReconcileWorkload_ResourcesUpdatedEvent_OnlyWhenPodsChanged(t *testing.T) {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace:       "default",
-			Name:            "web-pod",
-			Labels:          map[string]string{"app": "web"},
-			OwnerReferences: controllerRef("Deployment", "web"),
-		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")},
-			},
-		}}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
-	}
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, pod)
+func TestReconcile_ResourcesUpdatedEventOnlyWhenPodsChanged(t *testing.T) {
+	const ns = "updated-event"
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		ongoingDeployments("p"), establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web"))
 	rec := r.recorder.(*events.FakeRecorder)
 
-	tgt := deploymentTarget("default", "web")
-	policy := policyForReconcileWorkload(t, "p")
-
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatalf("first reconcile: %v", err)
-	}
-	select {
-	case e := <-rec.Events:
-		if !strings.Contains(e, "ResourcesUpdated") || !strings.Contains(e, "1 pod(s)") {
-			t.Fatalf("expected a ResourcesUpdated event naming the pod count, got %q", e)
-		}
-	default:
-		t.Fatal("expected a ResourcesUpdated event after the pod was resized")
+	reconcileOnce(t, r, "p")
+	evs := drainEvents(rec)
+	if eventsWith(evs, "ResourcesUpdated") != 1 || !strings.Contains(strings.Join(evs, "\n"), "1 pod(s)") {
+		t.Fatalf("want one ResourcesUpdated event naming the pod count after the pod was resized, got %v", evs)
 	}
 
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatalf("second reconcile: %v", err)
-	}
-	select {
-	case e := <-rec.Events:
-		t.Fatalf("no pod changed on the second reconcile, got event %q", e)
-	default:
+	reconcileOnce(t, r, "p")
+	if evs := drainEvents(rec); eventsWith(evs, "ResourcesUpdated") != 0 {
+		t.Fatalf("no pod changed on the second reconcile, got %v", evs)
 	}
 }
 
-func TestReconcileWorkload_RecommendOnly_DoesNotRecyclePods(t *testing.T) {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default", Name: "web-pod",
-			Labels:          map[string]string{"app": "web"},
-			OwnerReferences: controllerRef("Deployment", "web"),
-		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
-			},
-		}}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
-	}
+// Recommend-only, from the flag or the Policy's own field, stores the
+// Recommendation but touches no pod, and drops the identity's pod counts:
+// nothing drives its pods toward it.
+func TestReconcile_RecommendOnlyStoresButTouchesNoPod(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		flag, field bool
+	}{
+		{"flag", true, false},
+		{"policy", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const ns = "recommend-only"
+			policy := ongoingDeployments("p")
+			policy.Spec.RightSizing.RecommendOnly = tc.field
+			r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+				policy, establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web"))
+			r.RecommendOnly = tc.flag
+			r.series.publish("p", publication{identities: []identitySeries{{
+				key:    identityOf(ns, "Deployment", "web"),
+				health: healthState{pods: workload.PodCounts{Total: 3, Stale: 3}, measured: true},
+			}}})
 
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), false, pod)
-	r.RecommendOnly = true
-	tgt := deploymentTarget("default", "web")
-	policy := policyForReconcileWorkload(t, "p")
+			reconcileOnce(t, r, "p")
 
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
-
-	// Pod should still have the original 999m — no eviction was attempted.
-	var got corev1.Pod
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "web-pod"}, &got); err != nil {
-		t.Fatalf("get pod: %v", err)
-	}
-	if got.DeletionTimestamp != nil {
-		t.Error("recommend-only must not delete or evict pods")
-	}
-}
-
-// The per-policy spec.rightSizing.recommendOnly field must short-circuit the
-// recycle path exactly like the global flag.
-func TestReconcileWorkload_PolicyRecommendOnly_DoesNotRecyclePods(t *testing.T) {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default", Name: "web-pod",
-			Labels:          map[string]string{"app": "web"},
-			OwnerReferences: controllerRef("Deployment", "web"),
-		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
-			},
-		}}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
-	}
-
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), false, pod)
-	// Global flag stays false — only the policy opts into dry-run.
-	tgt := deploymentTarget("default", "web")
-	policy := policyForReconcileWorkload(t, "p")
-	policy.Spec.RightSizing.RecommendOnly = true
-
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
-
-	var got corev1.Pod
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "web-pod"}, &got); err != nil {
-		t.Fatalf("get pod: %v (policy recommend-only must not evict pods)", err)
-	}
-	if got.DeletionTimestamp != nil {
-		t.Error("policy recommend-only must not delete or evict pods")
-	}
-
-	// Compute-and-cache still happens: the WorkloadRecommendation upsert runs
-	// before the dry-run gate.
-	var wlr sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &wlr); err != nil {
-		t.Errorf("expected WorkloadRecommendation default/deployment-web to be upserted in dry-run: %v", err)
+			if cpu := podCPU(t, r, ns, "web-pod"); cpu != "10m" {
+				t.Errorf("pod CPU = %s, want it untouched at 10m", cpu)
+			}
+			if cpu := getWLRFor(t, r, ns, "Deployment", "web").Status.Containers["app"].CPURequest; cpu == nil || cpu.String() != "100m" {
+				t.Errorf("stored CPU = %v, want the 100m Recommendation", cpu)
+			}
+			if got := len(seriesForWorkload(t, "k8s_sustain_workload_stale_pods", ns, "Deployment", "web")); got != 0 {
+				t.Error("recommend-only must delete the stale-pods series")
+			}
+		})
 	}
 }
 
@@ -199,10 +101,7 @@ func TestReconcile_AgeGateDatesTheIdentityByItsWorkloadRecommendation(t *testing
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ongoing := sustainv1alpha1.UpdateModeOngoing
-			policy := policyForReconcileWorkload(t, "p")
-			policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
-			policy.Spec.RightSizing.Update.Types.Job = &ongoing
+			policy := policyManaging("p", sustainv1alpha1.UpdateTypes{Job: updateMode(sustainv1alpha1.UpdateModeOngoing)})
 			job := annotatedJob("default", "nightly-etl", "p")
 			// This run's object: seconds old, every run.
 			job.CreationTimestamp = metav1.NewTime(time.Now().Add(-5 * time.Second))
@@ -229,179 +128,54 @@ func TestReconcile_AgeGateDatesTheIdentityByItsWorkloadRecommendation(t *testing
 	}
 }
 
-func TestReconcileWorkload_TransientPromError_RecordsRetry(t *testing.T) {
-	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), errors.New("prometheus down"))
-	r := reconcilerWithInputs(t, inputs, false)
-	tgt := deploymentTarget("default", "web")
-	policy := policyForReconcileWorkload(t, "p")
-
-	err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt))
-	if err == nil {
-		t.Fatal("expected transient error to bubble up")
+// A pass with nothing to apply is a success: once a failed member's retry is
+// due, an empty Prometheus answer clears its failure and no pod is touched.
+func TestReconcile_NothingToApplyClearsAPastFailure(t *testing.T) {
+	const ns = "cleared"
+	web := identityOf(ns, "Deployment", "web")
+	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs().Fail(web, errors.New("prometheus down")), true,
+		ongoingDeployments("p"), establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web"))
+	clk := clocktesting.NewFakePassiveClock(time.Now())
+	r.ledger = newLedger(clk)
+	reconcileOnce(t, r, "p")
+	if ready := readyCondition(t, r, "p"); ready.Status != metav1.ConditionFalse {
+		t.Fatalf("Ready = %s after the failed fetch, want False", ready.Status)
 	}
 
-	state := r.retries.getState(tgt.key())
-	if state.attempts < 1 {
-		t.Errorf("expected retry tracker to record at least 1 attempt, got %d", state.attempts)
+	r.Inputs = recommendertest.NewStaticInputs()
+	clk.SetTime(clk.Now().Add(baseRetryDelay))
+	reconcileOnce(t, r, "p")
+
+	if ready := readyCondition(t, r, "p"); ready.Message != "All 1 workloads have been processed." {
+		t.Errorf("Ready = %s %q, want the failure cleared by the empty answer", ready.Status, ready.Message)
 	}
-}
-
-// A permanent error (e.g. 403 from missing RBAC) must be surfaced via a Warning
-// event rather than swallowed, while still returning nil.
-func TestHandleStepError_NonTransient_EmitsWarningEventAndReturnsNil(t *testing.T) {
-	rec := events.NewFakeRecorder(10)
-	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
-	tgt := deploymentTarget("default", "web")
-
-	permErr := apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "web-pod", errors.New("rbac missing"))
-	if err := r.handleStepError(context.Background(), tgt, "patch", "Pod recycle failed", permErr); err != nil {
-		t.Fatalf("non-transient error must return nil (no retry), got %v", err)
+	if got := seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, "Deployment", "web"); len(got) != 0 {
+		t.Errorf("retry_state = %v, want none once the failure is cleared", got)
 	}
-
-	select {
-	case e := <-rec.Events:
-		if !strings.Contains(e, "Warning") || !strings.Contains(e, "ReconciliationFailed") {
-			t.Errorf("expected Warning ReconciliationFailed event, got %q", e)
-		}
-	default:
-		t.Error("expected a Warning event for non-transient error, got none")
+	if cpu := podCPU(t, r, ns, "web-pod"); cpu != "10m" {
+		t.Errorf("pod CPU = %s, want it untouched: there was nothing to apply", cpu)
 	}
 }
 
-func TestHandleStepError_ContextCanceled_StaysSilent(t *testing.T) {
-	rec := events.NewFakeRecorder(10)
-	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
-	tgt := deploymentTarget("default", "web")
+// OnCreate stores the Recommendation, the webhook's to inject at the next
+// rollout, but resizes no running pod; the pods still waiting for that
+// rollout are counted stale.
+func TestReconcile_OnCreateStoresAndCountsWithoutTouchingPods(t *testing.T) {
+	const ns = "oncreate"
+	policy := policyManaging("p", sustainv1alpha1.UpdateTypes{Deployment: updateMode(sustainv1alpha1.UpdateModeOnCreate)})
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		policy, establishedDeployment(ns, "web", "p"), runningPodAt(ns, "web-pod", "web", "999m"))
 
-	if err := r.handleStepError(context.Background(), tgt, "patch", "Pod recycle failed", context.Canceled); err != nil {
-		t.Fatalf("context cancellation must return nil, got %v", err)
-	}
-	select {
-	case e := <-rec.Events:
-		t.Errorf("expected no event for context cancellation, got %q", e)
-	default:
-	}
-}
+	reconcileOnce(t, r, "p")
 
-// Empty Prometheus results are NOT a failure: retry state is cleared and no
-// patch is attempted.
-func TestReconcileWorkload_NoPrometheusData_RecordsSuccessAndDoesNothing(t *testing.T) {
-	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), false)
-	tgt := deploymentTarget("default", "web")
-	policy := policyForReconcileWorkload(t, "p")
-
-	// Prime a past failure whose backoff has elapsed, so the member is
-	// processed and the success must clear it.
-	r.retries.states[tgt.key()] = &retryState{attempts: 1, nextRetry: time.Now().Add(-time.Second), phase: "patch"}
-
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
-	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {
-		t.Errorf("expected retry attempts cleared on success, got %d", state.attempts)
-	}
-}
-
-// A Kind == "Pod" target applies to its members only, never to pods found by
-// labels: here a running pod carrying the identity's labels but neither the
-// policy nor the owner-name annotation, so it belongs to no bare-pod identity.
-func TestReconcileWorkload_PodKind_NeverRecycles(t *testing.T) {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "airflow",
-			Name:      "etl-run-1",
-			Labels:    map[string]string{"app": "etl-daily"},
-		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
-			},
-		}}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
-	}
-	r := reconcilerWithInputs(t, usageFor("airflow", "Pod", "etl-daily"), true /* in-place */, pod)
-
-	tgt := &workloadTarget{
-		Kind:         "Pod",
-		IdentityKind: "Pod",
-		Name:         "etl-daily",
-		IdentityName: "etl-daily",
-		Namespace:    "airflow",
-		Containers: []corev1.Container{{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
-			},
-		}},
-	}
-	policy := policyForReconcileWorkload(t, "p")
-
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
-
-	// A WorkloadRecommendation must exist — the recommendation is still
-	// computed and cached even though recycling is skipped, so the webhook's
-	// Prometheus-outage fallback still benefits.
-	var wlr sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "airflow", Name: "pod-etl-daily"}, &wlr); err != nil {
-		t.Fatalf("expected WorkloadRecommendation pod-etl-daily, got: %v", err)
-	}
-
-	// The pod must be untouched: a label-driven pod source would match it and
-	// resize its CPU request away from 999m.
-	var got corev1.Pod
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "airflow", Name: "etl-run-1"}, &got); err != nil {
-		t.Fatalf("get pod: %v", err)
-	}
-	if cpu := got.Spec.Containers[0].Resources.Requests.Cpu().String(); cpu != "999m" {
-		t.Errorf("pod CPU request changed to %s — recycle/resize path was reached for a Pod-kind target", cpu)
-	}
-
-	// recordStepSuccess must still run on the skip path.
-	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {
-		t.Errorf("expected attempts=0 on success, got %d", state.attempts)
-	}
-}
-
-// The OnCreate gate: the recommendation is computed and persisted as a WLR (the
-// dashboard/webhook need it) but no pod is recycled or resized.
-func TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles(t *testing.T) {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default", Name: "web-pod",
-			Labels:          map[string]string{"app": "web"},
-			OwnerReferences: controllerRef("Deployment", "web"),
-		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
-			},
-		}}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
-	}
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true /* in-place */, pod)
-	tgt := deploymentTarget("default", "web")
-	tgt.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
-	policy := policyForReconcileWorkload(t, "p")
-
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
-
-	var got corev1.Pod
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "web-pod"}, &got); err != nil {
-		t.Fatalf("get pod: %v", err)
-	}
-	if cpu := got.Spec.Containers[0].Resources.Requests.Cpu().String(); cpu != "999m" {
+	if cpu := podCPU(t, r, ns, "web-pod"); cpu != "999m" {
 		t.Errorf("OnCreate must not resize pods; cpu request = %s, want 999m", cpu)
 	}
-
-	var wlr sustainv1alpha1.WorkloadRecommendation
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &wlr); err != nil {
-		t.Fatalf("expected WLR to be cached for OnCreate target: %v", err)
+	if cpu := getWLRFor(t, r, ns, "Deployment", "web").Status.Containers["app"].CPURequest; cpu == nil || cpu.String() != "100m" {
+		t.Errorf("stored CPU = %v, want the 100m Recommendation for the webhook", cpu)
+	}
+	if got := gaugeOf(t, "k8s_sustain_workload_stale_pods", ns, "Deployment", "web"); got != 1 {
+		t.Errorf("stale pods = %v, want 1", got)
 	}
 }
 
@@ -409,7 +183,7 @@ func TestReconcileWorkload_OnCreateMode_CachesButNeverRecycles(t *testing.T) {
 // builds would still compile. This pins the wiring end to end: by default a
 // pod annotated safe-to-evict=false must never be evicted, and the policy
 // override must evict it.
-func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
+func TestReconcile_SafeToEvictAnnotationPolicyWiring(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		ignore      bool
@@ -419,31 +193,16 @@ func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 		{name: "policy override evicts annotated pod", ignore: true, wantEvicted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Stale Running pod (999m vs the ~100m recommendation) owned by
-			// the reconciled Deployment and annotated safe-to-evict=false.
-			pod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace:       "default",
-					Name:            "web-pod",
-					Labels:          map[string]string{"app": "web"},
-					Annotations:     map[string]string{workload.SafeToEvictAnnotation: "false"},
-					OwnerReferences: controllerRef("Deployment", "web"),
-				},
-				Spec: corev1.PodSpec{Containers: []corev1.Container{{
-					Name: "app",
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("999m")},
-					},
-				}}},
-				Status: corev1.PodStatus{Phase: corev1.PodRunning},
-			}
-
-			r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), false /* eviction mode, not in-place */)
+			const ns = "safe-to-evict"
+			policy := ongoingDeployments("p")
+			policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations = tc.ignore
+			// Stale (999m vs the 100m recommendation) and annotated
+			// safe-to-evict=false.
+			pod := runningPodAt(ns, "web-pod", "web", "999m")
+			pod.Annotations = map[string]string{workload.SafeToEvictAnnotation: "false"}
 			var evicted bool
-			r.Client = fake.NewClientBuilder().
-				WithScheme(r.Scheme).
-				WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
-				WithObjects(pod).
+			scheme := testFullScheme(t)
+			c := fakeClientBuilder(scheme, policy, establishedDeployment(ns, "web", "p"), pod).
 				WithInterceptorFuncs(interceptor.Funcs{
 					SubResourceCreate: func(ctx context.Context, c client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
 						if sub == "eviction" {
@@ -456,18 +215,13 @@ func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 					},
 				}).
 				Build()
-			r.patcher = workload.New(r.Client, false, /* eviction mode */
+			r := reconcilerOn(c, scheme, usageFor(ns, "Deployment", "web"), false)
+			r.patcher = workload.New(c, false,
 				workload.WithReadyPollInterval(time.Millisecond),
 				workload.WithReadyTimeout(50*time.Millisecond))
 
-			tgt := deploymentTarget("default", "web")
+			reconcileOnce(t, r, "p")
 
-			policy := policyForReconcileWorkload(t, "p")
-			policy.Spec.RightSizing.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations = tc.ignore
-
-			if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-				t.Fatalf("reconcileWorkload: %v", err)
-			}
 			if evicted != tc.wantEvicted {
 				t.Errorf("evicted = %v, want %v (ignoreAutoscalerSafeToEvictAnnotations=%v)",
 					evicted, tc.wantEvicted, tc.ignore)
@@ -476,188 +230,73 @@ func TestReconcileWorkload_SafeToEvictAnnotation_PolicyWiring(t *testing.T) {
 	}
 }
 
-// Reproduces the crash that killed the operator process: the same target in two
-// errgroup goroutines (a namespace repeated in spec.selector.namespaces made
-// that possible), one on the transient-error path while the other clears retry
-// state. handleStepError used to read the state back in a second, unsynchronised
-// call, so the intervening recordSuccess made it nil and the deref panicked
-// inside an errgroup closure, which does not recover.
-func TestHandleStepError_ConcurrentSuccess_NoPanic(t *testing.T) {
-	rec := events.NewFakeRecorder(1024)
-	r := &PolicyReconciler{recorder: rec, retries: newRetryTracker()}
-	tgt := deploymentTarget("default", "web")
-	transient := apierrors.NewServiceUnavailable("prometheus down")
-
-	var wg sync.WaitGroup
-	for range 50 {
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			if err := r.handleStepError(context.Background(), tgt, "prometheus", "Prometheus query failed", transient); err == nil {
-				t.Error("transient error must be returned for requeue")
-			}
-		}()
-		go func() {
-			defer wg.Done()
-			r.recordStepSuccess(tgt)
-		}()
-	}
-	wg.Wait()
-}
-
-func stalePodsLabels(ns, name string) map[string]string {
-	return map[string]string{"namespace": ns, "owner_kind": "Deployment", "owner_name": name}
-}
-
-func webPod(cpu string) *corev1.Pod {
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default", Name: "web-pod", Labels: map[string]string{"app": "web"},
-			OwnerReferences: controllerRef("Deployment", "web"),
-		},
-		Spec: corev1.PodSpec{Containers: []corev1.Container{{
-			Name:      "app",
-			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)}},
-		}}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
-	}
-}
-
-func TestReconcileWorkload_EmitsPodCountsAfterApply(t *testing.T) {
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, webPod("50m"))
-	tgt := deploymentTarget("default", "web")
-	policy := policyForReconcileWorkload(t, "p")
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatal(err)
-	}
-	if got := gaugeValue(t, "k8s_sustain_workload_pods", stalePodsLabels("default", "web")); got != 1 {
-		t.Errorf("pods = %v, want 1", got)
-	}
-	if got := gaugeValue(t, "k8s_sustain_workload_stale_pods", stalePodsLabels("default", "web")); got != 0 {
-		t.Errorf("stale = %v, want 0 after in-place resize", got)
-	}
-}
-
-func TestReconcileWorkload_OnCreate_CountsStaleWithoutTouchingPods(t *testing.T) {
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, webPod("999m"))
-	tgt := deploymentTarget("default", "web")
-	tgt.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
-	policy := policyForReconcileWorkload(t, "p")
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatal(err)
-	}
-	if got := gaugeValue(t, "k8s_sustain_workload_stale_pods", stalePodsLabels("default", "web")); got != 1 {
-		t.Errorf("stale = %v, want 1", got)
-	}
-	var got corev1.Pod
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "web-pod"}, &got); err != nil {
-		t.Fatal(err)
-	}
-	if q := got.Spec.Containers[0].Resources.Requests[corev1.ResourceCPU]; q.String() != "999m" {
-		t.Errorf("OnCreate must not resize, cpu = %s", q.String())
-	}
-}
-
-func TestReconcileWorkload_RecommendOnly_DeletesPodCounts(t *testing.T) {
-	EmitWorkloadPods(testIdentity("default", "Deployment", "web"), workload.PodCounts{Total: 3, Stale: 3})
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), false, webPod("999m"))
-	r.RecommendOnly = true
-	tgt := deploymentTarget("default", "web")
-	policy := policyForReconcileWorkload(t, "p")
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatal(err)
-	}
-	if workloadStalePods.DeleteLabelValues("default", "Deployment", "web") {
-		t.Error("recommend-only must delete the stale-pods series")
-	}
-}
-
-// A failed OnCreate dry run must not enter retry backoff: backoff skips the
-// compute phase and would freeze the WorkloadRecommendation the webhook reads.
-func TestReconcileWorkload_OnCreate_DryRunErrorIsNotAStepFailure(t *testing.T) {
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, webPod("999m"))
-	wrapped := interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
-		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-			if _, ok := list.(*corev1.PodList); ok {
-				return apierrors.NewServiceUnavailable("apiserver unavailable")
-			}
-			return c.List(ctx, list, opts...)
-		},
-	})
-	r.Client = wrapped
-	r.patcher = workload.New(wrapped, true)
-	tgt := deploymentTarget("default", "web")
-	tgt.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
-	policy := policyForReconcileWorkload(t, "p")
-
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatalf("OnCreate dry-run failure must not fail the step, got %v", err)
-	}
-	if state := r.retries.getState(tgt.key()); state != nil && state.attempts != 0 {
-		t.Errorf("OnCreate dry-run failure must not enter retry backoff, attempts = %d", state.attempts)
-	}
+// A failed OnCreate count must not enter retry backoff: backoff leaves the
+// identity unfetched and would freeze the WorkloadRecommendation the webhook
+// reads.
+func TestReconcile_OnCreateCountFailureIsNotAFailure(t *testing.T) {
+	const ns = "oncreate-count"
+	scheme := testFullScheme(t)
+	policy := policyManaging("p", sustainv1alpha1.UpdateTypes{Deployment: updateMode(sustainv1alpha1.UpdateModeOnCreate)})
+	c := fakeClientBuilder(scheme, policy, establishedDeployment(ns, "web", "p"), runningPodAt(ns, "web-pod", "web", "999m")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*corev1.PodList); ok {
+					return apierrors.NewServiceUnavailable("apiserver unavailable")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+	r := reconcilerOn(c, scheme, usageFor(ns, "Deployment", "web"), true)
 	rec := r.recorder.(*events.FakeRecorder)
-	for {
-		select {
-		case e := <-rec.Events:
-			if strings.Contains(e, "Warning") {
-				t.Errorf("unexpected Warning event: %q", e)
-			}
-			continue
-		default:
+
+	reconcileOnce(t, r, "p")
+	reconcileOnce(t, r, "p")
+
+	if ready := readyCondition(t, r, "p"); ready.Message != "All 1 workloads have been processed." {
+		t.Errorf("Ready = %s %q, want True: a failed OnCreate count neither fails nor blocks", ready.Status, ready.Message)
+	}
+	for _, e := range drainEvents(rec) {
+		if strings.HasPrefix(e, corev1.EventTypeWarning) {
+			t.Errorf("unexpected Warning event: %q", e)
 		}
-		break
 	}
 }
 
-func TestReconcileWorkload_BarePodOngoing_ResizesRunningPod(t *testing.T) {
-	pod := barePod("airflow", "etl-run-1", "etl-daily")
-	pod.Spec.Containers[0].Name = "app" // appUsage reports on "app"
+// A bare-pod identity's running pods are resized in place under Ongoing,
+// never evicted, and left alone under OnCreate.
+func TestReconcile_BarePodsAreResizedOnlyUnderOngoing(t *testing.T) {
+	for _, tc := range []struct {
+		mode        sustainv1alpha1.UpdateMode
+		wantResized bool
+	}{
+		{sustainv1alpha1.UpdateModeOngoing, true},
+		{sustainv1alpha1.UpdateModeOnCreate, false},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			pod := barePod("airflow", "etl-run-1", "etl-daily")
+			pod.Spec.Containers[0].Name = "app"
+			r := reconcilerWithInputs(t, usageFor("airflow", "Pod", "etl-daily"), true)
+			rec := recordPods(t, r, policyManaging("p", sustainv1alpha1.UpdateTypes{Pod: updateMode(tc.mode)}), pod)
 
-	r := reconcilerWithInputs(t, usageFor("airflow", "Pod", "etl-daily"), true /* in-place */)
-	rec := recordPods(t, r, pod)
+			reconcileOnce(t, r, "p")
 
-	target := barePodTarget(t, "airflow", "etl-daily", pod)
-	target.UpdateMode = sustainv1alpha1.UpdateModeOngoing
-	policy := policyForReconcileWorkload(t, "p")
-
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(target)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
-	if !rec.resized["etl-run-1"] {
-		t.Error("expected the running bare pod to be resized in place under Ongoing")
-	}
-	if len(rec.evicted) != 0 {
-		t.Errorf("bare pods must never be evicted, got %v", rec.evicted)
-	}
-}
-
-// An OnCreate identity is computed and cached but never resized.
-func TestReconcileWorkload_BarePodOnCreate_NeverResizes(t *testing.T) {
-	pod := barePod("airflow", "etl-run-1", "etl-daily")
-	pod.Spec.Containers[0].Name = "app"
-
-	r := reconcilerWithInputs(t, usageFor("airflow", "Pod", "etl-daily"), true /* in-place */)
-	rec := recordPods(t, r, pod)
-
-	target := barePodTarget(t, "airflow", "etl-daily", pod)
-	target.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
-	policy := policyForReconcileWorkload(t, "p")
-
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(target)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
-	if len(rec.resized) != 0 || len(rec.evicted) != 0 {
-		t.Errorf("OnCreate bare pods must never be touched, resized %v evicted %v", rec.resized, rec.evicted)
+			if rec.resized["etl-run-1"] != tc.wantResized {
+				t.Errorf("resized = %v, want %v", rec.resized["etl-run-1"], tc.wantResized)
+			}
+			if len(rec.evicted) != 0 {
+				t.Errorf("bare pods must never be evicted, got %v", rec.evicted)
+			}
+		})
 	}
 }
 
-// jobWithPod is a standalone Job running container "app" at cpu, and its one
-// running pod.
-func jobWithPod(name, cpu string) (*batchv1.Job, *corev1.Pod) {
+// jobWithPod is a standalone Job in ns opted into "p", running container
+// "app" at cpu, and its one running pod.
+func jobWithPod(ns, name, cpu string) (*batchv1.Job, *corev1.Pod) {
 	resources := corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)}}
 	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: name, UID: types.UID(name + "-uid")},
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: types.UID(name + "-uid")},
 		Spec: batchv1.JobSpec{
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"}},
@@ -667,7 +306,7 @@ func jobWithPod(name, cpu string) (*batchv1.Job, *corev1.Pod) {
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace:       "default",
+			Namespace:       ns,
 			Name:            name + "-abc",
 			Labels:          map[string]string{batchv1.JobNameLabel: name},
 			OwnerReferences: controllerRef("Job", name),
@@ -678,79 +317,71 @@ func jobWithPod(name, cpu string) (*batchv1.Job, *corev1.Pod) {
 	return job, pod
 }
 
-func TestReconcileWorkload_JobResizesRunningPod(t *testing.T) {
-	job, pod := jobWithPod("batch-1", "500m")
-	r := reconcilerWithInputs(t, usageFor("default", "Job", "batch-1"), true /* in-place */)
-	rec := recordPods(t, r, pod)
-	target := targetFromObject(job, "Job")
+// A standalone Job's running pod is resized in place under Ongoing, never
+// evicted, and only counted under OnCreate.
+func TestReconcile_JobPodIsResizedOnlyUnderOngoing(t *testing.T) {
+	for _, tc := range []struct {
+		mode        sustainv1alpha1.UpdateMode
+		wantResized bool
+	}{
+		{sustainv1alpha1.UpdateModeOngoing, true},
+		{sustainv1alpha1.UpdateModeOnCreate, false},
+	} {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			ns := "job-" + strings.ToLower(string(tc.mode))
+			job, pod := jobWithPod(ns, "batch-1", "999m")
+			r := reconcilerWithInputs(t, usageFor(ns, "Job", "batch-1"), true)
+			rec := recordPods(t, r, policyManaging("p", sustainv1alpha1.UpdateTypes{Job: updateMode(tc.mode)}), job, pod)
 
-	if err := runComputeAndApply(context.Background(), r, policyForReconcileWorkload(t, "p"), itemForTarget(&target)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
-	if !rec.resized["batch-1-abc"] {
-		t.Error("expected the running job pod to be resized in place")
-	}
-	if len(rec.evicted) != 0 {
-		t.Errorf("a standalone job pod must never be evicted, got %v", rec.evicted)
-	}
-}
+			reconcileOnce(t, r, "p")
 
-func TestReconcileWorkload_OnCreateJobCountsWithoutResizing(t *testing.T) {
-	job, pod := jobWithPod("oncreate-batch", "999m")
-	r := reconcilerWithInputs(t, usageFor("default", "Job", "oncreate-batch"), true)
-	rec := recordPods(t, r, pod)
-	target := targetFromObject(job, "Job")
-	target.UpdateMode = sustainv1alpha1.UpdateModeOnCreate
-
-	if err := runComputeAndApply(context.Background(), r, policyForReconcileWorkload(t, "p"), itemForTarget(&target)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
-	if len(rec.resized) != 0 || len(rec.evicted) != 0 {
-		t.Fatalf("OnCreate must not touch running job pods: resized %v evicted %v", rec.resized, rec.evicted)
-	}
-	labels := map[string]string{"namespace": "default", "owner_kind": "Job", "owner_name": "oncreate-batch"}
-	if got := gaugeValue(t, "k8s_sustain_workload_pods", labels); got != 1 {
-		t.Errorf("pods = %v, want 1", got)
-	}
-	if got := gaugeValue(t, "k8s_sustain_workload_stale_pods", labels); got != 1 {
-		t.Errorf("stale = %v, want 1", got)
+			if rec.resized[pod.Name] != tc.wantResized {
+				t.Errorf("resized = %v, want %v", rec.resized[pod.Name], tc.wantResized)
+			}
+			if len(rec.evicted) != 0 {
+				t.Errorf("a standalone job pod must never be evicted, got %v", rec.evicted)
+			}
+			if tc.mode != sustainv1alpha1.UpdateModeOnCreate {
+				return
+			}
+			if got := gaugeOf(t, "k8s_sustain_workload_pods", ns, "Job", "batch-1"); got != 1 {
+				t.Errorf("pods = %v, want 1", got)
+			}
+			if got := gaugeOf(t, "k8s_sustain_workload_stale_pods", ns, "Job", "batch-1"); got != 1 {
+				t.Errorf("stale = %v, want 1", got)
+			}
+		})
 	}
 }
 
 // A CronJob's running job pods are resized in place, the CronJob spec is left
 // alone, and the event names the in-place family.
-func TestReconcileWorkload_CronJobResizesActiveRunInPlace(t *testing.T) {
-	cj := annotatedCronJob("default", "nightly", "p")
-	run, pod := jobWithPod("nightly-1", "500m")
+func TestReconcile_CronJobResizesActiveRunInPlace(t *testing.T) {
+	const ns = "cronjob"
+	cj := annotatedCronJob(ns, "nightly", "p")
+	run, pod := jobWithPod(ns, "nightly-1", "500m")
 	run.OwnerReferences = controllerRef("CronJob", "nightly")
-	r := reconcilerWithInputs(t, usageFor("default", "CronJob", "nightly"), true /* in-place */)
-	rec := recordPods(t, r, cj, run, pod)
-	events := r.recorder.(*events.FakeRecorder)
-	target := targetFromObject(cj, "CronJob")
+	r := reconcilerWithInputs(t, usageFor(ns, "CronJob", "nightly"), true)
+	rec := recordPods(t, r, policyManaging("p", sustainv1alpha1.UpdateTypes{CronJob: updateMode(sustainv1alpha1.UpdateModeOngoing)}), cj, run, pod)
+	evRec := r.recorder.(*events.FakeRecorder)
 
-	if err := runComputeAndApply(context.Background(), r, policyForReconcileWorkload(t, "p"), itemForTarget(&target)); err != nil {
-		t.Fatalf("reconcileWorkload: %v", err)
-	}
+	reconcileOnce(t, r, "p")
+
 	if !rec.resized["nightly-1-abc"] || len(rec.evicted) != 0 {
 		t.Errorf("want the active run's pod resized in place and nothing evicted, resized %v evicted %v", rec.resized, rec.evicted)
 	}
-	select {
-	case e := <-events.Events:
-		if !strings.Contains(e, "In-place resized 1 cronjob pod(s)") {
-			t.Errorf("event = %q, want the in-place family's text", e)
-		}
-	default:
-		t.Error("expected a ResourcesUpdated event")
+	if evs := drainEvents(evRec); !strings.Contains(strings.Join(evs, "\n"), "In-place resized 1 cronjob pod(s)") {
+		t.Errorf("events = %v, want a ResourcesUpdated event in the in-place family's text", evs)
 	}
 }
 
 // The failed step a Blocked identity reports follows the kind's family:
 // "patch" for kinds that evict, "resize" for kinds only ever resized in place.
-func TestReconcileWorkload_FailedApplyRecordsItsFamilyPhase(t *testing.T) {
+func TestReconcile_FailedApplyBlocksOnItsFamilyStep(t *testing.T) {
 	unavailable := apierrors.NewServiceUnavailable("apiserver unavailable")
 	// Only the pods' resize and eviction fail: a failed WorkloadRecommendation
-	// write would skip the apply altogether.
-	failSubresources := interceptor.Funcs{
+	// write would withhold the apply altogether.
+	failPods := interceptor.Funcs{
 		SubResourcePatch: func(ctx context.Context, c client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
 			if _, isPod := obj.(*corev1.Pod); isPod {
 				return unavailable
@@ -764,29 +395,29 @@ func TestReconcileWorkload_FailedApplyRecordsItsFamilyPhase(t *testing.T) {
 			return c.SubResource(sub).Create(ctx, obj, subObj, opts...)
 		},
 	}
-	job, jobPod := jobWithPod("batch-1", "999m")
-	jobTarget := targetFromObject(job, "Job")
-	for _, tc := range []struct {
-		name      string
-		target    *workloadTarget
-		usage     *recommendertest.StaticInputs
-		pod       *corev1.Pod
-		wantPhase string
-	}{
-		{"Deployment", deploymentTarget("default", "web"), usageFor("default", "Deployment", "web"), webPod("999m"), "patch"},
-		{"Job", &jobTarget, usageFor("default", "Job", "batch-1"), jobPod, "resize"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r := reconcilerWithInputs(t, tc.usage, true, tc.pod)
-			r.Client = interceptor.NewClient(r.Client.(client.WithWatch), failSubresources)
-			r.patcher = workload.New(r.Client, true)
+	const deployNS, jobNS = "family-evict", "family-resize"
+	job, jobPod := jobWithPod(jobNS, "batch-1", "999m")
+	ongoing := updateMode(sustainv1alpha1.UpdateModeOngoing)
+	scheme := testFullScheme(t)
+	c := fakeClientBuilder(scheme, policyManaging("p", sustainv1alpha1.UpdateTypes{Deployment: ongoing, Job: ongoing}),
+		establishedDeployment(deployNS, "web", "p"), runningPodAt(deployNS, "web-pod", "web", "999m"), job, jobPod).
+		WithInterceptorFuncs(failPods).
+		Build()
+	inputs := usageFor(deployNS, "Deployment", "web").Set(identityOf(jobNS, "Job", "batch-1"), appUsage())
+	r := reconcilerOn(c, scheme, inputs, true)
 
-			if err := runComputeAndApply(context.Background(), r, policyForReconcileWorkload(t, "p"), itemForTarget(tc.target)); err == nil {
-				t.Fatal("expected the transient apply failure to surface")
-			}
-			if phase, blocked := r.retries.blockedPhase(tc.target.key()); !blocked || phase != tc.wantPhase {
-				t.Errorf("blocked = %v, phase = %q, want %q", blocked, phase, tc.wantPhase)
-			}
-		})
+	reconcileOnce(t, r, "p")
+
+	if ready := readyCondition(t, r, "p"); ready.Message != "2 of 2 workloads failed; Blocked workload identities: 2" {
+		t.Errorf("Ready = %s %q, want both identities failed and Blocked", ready.Status, ready.Message)
+	}
+	for _, tc := range []struct{ ns, kind, name, wantStep string }{
+		{deployNS, "Deployment", "web", phasePatch},
+		{jobNS, "Job", "batch-1", phaseResize},
+	} {
+		state := seriesForWorkload(t, "k8s_sustain_workload_retry_state", tc.ns, tc.kind, tc.name)
+		if len(state) != 1 || labelOf(state[0], "reason") != tc.wantStep {
+			t.Errorf("%s retry_state = %v, want Blocked on %s", tc.kind, state, tc.wantStep)
+		}
 	}
 }

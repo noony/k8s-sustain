@@ -50,9 +50,11 @@ inputs := recommendertest.NewStaticInputs().
     Fail(otherID, errors.New("prometheus down"))
 ```
 
-An identity with neither gets empty inputs, as Prometheus answers for one with
-no samples. `Calls()` and `Requested(id)` report what was fetched, so a test
-can assert that an identity was, or was not, part of the batch. Prefer driving
+An identity with neither gets empty inputs, whatever the settings it is
+fetched under, as Prometheus answers for one with no samples. `Calls()`
+reports every fetch, the settings it ran under and its requests, and
+`Requested(id)` whether an identity was part of any, so a test can assert
+what was fetched and how. Prefer driving
 `PolicyReconciler.Reconcile` end to end with the fake client and
 `StaticInputs`. The Prometheus adapter, `recommender.PromInputs`, is the only
 code tested against a fake PromQL server: sharding, retry, the one-identity
@@ -113,23 +115,23 @@ k8s-sustain/
 │   ├── webhook/           # webhook subcommand
 │   └── dashboard/         # dashboard subcommand
 ├── internal/
-│   ├── autoscaler/        # HPA / KEDA detection used by recommender + webhook
+│   ├── autoscaler/        # HPA / KEDA lookup of the members of an identity
 │   ├── config/            # Centralized Viper config (flags, env, file)
-│   ├── controller/        # Policy reconciler
+│   ├── controller/        # Policy reconciler: the pass, the ledger, and the publisher of its metric series
 │   ├── dashboard/         # Dashboard HTTP server + embedded Vue SPA (ui/)
+│   ├── governance/        # One decision per pod or pod template: identity, opt-in, governing Policy or refusal
 │   ├── httpx/             # Shared HTTP stack: envelope, middleware, hardened NewServer, shutdown
 │   ├── inventory/         # Workload objects → identities (members, containers, age, Departed, governing Policy or Conflicted)
 │   ├── k8s/               # client.New helper used by webhook + dashboard
 │   ├── logging/           # Shared zap logger setup
 │   ├── oomwatch/          # Live OOMKilled detection, re-triggers reconciles
-│   ├── policymatch/       # Policy resolution (ResolvePolicy) and selector matching
 │   ├── prometheus/        # Prometheus HTTP API client + metric name constants
-│   ├── recommender/       # Recommendation signals (one module each), Compute composing their stages, and the batch-inputs port with its Prometheus adapter
+│   ├── recommender/       # The one Request assembly per identity, recommendation signals (one module each), Compute composing their stages, and the batch-inputs port with its Prometheus adapter
 │   │   └── recommendertest/  # In-memory inputs adapter for tests
 │   ├── version/           # Build version
 │   ├── webhook/           # Admission webhook HTTP handler
-│   ├── wlrcache/          # WorkloadRecommendation lifecycle: every write (Request, Ensure, Record) and verdict (Read, Expired)
-│   └── workload/          # Applying a Recommendation to a member's pods (one rule per kind), template/owner-ref helpers
+│   ├── wlrcache/          # WorkloadRecommendation lifecycle: every write (Request, Ensure, Record) and verdict (Read, Held, Expired)
+│   └── workload/          # Applying a Recommendation: container injection (requests never above limits), the patcher (one rule per kind), template/owner-ref helpers
 ├── charts/
 │   ├── k8s-sustain/          # Operator chart
 │   └── k8s-sustain-policies/ # Policy objects chart
@@ -300,15 +302,24 @@ Run a single suite with the plugin's `-f` flag (paths are relative to the chart 
 helm unittest charts/k8s-sustain -f 'tests/deployment_test.yaml'
 ```
 
-CI runs the full suite in the `helm` job alongside `helm lint` and `helm template`.
-`make helm-promtool` additionally validates the rendered PrometheusRule
-recording rules with `promtool` (requires `promtool` and `yq`): it checks that
-the rules parse, that the dashboard-required ones are present, and it runs the
+CI runs the full suite in the `helm` job alongside `helm lint`, `helm template`
+and `make helm-promtool`. `make helm-promtool` validates the rendered
+PrometheusRule recording rules with `promtool` (requires `promtool` and `yq`;
+CI installs pinned, checksum-verified releases of both): it checks that the
+rules parse, that the dashboard-required ones are present, and it runs the
 `promtool test rules` fixtures in `charts/k8s-sustain/tests/promtool/` against
 the rendered output. Those fixtures test rule *semantics* — feed a rule its
 input series and assert the recorded value — which `promtool check rules`
 cannot do. Add one whenever a rule's correctness depends on timing or on a
-join window, since that is exactly what a syntax check misses.
+join window, since that is exactly what a syntax check misses. Every rule a
+recommendation signal reads must have one: `hack/signalcontract` fails
+otherwise (see [Signal contracts](reference/recording-rules.md#signal-contracts)).
+It also fails when the regex with which `k8s_sustain:pod_workload` selects
+the owner-name annotation stops matching exactly the values
+`workload.ApplyOwnerNameOverride` accepts, when the rules give an overridden
+pod without a controller another kind than it does, or when the bundled
+kube-state-metrics stops exporting the annotation
+(`pod_workload_owner_name_test.yaml` covers the mapping itself).
 
 ## Adding a new workload kind
 
@@ -317,7 +328,7 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 
 1. Add `<Kind> *UpdateMode` to `UpdateTypes` in `api/v1alpha1/policy_types.go`, add the case to `UpdateTypes.ModeForKind`, then run `make generate` and `make manifests`
 2. Add the kind to the `ownerKinds` table in `internal/workload/kindobjects.go` (object and list constructors plus its `GroupResource`) and, if the controller and dashboard should list it, to `workload.SupportedKinds`. This single table drives the inventory's listing (`internal/inventory`, which both the controller and the dashboard read identities from), the dashboard's NotFound errors, and the workload-level annotation reads in the webhook and the OOM watcher. A kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)
-3. Add the kind's pod template to `workload.PodTemplateOf` in `internal/workload/templates.go`
+3. Add the kind's pod template to `workload.PodTemplateOf` in `internal/workload/templates.go`: the inventory decides governance on it, so its annotations are the pod-template opt-in level and its labels what a Policy's label selector matches
 4. Add the same kind to `k8s.OwnerChainDisableFor()` in `internal/k8s/client.go`. Every kind in `ownerKinds` must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. `TestDisableForCoversOwnerAnnotationKinds` (`internal/webhook/optin_test.go`) cross-checks the two lists and fails if one is missing from the other
 5. If the kind is a CRD, register its scheme in `internal/config/config.go` and `internal/dashboard/server.go`
 6. Give the kind its apply rule in `applyRules` (`internal/workload/apply.go`): where a member's pods come from (`selectedPods` with the kind's selector for a workload whose pods it owns through a selector, a function of its own otherwise) and whether the kind is `inPlaceOnly`, its pods never evicted (like Job, CronJob and bare `Pod`). `TestApply_EveryKindHasAnApplyRule` fails for a kind of `SupportedKinds` without a rule, and `TestApply_EveryKindUnderEveryMode` (`internal/workload/apply_test.go`) needs a fixture for it
@@ -328,13 +339,21 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 A [signal](concepts/recommendation-pipeline.md#signals) is one module of
 `internal/recommender` (`signal_usage.go` holds the CPU and memory usage
 signals, `signal_oom.go` the OOM floor) implementing the `signal` interface in
-`signal.go`: its query and shard cost, how it collects samples into
-per-container values, its failure policy, where its stage runs (`slot`: base or
-adjuster, CPU or memory), its contribution to a container's request, and its
-trace entry. `PromInputs` fetches every signal in the `signals` list, and
-`Compute` runs their stages in a fixed order: base signals, adjusters,
-headroom and clamp, coordination, limit. Neither has a line specific to any
-signal. To add one:
+`signal.go`: its query and shard cost, its Prometheus contract (`contract`),
+how it collects samples into per-container values, its failure policy, whether
+its values excuse a Too
+young identity from the age gate (`excusesAge`), where its stage runs (`slot`:
+base, adjuster or limit adjuster, CPU or memory), its contribution to a
+container's request or limit, and its trace stage. `PromInputs` fetches every
+signal in the `signals` list, and `Compute` runs one chain per resource in a
+fixed order: on the request side base signals, adjusters, headroom, clamp and
+coordination; on the limit side the Policy's limit strategy, limit adjusters
+and the guard (`limit.go`, whose `limitStrategies` is the one list of limit
+strategies, which `WithDefaults` reads too). Both sides run their signals
+alike (`contributionsTo`, then `stagesOf` for their trace stages) and differ
+only in which contribution wins. Neither has a line specific to any signal:
+the age gate asks every signal, and live OOM kills reach the OOM floor through
+the inputs port (`WithLiveOOMs`), not through `Compute`. To add one:
 
 1. Write `internal/recommender/signal_<name>.go`. Build its PromQL from the
    `internal/prometheus` primitives (`Shard.Selector`, `Shard.MetricsSelector`,
@@ -343,51 +362,143 @@ signal. To add one:
    every signal shares. Give its per-container values a field in
    `WorkloadInputs`, which is what `recommendertest.StaticInputs` serves
 2. List it in `signals` (`internal/recommender/signal.go`). Within a role,
-   stages run in list order
-3. If it reads new Policy settings or records a new trace entry, add the
-   fields to `api/v1alpha1` (`ResourcesConfigs`, `ResourceTrace`), then run
-   `make generate manifests`
-4. If it reads a new recording rule, add the name to
-   `internal/prometheus/metricnames.go` and the rule to
-   `charts/k8s-sustain/values.yaml` under `prometheusRule.groups`, and document
-   it in [Recording Rules](reference/recording-rules.md)
+   stages run in list order. A base signal or adjuster shapes the request; a
+   limit adjuster may only raise the limit the strategy set, never remove it
+   or give one to a container without, and the guard still raises a limit
+   left below the request
+3. Its trace stage is a `TraceStage` it builds itself: its name, the value it
+   contributed and any facts as key/values. The trace is a list, so a new
+   stage needs no CRD, `api.ts` or dashboard change (the dashboard shows an
+   unknown stage under its own name; add a display name to
+   `RecommendationTrace.vue` if you want a nicer one). A consumer that needs
+   one of its facts reads it through a function of the signal's module, as
+   the controller reads the OOM floor's with `TracedOOMFloor`. If it reads new
+   Policy settings, add the fields to `api/v1alpha1` (`ResourcesConfigs`),
+   then run `make generate manifests`
+4. Declare its Prometheus contract next to its query, in its `contract`
+   method: the recording rules the query reads, the labels each aggregates by
+   (`shardLabels`, the identity and the container), the evaluation interval
+   its shard cost assumes (zero if none), and the cAdvisor and
+   kube-state-metrics series those rules compute from, through every rule
+   they read in turn. Then run `go test ./hack/signalcontract`: it names each
+   rule missing from `prometheusRule.groups` in `charts/k8s-sustain/values.yaml`,
+   aggregating by other labels or evaluated at another interval, each rule no
+   promtool fixture evaluates, and each series the contract leaves out or the
+   bundled scrape keep-lists drop. Fix them in turn: the rule name in
+   `internal/prometheus/metricnames.go`, the rule in `prometheusRule.groups`, a
+   fixture in `charts/k8s-sustain/tests/promtool/` (run `make helm-promtool`),
+   the series in the cAdvisor or kube-state-metrics keep-list of the bundled
+   Prometheus (`prometheus.scrapeConfigs.kubernetes-nodes-cadvisor` or the
+   `kube-state-metrics` job in `prometheus.extraScrapeConfigs`). Document the
+   rule and the contract in [Recording Rules](reference/recording-rules.md#signal-contracts),
+   and the series in [Prerequisites](getting-started/prerequisites.md#prometheus)
+   for users who bring their own Prometheus
 5. Test it at its own interface, next to `signal_usage_test.go` and
    `signal_oom_test.go`: the query built from settings, the values collected
-   from `ShardSample`s, its failure policy, its contribution and trace entry.
-   Test what it does to a whole recommendation through `Compute`.
-   `signal_test.go` shows that a signal defined only in a test is fetched and
-   computed from its list entry alone
+   from `ShardSample`s, its failure policy, its contribution and trace stage.
+   Test what it does to a whole recommendation through `Compute`, from a
+   `Request` the test builds in the package at a fixed instant (`now`; outside
+   the package only `Assemble` builds one). `signal_test.go` shows, in one
+   test, that a signal defined only in a test is fetched and then computed on
+   the limit side with its own trace stage from what was fetched, from its
+   list entry alone and with its values carried in `WorkloadInputs`, and
+   checks that every listed signal's contract
+   declares exactly the rules its query reads and that its `collect` reads a
+   sample of each of them, so no series its query returns is dropped for a
+   metric name `collect` does not handle
 6. Add it to the signals table in
    [Recommendation Pipeline](concepts/recommendation-pipeline.md#signals) and
    describe its stage there
 
 ## Dashboard health signals
 
-Every dashboard view reads workload health — OOM kills in 24h, Blocked, stale
-and total pods, whether an autoscaler is present — through one port,
-`HealthSignals` (`internal/dashboard/health.go`), keyed by identity. Its
-Prometheus adapter (`health_prometheus.go`) holds the only health PromQL;
-tests use the in-memory `memHealthSignals` instead of faking query text. The
-Risk state is classified in exactly one place, `riskStateOf`, and returned in
-every payload (`riskState`); the SPA renders it and never derives its own.
-Conflicted, the top of the precedence, is the one input that does not come
-from the port: views set `identityHealth.Conflicted` from the inventory before
-classifying.
+Every dashboard view — the Overview, both workload lists and the detail page —
+is a view of one **board** (`internal/dashboard/board.go`): `Server.board`
+takes inventory identities, reads their health — OOM kills in 24h, Blocked,
+stale and total pods, whether an autoscaler is present — in one batch through
+the `HealthSignals` port (`internal/dashboard/health.go`), sets Conflicted
+from the inventory, and returns one status per identity: its health, its Risk
+state and the coordination factors of its stored trace. The port's Prometheus
+adapter (`health_prometheus.go`) holds the only health PromQL; tests use the
+in-memory `memHealthSignals` instead of faking query text. The Risk state is
+classified in exactly one place, `riskStateOf`, called only by the board, and
+returned in every payload (`riskState`); the SPA renders it and never derives
+its own state or count.
 
-Every list and detail endpoint builds its identities from `internal/inventory`
-(`Server.identities` / `Server.identity`), so a row, a detail page and the
-controller agree on members, containers, age, Departed and the governing
-Policy. The detail page shows the Recommendation stored in the identity's
-`WorkloadRecommendation`, its `status.outcome` and its `status.trace`; only the
-Simulator recomputes. Coordination factors are not a health signal: list rows
-and the detail page read them from the stored trace (`coordinationFactorsOf`).
+The Overview (`/api/summary`) and the Workloads list (`/api/workloads`) read
+the board of the same identities (`Server.clusterIdentities`: every kind,
+`--excluded-namespaces` applied), so every Overview count equals that list
+filtered by the same Risk state: a Prometheus series for an identity the
+inventory does not hold (deleted, never inventoried) counts nowhere. The
+Overview's Risk-state and Coordinated KPIs, its attention lists (the worst ten
+per state, with each state's true total) and its per-Policy Blocked counts all
+come from that one board. Its inventory read happens inside the summary
+recompute, so it is cached and single-flighted with the rest of
+`/api/summary`. The Policies pages still read their Blocked counts from the
+controller's `k8s_sustain_policy_blocked_count`.
 
-The port works because the controller emits every health metric under the
-identity's labels: `internal/controller/identity_health.go` aggregates the
+Every endpoint builds its identities from `internal/inventory`
+(`Server.identities` / `Server.identity`), so a row, a detail page, an Overview
+count and the controller agree on members, containers, age, Departed and the
+governing Policy. The detail page shows the Recommendation stored in the
+identity's `WorkloadRecommendation`, its `status.outcome` and its
+`status.trace`; only the Simulator recomputes. Coordination factors are not a
+health signal: the board reads them from the coordination stage of the stored
+trace (`coordinationFactorsOf`, through `recommender.TracedCoordination`).
+
+The port works because the controller publishes every health metric under
+the identity's labels: `internal/controller/identity_health.go` aggregates the
 apply outcomes of an identity's members (pod counts summed, Blocked if any
-member is) and deletes the series of identities no policy targets any more.
-A new health signal therefore needs both halves: an identity-keyed metric in
-the controller and a field on `identityHealth` filled by the adapter.
+member is), and the [series publisher](#metric-series) deletes the series of
+identities no Policy includes any more. A new health signal therefore needs
+both halves: an identity series in the controller's publication and a field
+on `identityHealth` filled by the adapter.
+
+## Dashboard Simulations
+
+A Simulation (`runSimulation` in `internal/dashboard/simulate.go`) is the
+controller's computation of one identity under what-if settings. It reads the
+identity from the inventory (one it does not hold is simulated from what
+Prometheus reports), starts from the settings of its governing Policy or of
+the Policy the request names (`simulationSettings`: `resourcesConfigs`,
+`autoscalerCoordination`, `excludeInitContainers`), merges the request's
+`override` onto them as a JSON merge patch, and hands the result to the same
+[assembly](#the-request-assembly) the controller uses. Without an override it
+is the controller's Request, the live OOM kills aside: the dashboard's inputs
+port is undecorated. It returns the effective settings (`Request.Resources`,
+every default explicit), the outcome and the trace, so the Simulator shows
+the Policy's values and the recommender's defaults without holding either.
+
+`TestSimulationRecommendsWhatTheControllerStores` holds that parity end to
+end. It lives in `internal/controller` as the external `controller_test`
+package, which can import the dashboard and reach `Reconcile` through
+`ReconcilerForTest` (`export_test.go`): from one fake cluster, one
+`StaticInputs` and one fake clock (`PolicyReconciler.Clock`, `Server.Clock`)
+at an instant far from the wall clock, it runs a reconcile, then
+`POST /api/simulate` and `GET /api/policies/{name}/batch-simulate` through
+`Server.Handler`, and compares their Recommendation, outcome and trace with
+the stored `WorkloadRecommendation`'s, for an owner-name group coordinated
+against one member's HPA and for an identity Too young at that instant, with
+init containers excluded and not. It also compares every fetch the dashboard
+made with the controller's: the settings (windows, percentiles, every default
+explicit) and each identity's container count. A change to how either side
+builds the identity, picks the spec or dates the computation fails it.
+
+The override is validated once, on the server, after the merge
+(`simulationSettings.violations`, `simulation_settings.go`): it is rejected
+for a rule the merged settings break that the starting Policy did not already
+break, since a Policy admitted before the CRD gained a rule is still what the
+controller computes with. The rules are a copy of the CRD's markers in
+`api/v1alpha1`; `TestOverrideRulesCoverTheCRD` walks the generated CRD and
+fails for a rule (a minimum, maximum, pattern, quantity or CEL message on
+these settings) that no case of `TestOverrideRejectsWhatTheCRDRejects` breaks,
+and for any schema keyword it cannot read, so a rule added to the API types
+needs its copy here.
+
+Batch simulate is a Simulation of every live identity a Policy governs with no
+override, in one assembly: it reports each identity's outcome, and counts only
+`Computed` ones toward the savings, against the requests their containers run
+with.
 
 ## Dashboard frontend
 
@@ -402,13 +513,35 @@ cd internal/dashboard/ui/frontend
 npm install
 npm run dev        # Vite dev server on http://localhost:5173
 npm run test       # vitest
-npm run typecheck  # vue-tsc --noEmit
+npm run typecheck  # vue-tsc -b --noEmit (follows the tsconfig project references)
 npm run lint       # eslint src/
 ```
 
 The dev server proxies `/api` and `/healthz` to `localhost:8090`: run the
 backend with `go run main.go dashboard --bind-address=:8090`, or port-forward
 the in-cluster dashboard Service to `:8090`.
+
+### Domain vocabulary
+
+The SPA renders what the backend decided and holds each domain vocabulary in
+one module under `src/lib/`; views and components import from it and never
+spell a label, class or link of their own:
+
+- **`risk.ts`** — every Risk state's label, badge class and link to the
+  Workloads list filtered to it, in the backend's precedence; the non-Safe
+  states (`attentionStateMeta`) add what puts an identity there and the tone
+  of a non-zero count. The state itself always comes from the payload's
+  `riskState` and the counts from the payload: the SPA never derives either.
+- **`outcomes.ts`** — the label of each `status.outcome` a
+  `WorkloadRecommendation` or a Simulation reports (`outcomeLabel`).
+- **`limits.ts`** — the limit strategies in the recommender's precedence:
+  each one's label, help per resource, and the label the trace table gives the
+  stage it runs as; `limitModeOf` reads a Policy's strategy and `limitsPatch`
+  writes one as a merge patch.
+- **`patch.ts`** — typed key paths into settings and JSON merge patches:
+  reading a value at a path, whether a patch names it, and setting it. The
+  Simulator edits its override and fills its form from the server's effective
+  settings only through these.
 
 ### Styling
 
@@ -545,55 +678,109 @@ Before touching `internal/prometheus/transport.go`:
   `values.yaml`, `values.schema.json`, and
   `charts/k8s-sustain/tests/prometheus-auth_test.yaml`.
 
+### Governance
+
+`internal/governance` decides, for one pod template or pod, the identity it reports into, the Policy it opts into and at which level, and the governing Policy or why there is none. Its interface is one call, `governance.Decide(ctx, subject, reader)`. A subject is a workload member's pod template (`PodTemplate`), a pod (`Pod`: the webhook's, the OOM watcher's, the inventory's bare pods) or a Departed identity (`Departed`, governed by the Policy its `WorkloadRecommendation` names; it has no labels to match, so its namespace is checked and its Policy's selector must parse, as for a live member). The identity is a `promclient.WorkloadIdentity`, the key the inventory, the OOM cache, the WorkloadRecommendation and the recording rules all use, and a governing decision carries the mode the Policy manages the identity's kind in. The `Reader` port supplies what the subject does not carry: the Policies (a `governance.Policies`: every Policy with its label selector compiled, and the excluded namespaces), a pod's owner, a workload's own annotations and a Namespace's. Each caller adapts it to its own reads: the inventory serves the Policies it listed and memoised Namespaces, the webhook lists Policies from its informer cache and reads the owner chain through its TTL caches, the OOM watcher reads through the manager's client and falls back to a pod's immediate controller when the owner lookup fails. All three list Policies through `governance.PolicyLister`, which compiles a Policy's selector once per version of it (UID and resourceVersion), and every caller keeps one lister for the process, so an unchanged Policy set is never recompiled: the webhook and the OOM watcher, which list on every admission and every kill, and the controller and the dashboard, which hand theirs to every snapshot they take (`inventory.Options.Policies`, `TakeForPolicy`). The lister lists without deep copies (`client.UnsafeDisableDeepCopy`), so a Policy it returns shares its fields with the informer cache's object and with concurrent decisions: governance and every caller of `Decide` treat it as read-only.
+
+Behind it: the opt-in walk (pod template, then workload, then Namespace; an opt-out or a non-empty policy decides, an empty value falls through), each level read only when every more specific one is silent and a pod's owner only when the walk needs it; the pre-gate, which before the first read checks that some Policy accepts the subject's namespace and labels by the same rule as the full decision (a Policy whose selector does not parse counts as accepting, so opting into it is refused `selector-invalid` at every level rather than `no-policy-selects` at some); the Policy's consent (it exists, the namespace is neither excluded nor unselected, the label selector is valid and matches the pod template's labels, the kind is managed); and the owner-name override, applied there and nowhere else.
+
+A governance rule changes in this module and its contract table (`internal/governance/governance_test.go`, a map-backed reader that records its reads), never in a caller.
+
 ### Controller
 
 #### Identity inventory
 
-`internal/inventory` is the one place workload objects become identities. Its interface is one call, `inventory.Take(ctx, reader, Options)`, returning a `Snapshot` of `Identity` values (key, live members each with the Policy governing it, union containers, `Since`, governing Policy or `Conflicted`, stored `WorkloadRecommendation`). Behind it: listing every kind in scope (a kind the cluster does not serve, such as Argo Rollouts without its CRD, has no identities rather than failing the snapshot), skipping CronJob-owned Jobs and finished standalone Jobs, owner-name and bare-pod grouping, the three-level opt-in walk (`policymatch.ResolvePolicy`, reading a Namespace only when an object's own annotations leave it undecided), each Policy's consent (`policymatch.Matches` plus the kind), the Conflicted rule, and attaching each stored `WorkloadRecommendation` (which is what makes a Departed identity).
+`internal/inventory` is the one place workload objects become identities. Its interface is one call, `inventory.Take(ctx, reader, Options)`, plus `inventory.TakeForPolicy(ctx, reader, policy, excludedNamespaces, lister)`, which narrows it to what a Policy can govern (its selector's namespaces and the kinds it manages, reading nothing for a Policy that manages none). Both return a `Snapshot` of `Identity` values (key, live members each with the Policy governing it, union containers, `Since`, governing Policy or `Conflicted`, stored `WorkloadRecommendation`). Behind it: listing every kind in scope (a kind the cluster does not serve, such as Argo Rollouts without its CRD, has no identities rather than failing the snapshot), skipping CronJob-owned Jobs and finished standalone Jobs, owner-name and bare-pod grouping, each member's [governance decision](#governance) (`governance.Decide` on its pod template, reading a Namespace only when the object's own annotations leave it undecided), the Conflicted rule, and attaching each stored `WorkloadRecommendation` (which is what makes a Departed identity).
 
-The controller takes one snapshot per reconcile through its informer cache, narrowed to the Policy's namespaces and managed kinds, and works on `Snapshot.GovernedBy(policy)`. Every member of an identity shares its namespace and kind, so the narrowing never splits one. The dashboard takes snapshots through its uncached client, narrowed to what each view shows: one namespace and kind for a detail page, the Policy's scope for its list, everything for `/api/workloads`.
+The controller takes one `TakeForPolicy` snapshot per reconcile through its informer cache and works on `Snapshot.GovernedBy(policy)`. Every member of an identity shares its namespace and kind, so the narrowing never splits one, and every identity in it has a kind the Policy manages. The dashboard takes snapshots through its uncached client, narrowed to what each view shows: one namespace and kind for a detail page, `TakeForPolicy` for a Policy's list, everything for `/api/workloads`.
 
 A new identity rule goes in the inventory and its contract tests (`internal/inventory/inventory_test.go`), never in a caller.
 
 #### Informer lag
 
-The controller's reads go through a watch-populated informer cache, so a `WorkloadRecommendation` that discovery created moments earlier in the same reconcile is often not yet visible, and nothing watches `WorkloadRecommendation` to re-trigger a reconcile when it becomes visible. The work-list is built from the snapshot's identities, not from the listed objects: a live identity whose object the cache cannot see yet is computed from its members' containers and dated by its earliest member, and its decision is recorded into the object `wlrcache.Ensure` returned, never into one re-read from the cache. Without that a freshly matched workload would wait a full `--reconcile-interval` before being computed.
+The controller's reads go through a watch-populated informer cache, so a `WorkloadRecommendation` that the pass's claim created moments earlier in the same reconcile is often not yet visible, and nothing watches `WorkloadRecommendation` to re-trigger a reconcile when it becomes visible. The work-list is built from the snapshot's identities, not from the listed objects: a live identity whose object the cache cannot see yet is computed from its members' containers and dated by its earliest member, and its decision is recorded into the object `wlrcache.Ensure` returned, never into one re-read from the cache. Without that a freshly matched workload would wait a full `--reconcile-interval` before being computed.
 
 #### Per-identity computation under owner-name grouping
 
 The computation unit is the identity, not the workload object: a group of workloads sharing an owner-name produces exactly one computation and one write, against the union of the members' containers. Computing per member would give the single shared `WorkloadRecommendation` several competing answers, with the survivor decided by whichever member's goroutine finished last. Retry backoff is also per member: an identity is withheld from the fetch only when every member is backed off, so one failing member cannot deny its healthy siblings their inputs.
 
-#### Recommendation pass
+#### The Request assembly
 
-`Reconcile` runs inventory → discover → recommendation pass → persist → apply → rollup → sweep. The pass (`internal/controller/recommendation_pass.go`) gives every identity on the work-list exactly one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). It owns the three things that used to be spread across `Reconcile`:
+`recommender.Assemble(ctx, inputs, autoscalers, now, spec, identities)` is the one place an identity becomes what `recommender.Compute` takes, for the controller's pass, a [Simulation](#dashboard-simulations) and a batch simulation alike. In: a Policy's right-sizing spec, `inventory.Identity` values, the inputs port, an `Autoscalers` port (`autoscaler.NamespacedSnapshot`, which lists each namespace's HPAs and ScaledObjects once) and a clock. Out, per identity: its `Request`, the `autoscaler.Group` of its members, or the error that made its inputs unreadable. Behind it:
 
-- **The backoff split, taken once.** Backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out. The pass records which members to apply and which it skipped, and the apply step uses that split.
-- **The fetch.** One `InputsFetcher` call per policy; the pass never sees shards, retries or the fallback ([ADR 0001](adr/0001-single-identity-is-a-batch-of-one.md)).
-- **The computation.** `recommender.Compute` decides everything about one identity from its inputs, its live OOM records and its age (the inventory's `Since`): the age gate, then every container through the stages of every [signal](#adding-a-recommendation-signal). Its OOM floor signal merges the live records the controller reads from the OOM watcher's cache with the Prometheus window and is the one place that decides whether a kill is recent, for both the bypass of the age gate and the memory floor. The dashboard's simulations call the same function, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the value after every stage that ran; `persist` stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read it. Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new trace field.
+- the containers recommended (`ContainersOf`, where the controller and Simulations apply `excludeInitContainers`): the identity's, its init containers too unless the spec excludes them, which also sizes the fetch; an identity with no containers at all (one the inventory has not seen) is recommended for every container its inputs report;
+- the autoscaler: each member the identity's containers come from (`Identity.Contributors`) is looked up under its own name, and the first in name order that has one shapes the Recommendation (`ForIdentity`); a departed identity has none. The reads run while the inputs are fetched, each namespace's in order in a goroutine of its own, a few namespaces at once (`autoscalerReadConcurrency`), and the assembly waits for them before it returns. `NamespacedSnapshot` caches no failed read, so the assembly stops reading a namespace once a read of it failed: every identity of that namespace is recommended uncoordinated, at the cost of one failed read and one log line per namespace;
+- the spec's resources with every default explicit (`WithDefaults`: the window, the percentile and headroom unless the request is kept, `keepLimit` when no strategy is set), which the fetch and the computation both use and a Simulation returns as its effective settings;
+- one batch fetch, and one instant per batch read from `now` once it returns: kills the live decorator merged in never postdate it. The caller owns the clock: the controller passes `PolicyReconciler.Clock`, the one `start` also gives `WithLiveOOMs`, so the age gate and the live OOM window are judged by one clock; the dashboard passes `Server.Clock`. Nil is the wall clock on both, and a test fixes the instant with a fake one.
 
-The batch metrics are counted from the outcomes, not from the fetch's internals. `persist` records every outcome but "not fetched" with `wlrcache.Record`, departed or not, keeping the last Recommendation for every outcome but `Computed`. A live identity whose record failed — its object could not be ensured, or the write was rejected — keeps the error on its result (`identityResult.recordErr`), and `apply` skips its members that cycle, counting them as failed: the replacement pods of an eviction would read the old value. Departed identities have nothing to apply, so `persist` counts their failures itself.
+`Request` has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). `Request.RequestAt` is the request a Request computes for one of its containers had its usage percentile of one resource been a given value, every other signal as observed: a Simulation's recommendation chart computes each past percentile point with it (`recommendationSeries`), so a point costs one resource of one container, and the dashboard never maps a resource to its fields itself.
 
-A Conflicted identity never enters the pass ([ADR 0002](adr/0002-conflicted-identity-freezes-its-recommendation.md)). Each Policy party to the conflict records `status.outcome: Conflicted` (`recordConflicted`) and nothing else; `wlrcache.Ensure`, which rewrites `spec.policy`, is only ever called by the governing Policy, which is what stops two Policies flipping one object between them.
+#### The Policy pass
+
+`Reconcile` reads the Policy, handles deletion and the finalizer, takes the `inventory.TakeForPolicy` snapshot, and runs one pass over it (`runPass` in `internal/controller/pass.go`). Everything after the pass consumes the **report** it returns, one entry per identity on the work-list (its key, whether it is departed, whether it was fetched and, if so, its outcome, whether its fetch resolved, whether a departed identity failed, one `applyResult` per live member, the Recommendation a live identity holds for the Policy after the pass, and what computing it found: its autoscaler, whether its members disagree on it, and the containers the OOM floor determined): `settle` hands the member results to the [ledger](#apply-results-and-the-ledger) and returns how many identities failed and, per identity, how many members, the health tracker aggregates each live identity's health from the ledger, the [series publisher](#metric-series) publishes what the report, the health and those counts describe, the sweep runs, `passCondition` derives the `Ready` condition from those counts, and the ledger schedules the requeue. The pass keeps no state between passes, and no step reads another's struct fields: each takes what it needs from the earlier steps' return values, in the order the pass calls them.
+
+- **Work-list.** The identities the Policy governs, taken from the inventory as they are: a departed one's containers come from its stored snapshot, and one without a snapshot is on it but not fetched (counted as `no-snapshot` in `wlr_refresh_total`), so it keeps its series, as every departed identity does, until its `WorkloadRecommendation` is swept. Each live member is a `workloadTarget` (`targetsOf`; a bare-pod identity's governed pods form one), and the [ledger](#apply-results-and-the-ledger) is asked once, before the fetch, which members may run: backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out.
+- **Claim.** `wlrcache.Ensure` for every live identity, with its members' container union as the observed snapshot. It returns the object each decision is recorded into: the one `Ensure` wrote, or the one the inventory read for a departed identity. A failed claim is logged and kept for that identity alone.
+- **Recommend** (`recommendation_pass.go`). One [assembly](#the-request-assembly) of every identity not wholly in backoff, under the Policy's right-sizing spec: one `InputsFetcher` call per policy, so the pass never sees shards, retries or the fallback. The controller's fetcher is `PromInputs` decorated by `recommender.WithLiveOOMs`, which merges the kills the OOM watcher's cache holds into each identity's OOM inputs after the fetch; the dashboard uses the undecorated port. Then `computeIdentity` per fetched identity, in parallel: it keeps, for the [series publisher](#metric-series), the autoscaler the assembly's `autoscaler.Group` shaped the identity with and whether the group's members disagree on theirs, and `recommender.Compute` decides everything about one identity from its Request: the age gate, then every container through the chain of stages of every [signal](#adding-a-recommendation-signal). The OOM floor signal is the one place that decides whether a kill is recent, for both its answer to the age gate and the memory floor; the decorator decides whether a live record is still within `LiveOOMWindow`. The dashboard's simulations assemble and compute the same way, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the list of stages that ran on the request and the limit; the record stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read its OOM floor stage (`recommender.TracedOOMFloor`). Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new stage or fact. Every identity leaves with one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). Each but the last is the `status.outcome` the record stores; `recommender.Outcome.Recorded` names a computed one that way, for the controller and the dashboard's Simulations alike.
+- **Record.** `wlrcache.Record` of every outcome but "not fetched", into the object the claim returned, before anything is applied, so the webhook serves the new value by the time a replacement pod is admitted. It keeps the last Recommendation for every outcome but `Computed`, and marks a departed identity departed. Because the record takes the claim's object as an argument, it cannot record into a copy read before the claim, which would attribute an adopting Policy's numbers to the previous one.
+- **Apply** (`workload_reconcile.go`). One task per live member not in backoff. A live identity whose decision could not be stored — its claim failed, or the record was rejected — is not applied that cycle, and each of its members fails on the `store` step: the replacement pods of an eviction would read the old value. That is the one count the failure gets.
+
+The batch metrics are counted from the report's outcomes, not from the fetch's internals. A departed identity has nothing to apply: its report entry carries its failure (a failed fetch or record), which `settle` counts.
+
+A Conflicted identity never enters the pass's work-list. Each Policy party to the conflict records `status.outcome: Conflicted` (`recordConflicted`, the first thing the pass does) and nothing else; `wlrcache.Ensure`, which rewrites `spec.policy`, is only ever called by the governing Policy, which is what stops two Policies flipping one object between them.
+
+Tests drive `Reconcile` end to end with CRD-valid Policies (their kinds' update modes set) and members with UIDs, as the inventory and the patcher need; only the ledger and `settle` are fed hand-built results.
 
 #### Applying to a member
 
-The apply step is one call per member: `Patcher.Apply(ctx, member, recs, settings)` in `internal/workload/apply.go`. In: the member (its kind and object, or for a bare-pod identity the governed pods the inventory holds, each its own member object), the Recommendation narrowed to the containers the member declares, and the Policy's settings (a dry run for `OnCreate`, the downsize tolerance, the `safe-to-evict` override). Out: an `Outcome` with the pods changed, the pod counts (set whenever the pass succeeds), the decreases the tolerance withheld per resource, and whether the kind is in-place-only.
+The apply step is one call per member: `Patcher.Apply(ctx, member, recs, settings)` in `internal/workload/apply.go`. In: the member (its kind and object, or for a bare-pod identity the governed pods the inventory holds, each its own member object), the Recommendation narrowed to the containers the member declares (by [container injection](#container-injection)), and the Policy's settings (a dry run for `OnCreate`, the downsize tolerance, the `safe-to-evict` override). Out: an `Outcome` with the pods changed, the pod counts (set whenever the pass succeeds), the decreases the tolerance withheld per resource, and whether the kind is in-place-only.
 
-Behind it, one rule per kind (`applyRules`) says where a member's pods come from and whether they may be evicted: the selector plus the ownerRef UID for Deployment, StatefulSet, DaemonSet and Rollout; the active Jobs, then each Job's `batch.kubernetes.io/job-name` label plus its UID for a CronJob; the label plus the UID for a Job; the inventory's pods for a bare-pod identity. CronJob, Job and bare `Pod` are in-place-only. Everything else is the patcher's: the ownership check, StatefulSet ordering, the choice between an in-place resize and an eviction, the replacement wait and the crash-loop halt, the in-place → eviction fallback, the dry run and the counts. A member without a UID, a workload without a selector or a kind without a rule is refused with an error, never applied to every labelled pod or, silently, to none.
+Behind it, one rule per kind (`applyRules`) says where a member's pods come from and whether they may be evicted: the selector plus the ownerRef UID for Deployment, StatefulSet, DaemonSet and Rollout; the active Jobs, then each Job's `batch.kubernetes.io/job-name` label plus its UID for a CronJob; the label plus the UID for a Job; the inventory's pods for a bare-pod identity. CronJob, Job and bare `Pod` are in-place-only. Everything else is the patcher's: the ownership check, StatefulSet ordering, the choice between an in-place resize and an eviction, the replacement wait and the crash-loop halt, the in-place → eviction fallback, the dry run and the counts. A member without a UID, a workload without a valid selector or a kind without a rule is refused with an error wrapping `workload.ErrRefused`, never applied to every labelled pod or, silently, to none; the ledger classifies a refusal as permanent.
 
-The controller keeps what is policy rather than mechanism: the gates (shutdown, fetch failure, nothing to apply, recommend-only), retry and backoff (a failed `OnCreate` dry run counts as success), events, health counts and metrics. The `Outcome`'s kind family picks the failed step a Blocked identity reports (`patch` for kinds that evict, `resize` for in-place-only ones) and the `ResourcesUpdated` event's text.
+The controller keeps what is policy rather than mechanism: the gates (shutdown, fetch failure, nothing to apply, recommend-only), the result of each member, events and metrics. The `Outcome`'s kind family picks the failed step a Blocked identity reports (`patch` for kinds that evict, `resize` for in-place-only ones) and the `ResourcesUpdated` event's text.
+
+#### Apply results and the ledger
+
+The apply step keeps no retry or health state. It returns exactly one `applyResult` per live member (`workload_reconcile.go`): applied (with its pod counts), nothing to apply (no Recommendation for its containers, or recommend-only), uncounted (a failed `OnCreate` count, which is not a failure: backing it off would leave the identity unfetched and freeze the Recommendation the webhook reads), skipped (retry backoff, or shutdown), or failed on a step (`prometheus`, `patch`, `resize`, or `store` for a member withheld because its Recommendation could not be stored).
+
+`settle` records every result of the pass's report in the `ledger` (`internal/controller/ledger.go`), the one place a verdict is taken. Per member, keyed by kind, namespace and name, it answers whether the member may run this pass, whether it is Blocked and on which step, its last measured pod counts, the Warning to emit, and when the next retry is due:
+
+- A failure is shutdown, and records nothing, only when the reconcile's own context has ended. The pass decides it once, after the apply step, for live members and departed identities alike: a pass cut short by shutdown turns every failed member into a skipped one before the ledger sees it, and fails no departed identity. An error that merely wraps `context.DeadlineExceeded`, as a Prometheus call that ran out of its own timeout does, is a transient failure.
+- `permanentError` classifies the rest: an `Apply` refusal (`workload.ErrRefused`), or an API rejection other than 404, 409 and 429 anywhere in the error tree (one forbidden pod among several pod errors is enough), is permanent; everything else is transient. A 409 Conflict is an optimistic-concurrency loss the next attempt re-reads past, and a 404 an object deleted since it was read: a `WorkloadRecommendation` deleted between its claim and its record is re-created by the next claim.
+- A transient failure backs off (30s, doubling with each consecutive transient failure, to 5m) and emits `ReconciliationRetryScheduled` on every attempt, naming the attempt and when the retry is due. A permanent one never backs off and does not grow the backoff: a transient failure after it waits 30s again, so a fixed cause is picked up at the next pass, and emits `ReconciliationFailed` only when the member enters it.
+- Every failure counts toward the pass's failures and leaves the member Blocked until a later result other than skipped clears it.
+- `Reconcile` requeues at the reconcile interval or at the earliest due retry of the live members the pass reported, whichever comes first, so the time a retry event names is a time a pass runs. A pass that failed to list its workloads (`ListFailed`) has no report: it reads the live members of the Policy's last pass from the health tracker, and requeues no sooner than the base retry delay (30s), since a retry already due cannot run until a pass lists again. Its `Ready` condition is False while an identity failed this pass or any of its identities is Blocked, so a pass that skipped a backed-off member never reports every workload processed. Its counts are of identities: one with any member failed counts once. The `For(&Policy{})` watch passes only generation changes, so the controller's own status write does not start a pass.
+
+The ledger takes an injected clock (`k8s.io/utils/clock`), so tests drive backoff with a fake clock instead of sleeping. Departed identities have no members and never reach it: the pass decides once whether a departed identity failed (its fetch or its record did, and the pass was not cut short by shutdown), and both `settle`'s count and its `wlr_refresh_total` outcome read that one field of its report entry, so `error` is exactly a departed identity `settle` counts as failed.
+
+#### Container injection
+
+`workload.Inject(containers, initContainers, excludeInit, recs)` (`internal/workload/inject.go`) is the one place a Recommendation meets a container list, for the controller, the patcher and the webhook. It narrows the Recommendation to the containers declared (init containers too unless `excludeInit`; a name declared twice gets the one recommendation in both places) and returns, for each container whose resources change, what to set and where. It guarantees requests ≤ limits on what is finally written: when the request a container ends up with exceeds the limit it ends up with, the limit is raised to the request and named in `RaisedLimits`, which `ContainerWrite.LogRaisedLimits` logs at debug for the patcher and the webhook alike. That covers a recommended request above a running limit the recommendation keeps, and a request decrease the downsize tolerance withholds while letting the limit's through. `ContainerMatches` is defined as "applying changes nothing", so the patcher's staleness count and the controller's diff agree with what a resize would write and never chase a limit the guard raises back.
+
+The controller narrows a member's Recommendation with it; the patcher writes an in-place resize from its writes (sidecar init containers only, a classic one having exited); the webhook's responder turns its writes into the JSON patch. The Policy's `excludeInitContainers` is applied to the identity by the [assembly](#the-request-assembly), so a Recommendation the controller computes never names an excluded init container and the controller narrows with `excludeInit` false; only the webhook still passes the Policy's flag, for a stored Recommendation computed before the Policy excluded them.
 
 #### Owner-name group: merge order and write cost
 
-For an owner-name group, the union snapshot in `status.observedResources` is built from the governed members' containers. Where several members declare the same container name with different requests/limits, the newest member's entry is kept whole (ties broken by name), rather than mixing one member's request with another's limit: an older member's spec may predate a change the newer ones already run. The recommendation is computed against that union, using the autoscaler of the first member in `kind/namespace/name` order that has one, and treating the identity as being as old as its oldest member or its `WorkloadRecommendation`, whichever is older.
+For an owner-name group, the union snapshot in `status.observedResources` is built from the governed members' containers. Where several members declare the same container name with different requests/limits, the newest member's entry is kept whole (ties broken by name), rather than mixing one member's request with another's limit: an older member's spec may predate a change the newer ones already run. The recommendation is computed against that union, using the autoscaler of the first member, in name order, that has one (`autoscaler.Group`), and treating the identity as being as old as its oldest member or its `WorkloadRecommendation`, whichever is older.
 
-Every choice is decided by the members' names, creation times or an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. Discovery (`wlrcache.Ensure`) is the only controller writer of `status.observedResources`, from that union computed once per identity by the inventory, and the record never touches it, so a group whose members and metrics are unchanged costs no status write on subsequent reconciles.
+Every choice is decided by the members' names, creation times or an aggregate over all of them, so the stored snapshot and recommendation do not depend on the order the API server lists members in, nor on which member's work finishes first. The pass's claim (`wlrcache.Ensure`) is the only controller writer of `status.observedResources`, from that union computed once per identity by the inventory, and the record never touches it, so a group whose members and metrics are unchanged costs no status write on subsequent reconciles.
 
 A bare-pod identity's governed pods form one apply target (`targetsOf`), attributed to the newest pod for events; its pods are resized together and never evicted.
 
-#### Identity health series
+#### Identity health
 
-The health series (`k8s_sustain_workload_pods`, `…_stale_pods`, `…_retry_state`, `…_retry_attempts`) are per identity, aggregated over its members by `healthTracker`. A Conflicted identity is governed by no Policy, so no Policy observes it and its series are deleted on the next reconcile of the Policy that last governed it; the dashboard shows its Conflicted state from the inventory instead.
+An identity's health (its pod counts and the step it is Blocked on) is aggregated by `healthTracker` (`identity_health.go`) from the ledger's state of each of its members, once per pass from the report's live members, and unioned across Policies so an identity moving between two keeps one aggregate while both claim it. It also tells the ledger to forget a member once no Policy claims it. A Conflicted identity is governed by no Policy, so no Policy reports it; the dashboard shows its Conflicted state from the inventory instead.
+
+#### Metric series
+
+The series publisher (`publisher.go`) is the only code that writes or deletes the controller's per-Policy, per-identity and per-member series. `metrics.go` declares the vectors, and writes only the two series no Policy or identity owns, which nothing deletes: `k8s_sustain_oom_cache_entries` (`SetOOMCacheEntries`, the OOM cache's size observer) and `k8s_sustain_wlr_refresh_total`, labelled by namespace and kind only (`EmitWLRRefresh`, counted from each departed identity's report entry). Each pass hands it a `publication` built from the report (`passReport.publication`): the Policy's rollup and fetch coverage, and per identity its health, what computing it found, its failed members, whether it was Too young, and per live member the Recommendation it holds narrowed to its containers. Outside a pass, `Reconcile` reports each reconcile's result and duration, and the OOM watcher's handler reports each kill (`PolicyReconciler.ObserveOOM`) under the Policy it found governing the pod. `ObserveOOM` also triggers a pass of that Policy, waiting for room in the trigger channel rather than dropping the trigger: that pass is what forgets a Policy deleted by the time its kill is counted.
+
+The publisher remembers every series it wrote, by owner, and deletes exactly those that nothing desires any more, so there is no hand-kept list of vectors to delete:
+
+- A Policy owns its own series and its members' (`policy` label). Each publication replaces the gauges of the last one; `forget` deletes them all, on the Policy's deletion branch and at every reconcile that finds the Policy gone (its finalizer removed by hand, or a kill counted after it was forgotten).
+- An identity owns the series without a `policy` label. They live while the last publication of some Policy included the identity, live or departed: its gauges are replaced by every publication that includes it, its counters accumulate, and all go once no Policy includes it, which resets the counters if it comes back. The publisher does not tell a move from a departure: an identity moving between Policies keeps its series only when the new Policy publishes first, and in the other order its counters reset and its gauges come back with the new Policy's publication. A kill `ObserveOOM` counts makes its Policy include the identity until that Policy's next publication, so a pass already in flight that leaves the identity out drops the kill. The autoscaler gauges are the exception to replacement: an identity the pass did not compute keeps the ones its last computation set. They are the autoscaler the assembly found, departed identities included, which it finds none for: nothing else in the controller special-cases a departed identity's autoscaler.
+
+A member's Recommendation series show what the identity holds for the Policy (`wlrcache.Held` when the pass recorded nothing new), never only what the pass computed, so a fetch failure or a backoff does not drop them. They are narrowed to the containers the Policy recommends of the identity (`recommender.ContainersOf`, where `excludeInitContainers` is applied), so a Recommendation kept from before the Policy excluded init containers does not show them. A new controller series is a field of the publication and a line in `publish`.
 
 ### OOM watcher
 
@@ -614,19 +801,27 @@ The watcher's event predicate is local (no apiserver calls): a pod is queued whe
 
 ### Webhook
 
+#### Admission decision
+
+`admit` (`internal/webhook/handler.go`) is decode → decide → run effects → respond. `decide` (`decide.go`) works out what admitting a pod does from reads alone; its only writes are the owner caches those reads fill, from `singleflight` leaders that can outlive it. It covers the governance decision, the `WorkloadRecommendation` read and its verdict, and [container injection](#container-injection). The 4s `admissionTimeout` is split by where the reads go (`handler.go`): only governance's owner chain reaches the apiserver, so governance gets 3s (`governanceTimeout`), and the `WorkloadRecommendation` read, an informer-cache read, keeps a 1s reserve (`recommendationReadTimeout`) that a slow owner Get cannot eat into. It returns an `admission`: the reason (one of a closed set: a `governance.Refusal`, the `source` label of a verdict that injects nothing, `no-container-matches`, `recommend-only`, `at-recommendation`, `injected`, `governance-failed`, `recommendation-unreadable`, `panic`, `undecodable`), the identity, the Policy and the mode it manages the kind in, the `source` label `admit` counts on `k8s_sustain_webhook_recommendation_source_total` and the read's verdict, the container writes to inject, and the one effect it can call for, a stub request. `admit` logs it once (`logAdmission`), with the reason, the opt-in and its level, the identity, the mode and the verdict, and the pod's container counts when nothing matches. A panic anywhere after decode (deciding, the stub claim, counting or logging) is recovered into the `panic` reason, counted under `admit`, and responded to like any other admission.
+
+`respond` is the only constructor of an admission response and always allows the pod. It patches only an injected admission, and only the resources of the containers it writes: the webhook writes nothing else to a pod. The `k8s.sustain.io/owner-name` annotation is read where the user set it, by `governance.Decide` and by the recording rules through kube-state-metrics' `kube_pod_annotations`, so nothing depends on the webhook having admitted a pod. The stub request runs on a detached goroutine that recovers its own panics (`stub/request`), since nothing above it would.
+
+A test asserts why a pod went unmutated through the reason: `TestDecide` (`decide_test.go`) is one table keyed on it, with the stub effect and the writes as columns; `TestAdmitPatchesOnlyTheResourcesItInjects` asserts an admission patches nothing else, governed or not.
+
 #### Informer cache and shutdown ordering
 
 The webhook serves `Policy`, `WorkloadRecommendation` and `Namespace` reads from an informer cache (`k8s.NewCached`); budget roughly 20–50 MB resident at 10k workloads. Owner-chain kinds (`ReplicaSet`, `Job`, and the workload kinds read for workload-level opt-in) stay uncached: they are read at most once per pod CREATE, and a cluster-wide informer per kind would cost more memory than the Gets it saves.
 
-The three informers are registered and synced during startup, before the webhook receives traffic. Registering them lazily would push a blocking cluster-wide LIST into the first admission's 2s per-call timeout, so on large clusters the first pods after every restart would fail open. Startup is all-or-nothing: if it fails (most often because the CRDs are not yet established on a fresh install, which `k8s.NewCached` waits up to two minutes for), the informers already started are stopped before the error is returned, so a crash-looping webhook does not leak a cache per attempt. The cache lives on a run context kept alive past SIGTERM so draining admissions still read fresh data.
+The three informers are registered and synced during startup, before the webhook receives traffic. Registering them lazily would push a blocking cluster-wide LIST into the first admission's budget for that read, so on large clusters the first pods after every restart would fail open. Startup is all-or-nothing: if it fails (most often because the CRDs are not yet established on a fresh install, which `k8s.NewCached` waits up to two minutes for), the informers already started are stopped before the error is returned, so a crash-looping webhook does not leak a cache per attempt. The cache lives on a run context kept alive past SIGTERM so draining admissions still read fresh data.
 
 #### Owner-resolution cost and caching
 
-The webhook pre-gates the owner and Namespace reads of [policy resolution](reference/annotation.md#resolution-order) behind `anyPolicyCovers`: if no Policy's `selector` could claim a pod at all, it skips them entirely. This *is* the cost control for a cluster with at least one selector-scoped Policy — most pod creates in most namespaces are skipped before any extra read.
+The [governance decision](#governance) pre-gates the owner and Namespace reads of [policy resolution](reference/annotation.md#resolution-order): if no Policy's `selector` could claim a pod at all, it skips them entirely. This *is* the cost control for a cluster with at least one selector-scoped Policy — most pod creates in most namespaces are skipped before any extra read.
 
-It does **not** bound cost on a cluster where a Policy has an empty `selector` (no `namespaces`, no `labelSelector`) — the default, and what [Quick Start](getting-started/quick-start.md) produces. Such a Policy covers every pod in the cluster, so the pre-gate always passes and every pod CREATE it admits pays for owner resolution: `resolveCachedPodOwner` (via a Deployment/Rollout pod's ReplicaSet, or a CronJob pod's Job) does one Get to find the top-level owner. This Get is not scoped to the multi-level opt-in chain — `admit()` needs the same top-level owner to look up the `WorkloadRecommendation` for **every** pod it injects into, pod-template-annotated (the common case, since every existing user annotates the pod template) or not. A pod with no annotation of its own additionally goes through the opt-in chain (`resolveOptIn`), which needs a second Get — `ownerAnnotations`, of the resolved top-level object's own `metadata.annotations` — to evaluate the workload level; that second Get *is* scoped to unannotated pods, since an annotated pod's own annotation already decides the policy without ever reading its owner's. A rolling restart of a large Deployment therefore issues up to two owner Gets per replica in the worst case — not one.
+It does **not** bound cost on a cluster where a Policy has an empty `selector` (no `namespaces`, no `labelSelector`) — the default, and what [Quick Start](getting-started/quick-start.md) produces. Such a Policy covers every pod in the cluster, so the pre-gate always passes and every pod CREATE it admits pays for owner resolution: `resolveCachedPodOwner` (via a Deployment/Rollout pod's ReplicaSet, or a CronJob pod's Job) does one Get to find the top-level owner. This Get is not scoped to the opt-in walk — the decision needs the same top-level owner for the identity the admission decision looks the `WorkloadRecommendation` up by, for **every** pod it injects into, pod-template-annotated (the common case, since every existing user annotates the pod template) or not. A pod with no annotation of its own additionally reaches the walk's workload level, which needs a second Get — `ownerAnnotations`, of the resolved top-level object's own `metadata.annotations` — to evaluate the workload level; that second Get *is* scoped to unannotated pods, since an annotated pod's own annotation already decides the policy without ever reading its owner's. A rolling restart of a large Deployment therefore issues up to two owner Gets per replica in the worst case — not one.
 
-The webhook absorbs this with two small in-memory caches (`internal/webhook/ownercache.go`), both TTL ~30s and both consulted before their respective Get: `Handler.ownerRefCache`, keyed by the pod's own immediate controller ownerRef (`namespace/kind/name/UID` of its ReplicaSet or Job), bounds the first Get — shared by **every** pod CREATE that reaches owner resolution at all, whether it took the pod-template-annotated path or the multi-level opt-in chain; `Handler.ownerAnnCache`, keyed by `(namespace, kind, name)` of the resolved top-level object, bounds the second Get and is reached only via the multi-level opt-in chain. N pods created behind the same owner in a burst — exactly what a rolling restart produces — share both cache keys, so the pair collapses from up to 2N Gets to at most 2.
+The webhook absorbs this with two small in-memory caches (`internal/webhook/ownercache.go`), both TTL ~30s and both consulted before their respective Get: `Handler.ownerRefCache`, keyed by the pod's own immediate controller ownerRef (`namespace/kind/name/UID` of its ReplicaSet or Job), bounds the first Get — shared by **every** pod CREATE that reaches owner resolution at all, whether its pod template decided its opt-in or not; `Handler.ownerAnnCache`, keyed by `(namespace, kind, name)` of the resolved top-level object, bounds the second Get and is reached only from the workload level. N pods created behind the same owner in a burst — exactly what a rolling restart produces — share both cache keys, so the pair collapses from up to 2N Gets to at most 2.
 
 Both caches also collapse a *concurrent* cold-start burst, not just the steady-state (already-warm) case: N pods admitted at the same instant behind one owner — the exact shape of a rolling restart — issue one in-flight Get via [`golang.org/x/sync/singleflight`](https://pkg.go.dev/golang.org/x/sync/singleflight), with every other admission waiting on that Get's result instead of each starting its own. A waiter still respects its own admission deadline: if it times out before the in-flight Get returns, only that one admission gives up and fails open (with the pod resolved on template resources); the Get itself keeps running regardless, to completion or its own 2s `apiCallTimeout` budget (whichever comes first) — not just for as long as some other admission is still waiting on it, but also to populate the cache for the next burst even if every waiter has already given up.
 
@@ -640,13 +835,13 @@ A stub becomes visible to the webhook's informer only after the create and watch
 
 Stub goroutines outlive the admission that started them (up to 30s queued plus 5s for the write), so on shutdown SIGTERM cancels in-flight stub writes and the process waits, bounded, for them to unwind before stopping the informer cache they read through. An abandoned request is re-issued by the next admission for the same identity.
 
-Whether an admission requests anything is `wlrcache.ShouldRequest`: always when there is no object, and otherwise only to add to the snapshot of an object of the pod's Policy that is departed or has none, when the pod runs a container the snapshot lacks (existing entries are kept, so alternating container sets cannot churn it). A live identity's snapshot is discovery's union of every member, which one pod's view would only flip back and forth. A request that loses the create race to another writer does nothing more: the next admission reads the winner's object. Only the absent case creates a stub: an undecided, nodata or stale object already exists, and a create would be a guaranteed no-op.
+Whether an admission requests anything is `wlrcache.ShouldRequest`: always when there is no object, and otherwise only to add to the snapshot of an object of the pod's Policy that is departed or has none, when the pod runs a container the snapshot lacks (existing entries are kept, so alternating container sets cannot churn it). A live identity's snapshot is the union of every member's containers, written by the controller's claim, which one pod's view would only flip back and forth. A request that loses the create race to another writer does nothing more: the next admission reads the winner's object. Only the absent case creates a stub: an undecided, nodata or stale object already exists, and a create would be a guaranteed no-op.
 
 The `k8s.sustain.io/stub` label is provenance, not control flow. The controller's own write path must `Create` before it can patch status (the status subresource discards status supplied at create), so every controller-written recommendation is transiently empty-status too.
 
 #### Read verdict
 
-The webhook takes `wlrcache.Read`'s verdict on the object it read: a pure function of the object, the pod's resolved Policy and the time, returning one of a closed set (absent, undecided, nodata, withheld, stale, fresh, retained) mapped one-to-one onto the `source` label. It injects only when both `spec.policy` and `status.computedBy` are the pod's Policy ([ADR 0003](adr/0003-a-recommendation-is-served-only-to-its-policy.md)): that keeps a Conflicted identity's frozen numbers out of the other Policy's pods, and keeps an identity moving between Policies from receiving numbers computed under the old one until the new one computes its own. A Conflicted object is exempt from the staleness gate like a departed one, bounded by the same retention window.
+The webhook takes `wlrcache.Read`'s verdict on the object it read: a pure function of the object, the pod's resolved Policy and the time, returning one of a closed set (absent, undecided, nodata, withheld, stale, fresh, retained) mapped one-to-one onto the `source` label. It injects only when both `spec.policy` and `status.computedBy` are the pod's Policy: that keeps a Conflicted identity's frozen numbers out of the other Policy's pods, and keeps an identity moving between Policies from receiving numbers computed under the old one until the new one computes its own. A Conflicted object is exempt from the staleness gate like a departed one, bounded by the same retention window.
 
 #### Freshness constants
 
@@ -701,6 +896,7 @@ while the `values.yaml` side still passes.
 - `Record(ctx, client, known, Decision, now)` — the one status write per identity per cycle: the outcome, the Recommendation and trace for `Computed`, and the `departed` fact, into the object `Ensure` returned (or, for a departed or Conflicted identity, the one the inventory read). An unchanged decision costs no write, except the refresh of a `Computed` one's `observedAt` every `RefreshInterval`. A missing object is an error, never a silent no-op.
 - `Read(known, policy, now, Freshness)` — the [read verdict](#read-verdict).
 - `Expired(known, policy, Standing, now, retention)` — the sweep verdict: keep or delete, given where the identity stands in the reconcile's snapshot (governed, ungoverned, departed, Conflicted).
+- `Key(id)` and `WorkloadRef(id)` — the object key of an identity's `WorkloadRecommendation` and the `spec.workloadRef` that names it; the webhook reads by the one, and the controller's claim and the webhook's request name the identity by the other.
 
 Every writer runs against a cache-backed client, so nothing re-reads an object it just wrote: each write patches off the object the previous one returned, and a create that loses the race to another writer claims that writer's object with a patch, whose response carries it. The lifecycle suite (`internal/wlrcache/lifecycle_test.go`) runs every writer against a client whose cache lags behind every create.
 
@@ -709,7 +905,7 @@ Every writer runs against a cache-backed client, so nothing re-reads an object i
 Every cleanup path decides on a copy read from the informer cache, so every one deletes with `uid` + `resourceVersion` preconditions: the `uid` refuses a name reused by a delete-and-recreate, the `resourceVersion` an object rewritten since it was listed — typically re-labelled and re-pointed at another Policy that adopted it. What a conflict means differs:
 
 - **Per-cycle sweep** and **orphan reaper** leave the object alone and re-judge it on their next pass. A conflict is an expected outcome, not an error.
-- **Policy-deletion finalizer** returns any failure, conflicts included, so the finalizer stays on and the deletion is retried. The retry re-lists the Policy's objects by label: one another Policy adopted meanwhile (a GitOps rename) is no longer listed and survives ([ADR 0003](adr/0003-a-recommendation-is-served-only-to-its-policy.md)).
+- **Policy-deletion finalizer** returns any failure, conflicts included, so the finalizer stays on and the deletion is retried. The retry re-lists the Policy's objects by label: one another Policy adopted meanwhile (a GitOps rename) is no longer listed and survives.
 
 #### Freshness grace
 

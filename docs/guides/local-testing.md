@@ -369,10 +369,14 @@ Deployment's own name is never used for Prometheus queries or the
 
 **Expected:**
 
-- The pod is admitted with the webhook-mirrored label. Confirm:
+- Prometheus maps the pod to the override identity, read from its
+  annotation through `kube_pod_annotations`: every row has
+  `owner_kind="Deployment"` and `owner_name="renamed-app"`. Confirm
+  (`make port-forward` serves Prometheus on `:9090`):
 
   ```bash
-  kubectl get pods -n scenario-custom-name --show-labels | grep k8s.sustain.io/owner-name
+  curl -s localhost:9090/api/v1/query \
+    --data-urlencode 'query=k8s_sustain:pod_workload{namespace="scenario-custom-name"}'
   ```
 
 - The `WorkloadRecommendation` is named by the override identity
@@ -386,10 +390,10 @@ Deployment's own name is never used for Prometheus queries or the
 - After `WINDOW + reconcile_interval`, CPU request drops to ~`220m` and
   memory to ~`110Mi` (identical target to `steady`, since the load profile
   and `resourcesConfigs` match) — and the recommendation is only queryable
-  under the renamed identity:
+  under the renamed identity (`make port-forward` serves the dashboard on
+  `:8090`):
 
   ```bash
-  kubectl port-forward -n k8s-sustain svc/k8s-sustain-dashboard 8090:8090 &
   curl -s localhost:8090/api/workloads/scenario-custom-name/Deployment/renamed-app
   ```
 
@@ -402,7 +406,9 @@ annotations sit on the Pod itself, and the Policy sets
 
 **Expected:**
 
-- The pod carries the webhook-mirrored `k8s.sustain.io/owner-name` label.
+- Prometheus maps the pod to `owner_kind="Pod"`, `owner_name="etl-daily"`
+  in `k8s_sustain:pod_workload`, read from its annotation through
+  `kube_pod_annotations`.
 - After the 10-minute workload-age gate, the controller caches a
   `WorkloadRecommendation` (`pod-etl-daily`); a later pod with the same
   `owner-name` is injected from it at admission.
@@ -414,7 +420,8 @@ annotations sit on the Pod itself, and the Policy sets
   which resizes only from k8s 1.35.)
 
 ```bash
-kubectl get pod -n scenario-bare-pod etl-daily-run-1 --show-labels
+curl -s localhost:9090/api/v1/query \
+  --data-urlencode 'query=k8s_sustain:pod_workload{namespace="scenario-bare-pod"}'
 kubectl get pod -n scenario-bare-pod etl-daily-run-1 \
   -o jsonpath='{.metadata.uid}{" "}{.spec.containers[0].resources.requests}{"\n"}'
 kubectl get wlrec -n scenario-bare-pod pod-etl-daily -o yaml
@@ -437,14 +444,34 @@ container, Kubernetes restarts it, and the cycle repeats.
   i.e. ≥ ~115Mi before headroom.
 - `k8s_sustain_oom_floor_applied_total{owner_name="stress"}` increments on
   each reconcile while the OOM is within the 24 h window, and the
-  `WorkloadRecommendation`'s `status.trace.stress.memory.oomFloor` shows the
-  floor with `determined: true`.
+  `WorkloadRecommendation`'s `status.trace.stress.memory.request` holds an
+  `oomFloor` stage with the fact `determined: "true"`.
 
 ```bash
 kubectl get wlrec -n scenario-oom-kill deployment-stress -o yaml
 kubectl --raw \
   /api/v1/namespaces/k8s-sustain/services/k8s-sustain-metrics:8080/proxy/metrics \
   | grep 'k8s_sustain_oom_floor_applied_total'
+```
+
+### `oom-kill-keep-limit`
+
+The `oom-kill` workload under a Policy that keeps the memory limit
+(`keepLimit`), with a smaller burst: above the 96Mi limit, but below the limit
+raised after the first kill (about 133Mi), so the container stops being
+killed once the limit follows the request. The OOM floor lifts the memory
+request above the limit the container keeps, so the limit has to follow it.
+
+**Expected:**
+
+- The `WorkloadRecommendation` holds a memory limit equal to the memory
+  request, and `status.trace.stress.memory.limit` ends with a `guard` stage
+  after `keepLimit`.
+- The pod is resized (or replaced) with that limit instead of being rejected
+  for a request above its limit, and the OOM kills stop.
+
+```bash
+kubectl get wlrec -n scenario-oom-kill-keep-limit deployment-stress -o yaml
 ```
 
 ### `qos-change`

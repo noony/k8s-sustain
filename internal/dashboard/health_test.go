@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-logr/logr/testr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -26,16 +25,6 @@ func (m memHealthSignals) forIdentities(_ context.Context, ids []promclient.Work
 	out := map[promclient.WorkloadIdentity]identityHealth{}
 	for _, id := range ids {
 		if h, ok := m[id]; ok {
-			out[id] = h
-		}
-	}
-	return out, nil
-}
-
-func (m memHealthSignals) unhealthy(context.Context) (map[promclient.WorkloadIdentity]identityHealth, error) {
-	out := map[promclient.WorkloadIdentity]identityHealth{}
-	for id, h := range m {
-		if riskStateOf(h) != riskSafe {
 			out[id] = h
 		}
 	}
@@ -121,14 +110,6 @@ func TestPrometheusHealthSignalsFoldsSignalsPerIdentity(t *testing.T) {
 	w := got[web]
 	if w.OOM24h != 2 || w.Blocked != nil || w.AutoscalerPresent {
 		t.Errorf("web = %+v, want 2 OOMs, not blocked despite a retry counter, no autoscaler", w)
-	}
-
-	unhealthy, err := NewPrometheusHealthSignals(q).unhealthy(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(unhealthy) != 2 {
-		t.Errorf("unhealthy = %v, want api (blocked) and web (OOM)", unhealthy)
 	}
 }
 
@@ -217,114 +198,5 @@ func TestOwnerNameGroupShowsBlockedAndDrifted(t *testing.T) {
 		if state == riskBlocked && (got.Blocked == nil || got.Blocked.Reason != "patch" || got.Blocked.Attempts != 3) {
 			t.Errorf("detail %s blocked = %+v, want patch after 3 attempts", name, got.Blocked)
 		}
-	}
-}
-
-func TestAllWorkloadsRiskFilterUsesClassifiedState(t *testing.T) {
-	srv := ownerNameGroupServer(t, memHealthSignals{
-		identity("prod", "Deployment", "api"): {Blocked: &blockedSignal{Reason: "patch"}, OOM24h: 1},
-		identity("prod", "Deployment", "web"): {OOM24h: 2},
-	})
-	for risk, wantName := range map[string]string{"blocked": "api", "at-risk": "web"} {
-		rec := httptest.NewRecorder()
-		srv.handleAllWorkloads(rec, httptest.NewRequest(http.MethodGet, "/api/workloads?risk="+risk, nil))
-		var resp struct {
-			Items []struct {
-				Name string `json:"name"`
-			} `json:"items"`
-		}
-		decodeEnvelopeData(t, rec.Body, &resp)
-		if len(resp.Items) != 1 || resp.Items[0].Name != wantName {
-			t.Errorf("risk=%s: got %+v, want only %s", risk, resp.Items, wantName)
-		}
-	}
-}
-
-func summaryServer(t *testing.T, health memHealthSignals) *Server {
-	t.Helper()
-	return &Server{
-		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
-		PromClient: &fakePromClient{},
-		Health:     health,
-		Logger:     testr.New(t),
-	}
-}
-
-// The At risk KPI used to sum the controller's blocked count; it is the
-// identities whose Risk state is At risk, and Blocked is its own count.
-func TestSummaryKPIsCountIdentitiesByRiskState(t *testing.T) {
-	srv := summaryServer(t, memHealthSignals{
-		identity("shop", "Deployment", "checkout"): {OOM24h: 3},
-		identity("prod", "StatefulSet", "db"):      {OOM24h: 1, StalePods: 1},
-		identity("prod", "Deployment", "worker"):   {Blocked: &blockedSignal{Reason: "patch"}},
-		identity("prod", "Deployment", "api"):      {Blocked: &blockedSignal{Reason: "prometheus"}, OOM24h: 2},
-		identity("prod", "Deployment", "web"):      {StalePods: 2, TotalPods: 3},
-		identity("prod", "Deployment", "quiet"):    {TotalPods: 3},
-	})
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
-	var got summaryResponseV2
-	decodeEnvelopeData(t, rec.Body, &got)
-
-	if got.KPI.AtRiskCount != 2 {
-		t.Errorf("atRiskCount = %d, want 2 OOM identities (the blocked one with an OOM counts as Blocked)", got.KPI.AtRiskCount)
-	}
-	if got.KPI.BlockedCount != 2 {
-		t.Errorf("blockedCount = %d, want 2", got.KPI.BlockedCount)
-	}
-	if got.KPI.DriftedCount != 1 {
-		t.Errorf("driftedCount = %d, want 1 (stale pods behind an OOM count as At risk)", got.KPI.DriftedCount)
-	}
-}
-
-func TestSummaryAttentionQueueFilesEachIdentityUnderItsRiskState(t *testing.T) {
-	srv := summaryServer(t, memHealthSignals{
-		identity("shop", "Deployment", "checkout"): {OOM24h: 3},
-		identity("prod", "StatefulSet", "db"):      {OOM24h: 1},
-		identity("prod", "Deployment", "api"):      {Blocked: &blockedSignal{Reason: "prometheus", Attempts: 5}, OOM24h: 2},
-		identity("prod", "Deployment", "web"):      {StalePods: 2},
-	})
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
-	var got summaryResponseV2
-	decodeEnvelopeData(t, rec.Body, &got)
-
-	names := func(rows []attentionRow) []string {
-		out := []string{}
-		for _, r := range rows {
-			out = append(out, r.Namespace+"/"+r.Kind+"/"+r.Name)
-		}
-		return out
-	}
-	want := map[string][]string{
-		"risk":    {"shop/Deployment/checkout", "prod/StatefulSet/db"},
-		"blocked": {"prod/Deployment/api"},
-		"drift":   {"prod/Deployment/web"},
-	}
-	for group, w := range want {
-		if g := names(got.Attention[group]); strings.Join(g, ",") != strings.Join(w, ",") {
-			t.Errorf("attention[%s] = %v, want %v (worst first, one group per identity)", group, g, w)
-		}
-	}
-	if s := got.Attention["risk"][0].Signal; s != "OOM" {
-		t.Errorf("risk row signal = %q, want OOM", s)
-	}
-}
-
-func TestSummaryAttentionQueueIsCapped(t *testing.T) {
-	health := memHealthSignals{}
-	for i := range maxAttentionRows + 5 {
-		health[identity("prod", "Deployment", "w"+string(rune('a'+i)))] = identityHealth{StalePods: i + 1}
-	}
-	srv := summaryServer(t, health)
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/summary", nil))
-	var got summaryResponseV2
-	decodeEnvelopeData(t, rec.Body, &got)
-	if n := len(got.Attention["drift"]); n != maxAttentionRows {
-		t.Errorf("drift rows = %d, want the cap %d", n, maxAttentionRows)
-	}
-	if got.KPI.DriftedCount != maxAttentionRows+5 {
-		t.Errorf("driftedCount = %d, want every drifted identity, not just the listed ones", got.KPI.DriftedCount)
 	}
 }

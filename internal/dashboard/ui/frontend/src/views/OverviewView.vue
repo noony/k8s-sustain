@@ -1,14 +1,7 @@
 <script setup lang="ts">
 import { onMounted, computed, watch } from 'vue'
 import { useRowLink } from '../composables/useRowLink'
-import {
-  api,
-  type SummaryV2,
-  type TrendData,
-  type ActivityItem,
-  type WorkloadListData,
-  type WorkloadItemV2,
-} from '../lib/api'
+import { api, type SummaryV2, type TrendData, type ActivityItem } from '../lib/api'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useApi } from '../composables/useApi'
 import { useTimeRange } from '../composables/useTimeRange'
@@ -23,6 +16,7 @@ import LoadingState from '../components/LoadingState.vue'
 import ErrorState from '../components/ErrorState.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { formatBytes } from '../lib/format'
+import { attentionStateMeta } from '../lib/risk'
 import { rangeQueryParams, resolveRange } from '../lib/timerange'
 
 const { openRow } = useRowLink()
@@ -42,18 +36,10 @@ const trendWindow = computed(() => {
 const activity = useApi<{ items: ActivityItem[] }>(() =>
   api<{ items: ActivityItem[] }>('/api/summary/activity?limit=20'),
 )
-const workloads = useApi<WorkloadListData>(() =>
-  api<WorkloadListData>('/api/workloads?pageSize=200'),
-)
 
 async function loadAll() {
-  await Promise.all([summary.run(), trend.run(), activity.run(), workloads.run()])
+  await Promise.all([summary.run(), trend.run(), activity.run()])
 }
-
-const coordinatedCount = computed(() => {
-  const items = (workloads.data.value?.items ?? []) as WorkloadItemV2[]
-  return items.filter((w) => w.coordinationFactors?.enabled).length
-})
 
 useAutoRefresh(() => {
   // relative ranges re-anchor to now on each tick; absolute ranges are fixed
@@ -116,29 +102,17 @@ function memTrendSeries() {
         spark-color="#3fb950"
       />
       <KpiCard
-        label="Blocked"
-        :value="String(summary.data.value.kpi.blockedCount)"
-        :tone="summary.data.value.kpi.blockedCount > 0 ? 'danger' : 'neutral'"
-        detail="retry backoff"
-        to="/workloads?risk=blocked"
-      />
-      <KpiCard
-        label="At risk"
-        :value="String(summary.data.value.kpi.atRiskCount)"
-        :tone="summary.data.value.kpi.atRiskCount > 0 ? 'danger' : 'neutral'"
-        detail="OOM in 24h"
-        to="/workloads?risk=at-risk"
-      />
-      <KpiCard
-        label="Drifted"
-        :value="String(summary.data.value.kpi.driftedCount)"
-        :tone="summary.data.value.kpi.driftedCount > 0 ? 'warn' : 'neutral'"
-        detail="pods not on rec"
-        to="/workloads?risk=drifted"
+        v-for="m in attentionStateMeta"
+        :key="m.state"
+        :label="m.label"
+        :value="String(summary.data.value.attention[m.state].total)"
+        :tone="summary.data.value.attention[m.state].total > 0 ? m.tone : 'neutral'"
+        :detail="m.detail"
+        :to="m.workloadsLink"
       />
       <KpiCard
         label="Coordinated"
-        :value="String(coordinatedCount)"
+        :value="String(summary.data.value.kpi.coordinatedCount)"
         tone="neutral"
         detail="Autoscaler-aware"
       />

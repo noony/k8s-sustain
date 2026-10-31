@@ -42,8 +42,8 @@ A Policy can target every namespace, and `WorkloadRecommendation` is namespaced,
 ### Admission webhook
 
 - **Fails open.** `failurePolicy: Ignore` by default (`webhook.failurePolicy`): if the webhook is unreachable, errors or times out, the pod is admitted unmodified. Setting `Fail` makes pod creation in every covered namespace depend on the webhook's availability.
-- **Bounded latency.** The apiserver timeout is 5s; the handler enforces its own 4s deadline and 2s per API call.
-- **Narrow scope.** It fires only on Pod `CREATE`, has `sideEffects: None`, and only ever patches container resources and the `k8s.sustain.io/owner-name` pod label. The release namespace, `kube-system`, `kube-public` and `excludedNamespaces` are excluded by the `namespaceSelector`.
+- **Bounded latency.** The apiserver timeout is 5s; the handler enforces its own 4s deadline: 3s for the governance decision's reads, 2s per apiserver Get among them, and 1s for the `WorkloadRecommendation` read from its informer cache.
+- **Narrow scope.** It fires only on Pod `CREATE`, has `sideEffects: None`, and only ever patches container resources. The release namespace, `kube-system`, `kube-public` and `excludedNamespaces` are excluded by the `namespaceSelector`.
 - **TLS.** The API server must trust the webhook's certificate: either cert-manager issues it and injects the CA bundle (`webhook.certManager.enabled=true`, the default), or you set it to `false` and supply a TLS Secret (`webhook.tlsSecretName`) and its CA (`webhook.caBundle`). Rotated certificates are reloaded without a restart. See the [cert-manager guide](guides/cert-manager.md).
 
 ### Dashboard

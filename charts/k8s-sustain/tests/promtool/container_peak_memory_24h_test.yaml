@@ -1,0 +1,52 @@
+# Unit test for k8s_sustain:container_peak_memory_24h:bytes, the OOM floor's
+# peak anchor.
+#
+# Per container, across every replica, it is the highest of the kernel's
+# high-water marks (cgroup v1 max_usage, cgroup v2 peak working set) and the
+# scraped working set, and never the cgroup limit: anchoring on the limit
+# would feed the floor its own previous output.
+rule_files:
+  - rules-only.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_owner{namespace="shop",pod="db-0",owner_kind="StatefulSet",owner_name="db",owner_is_controller="true"}'
+        values: '1x10'
+      - series: 'kube_pod_owner{namespace="shop",pod="db-1",owner_kind="StatefulSet",owner_name="db",owner_is_controller="true"}'
+        values: '1x10'
+      # db: a spike between scrapes that only the cgroup v1 high-water mark
+      # saw, under a 1Gi limit.
+      - series: 'container_memory_working_set_bytes{namespace="shop",pod="db-0",container="db",image="db:v1",node="node-1"}'
+        values: '104857600x10'
+      - series: 'container_memory_max_usage_bytes{namespace="shop",pod="db-0",container="db",image="db:v1",node="node-1"}'
+        values: '157286400x10'
+      - series: 'container_spec_memory_limit_bytes{namespace="shop",pod="db-0",container="db",image="db:v1",node="node-1"}'
+        values: '1073741824x10'
+      - series: 'container_memory_working_set_bytes{namespace="shop",pod="db-1",container="db",image="db:v1",node="node-2"}'
+        values: '104857600x10'
+      # exporter: one replica's scraped spike beats the other's cgroup v2 peak.
+      - series: 'container_memory_working_set_bytes{namespace="shop",pod="db-0",container="exporter",image="exporter:v1",node="node-1"}'
+        values: '20971520x10'
+      - series: 'container_memory_peak_working_set_bytes{namespace="shop",pod="db-0",container="exporter",image="exporter:v1",node="node-1"}'
+        values: '31457280x10'
+      - series: 'container_memory_working_set_bytes{namespace="shop",pod="db-1",container="exporter",image="exporter:v1",node="node-2"}'
+        values: '20971520x4 41943040 20971520x5'
+      # agent: only the cgroup v2 peak saw its spike.
+      - series: 'container_memory_working_set_bytes{namespace="shop",pod="db-0",container="agent",image="agent:v1",node="node-1"}'
+        values: '5242880x10'
+      - series: 'container_memory_peak_working_set_bytes{namespace="shop",pod="db-0",container="agent",image="agent:v1",node="node-1"}'
+        values: '8388608x10'
+
+    promql_expr_test:
+      - expr: k8s_sustain:container_peak_memory_24h:bytes
+        eval_time: 10m
+        exp_samples:
+          - labels: 'k8s_sustain:container_peak_memory_24h:bytes{container="db",namespace="shop",owner_kind="StatefulSet",owner_name="db"}'
+            value: 157286400
+          - labels: 'k8s_sustain:container_peak_memory_24h:bytes{container="exporter",namespace="shop",owner_kind="StatefulSet",owner_name="db"}'
+            value: 41943040
+          - labels: 'k8s_sustain:container_peak_memory_24h:bytes{container="agent",namespace="shop",owner_kind="StatefulSet",owner_name="db"}'
+            value: 8388608

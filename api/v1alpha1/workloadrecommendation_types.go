@@ -73,7 +73,7 @@ type WorkloadRecommendationStatus struct {
 	// +optional
 	Containers map[string]ContainerRecommendation `json:"containers,omitempty"`
 
-	// Trace maps container name to how its recommended resources were derived, stage by stage. Written with containers; a trace-only change does not cause a write.
+	// Trace maps container name to how its recommended resources were derived, stage by stage, request then limit. Written with containers; a trace-only change does not cause a write.
 	// +optional
 	Trace map[string]ContainerTrace `json:"trace,omitempty"`
 
@@ -110,62 +110,35 @@ type ContainerTrace struct {
 	Memory *ResourceTrace `json:"memory,omitempty"`
 }
 
-// ResourceTrace is one resource's request after each stage of the
-// computation, in the order the stages run: usage percentile, OOM floor
-// (memory only), headroom, min/max clamp, autoscaler coordination, then the
-// limit derived from the final request. A stage that did not run is unset.
+// ResourceTrace is one resource's computation, stage by stage, in the order
+// the stages ran: the request's, then the limit's.
 type ResourceTrace struct {
-	// Percentile is the usage percentile of the busiest pod over the window. Unset for a memory request anchored on an OOM kill alone.
+	// Request lists the stages that shaped the request: each signal's contribution, then headroom, the min/max clamp and autoscaler coordination. The last stage holds the request.
 	// +optional
-	Percentile *resource.Quantity `json:"percentile,omitempty"`
+	Request []TraceStage `json:"request,omitempty"`
 
-	// OOMFloor is set when the container was OOM-killed recently. Memory only.
+	// Limit lists the stages that shaped the limit: the Policy's limit strategy, each signal that may raise the limit, then the guard that raises a limit below the request to the request. Unlike the request's, the last stage need not hold the limit: a signal's stage holds what it contributed even when that did not raise the limit. The Recommendation holds the limit.
 	// +optional
-	OOMFloor *OOMFloorTrace `json:"oomFloor,omitempty"`
-
-	// WithHeadroom is the higher of the percentile and the OOM floor, plus headroom, rounded up to a whole millicore or MiB and raised to the 1m / 1Mi minimum.
-	WithHeadroom resource.Quantity `json:"withHeadroom"`
-
-	// Clamped is WithHeadroom after the minAllowed/maxAllowed clamp: the request, unless coordination is set.
-	Clamped resource.Quantity `json:"clamped"`
-
-	// Coordination is set when autoscaler coordination shaped the request.
-	// +optional
-	Coordination *CoordinationTrace `json:"coordination,omitempty"`
-
-	// Limit is the limit derived from the final request. Unset with removeLimit false keeps the container's own limit.
-	// +optional
-	Limit *resource.Quantity `json:"limit,omitempty"`
-
-	// RemoveLimit is true when the limit is stripped.
-	// +optional
-	RemoveLimit bool `json:"removeLimit,omitempty"`
+	Limit []TraceStage `json:"limit,omitempty"`
 }
 
-// OOMFloorTrace is the memory floor a recent OOM kill set.
-type OOMFloorTrace struct {
-	// Value is the higher of the 24h peak working set and the limit the container was killed at times the bump factor. It replaces the percentile when higher.
-	Value resource.Quantity `json:"value"`
+// TraceStage is one stage of a resource's computation. A stage that did not
+// run is absent.
+type TraceStage struct {
+	// Stage names the stage: percentile, oomFloor, headroom, clamp, coordination, the limit strategy (keepLimit, noLimit, equalsToRequest, requestsLimitsRatio, keepLimitRequestRatio), guard, or another signal's name.
+	Stage string `json:"stage"`
 
-	// Determined is true when the floor set the final request: it beat the percentile and no min/max clamp, before or after coordination, replaced the value.
+	// Value is what a signal contributed, before headroom or rounding; for any other stage, the request or the limit after it. Unset on a limit stage that leaves the container without a limit.
 	// +optional
-	Determined bool `json:"determined,omitempty"`
-}
+	Value *resource.Quantity `json:"value,omitempty"`
 
-// CoordinationTrace is how autoscaler coordination scaled a request.
-type CoordinationTrace struct {
-	// OverheadFactor is 110 / the autoscaler's averageUtilization target for this resource (clamped to 1-99), or 1 when it has none.
-	OverheadFactor float64 `json:"overheadFactor"`
-
-	// ReplicaFactor is the replica-budget correction, clamp(current / target replicas, 0.5, 2). CPU only, set when the Policy has a replicaBudgetAnchor.
+	// Removed is true on a limit stage that strips the limit.
 	// +optional
-	ReplicaFactor *float64 `json:"replicaFactor,omitempty"`
+	Removed bool `json:"removed,omitempty"`
 
-	// Scaled is the clamped request multiplied by the factors.
-	Scaled resource.Quantity `json:"scaled"`
-
-	// Value is Scaled clamped to minAllowed/maxAllowed again: the final request.
-	Value resource.Quantity `json:"value"`
+	// Facts are the stage's own details as key/values, such as coordination's factors or the limit an OOM kill happened at.
+	// +optional
+	Facts map[string]string `json:"facts,omitempty"`
 }
 
 // ObservedContainerResources is the requests/limits snapshot of one container

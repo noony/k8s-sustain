@@ -4,11 +4,12 @@ import {
   api,
   type MetricsData,
   type RecommendationContainer,
-  type RecommendationOutcome,
   type WorkloadDetailSnapshot,
   type CoordinationFactors,
 } from '../lib/api'
 import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs, timeAgo } from '../lib/format'
+import { outcomeLabel } from '../lib/outcomes'
+import { attentionStateMetaOf } from '../lib/risk'
 import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
@@ -51,13 +52,8 @@ const snapshot = useApi<WorkloadDetailSnapshot>(() =>
 // one (that is the Simulator's job).
 const stored = computed(() => snapshot.data.value?.recommendation)
 
-const outcomeLabels: Record<RecommendationOutcome, string> = {
-  Computed: 'Computed',
-  NoData: 'No data',
-  TooYoung: 'Too young',
-  FetchFailed: 'Fetch failed',
-  Conflicted: 'Conflicted (frozen)',
-}
+const conflictedState = attentionStateMetaOf('conflicted')
+const blockedState = attentionStateMetaOf('blocked')
 
 async function load() {
   const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))
@@ -335,7 +331,8 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
             v-else-if="snapshot.data.value.conflictingPolicies?.length"
             class="badge badge-red"
             :title="'Members opt into ' + snapshot.data.value.conflictingPolicies.join(', ')"
-            >Conflicted: {{ snapshot.data.value.conflictingPolicies.join(' / ') }}</span
+            >{{ conflictedState.label }}:
+            {{ snapshot.data.value.conflictingPolicies.join(' / ') }}</span
           >
           <span v-else class="badge badge-dim">Manual</span>
           <span v-if="snapshot.data.value.departed" class="badge badge-dim">Departed</span>
@@ -387,7 +384,9 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
 
     <!-- Blocked band -->
     <div v-if="snapshot.data.value?.blocked" class="card card-danger">
-      <div class="card-header"><h2 class="text-error">Currently blocked</h2></div>
+      <div class="card-header">
+        <h2 class="text-error">{{ blockedState.label }}</h2>
+      </div>
       <p>
         Reason: <code>{{ snapshot.data.value.blocked.reason }}</code> ·
         {{ snapshot.data.value.blocked.attempts }} attempts
@@ -402,7 +401,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       <div class="card-header">
         <h2>Recommendation</h2>
         <span v-if="stored.outcome" class="badge" data-test="outcome">{{
-          outcomeLabels[stored.outcome] ?? stored.outcome
+          outcomeLabel(stored.outcome)
         }}</span>
         <span v-if="stored.observedAt" class="text-dim" :title="stored.observedAt"
           >computed {{ timeAgo(stored.observedAt) }}</span

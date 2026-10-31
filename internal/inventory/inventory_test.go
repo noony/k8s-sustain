@@ -22,8 +22,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/inventory"
-	"github.com/noony/k8s-sustain/internal/policymatch/policymatchtest"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -310,56 +310,37 @@ func TestMembersOfDifferentPoliciesAreConflicted(t *testing.T) {
 	}
 }
 
-// A member governs nothing through a Policy that does not accept it: missing,
-// not managing its kind, or not selecting it.
-func TestOptInNeedsThePolicysConsent(t *testing.T) {
+// A member is decided on its pod template, its object's own annotations and
+// its Namespace's; the Policy's label selector matches the pod template's
+// labels, never the object's own.
+func TestMembersAreGovernedThroughTheirPodTemplate(t *testing.T) {
 	selective := managing("selective", sustainv1alpha1.UpdateTypes{Deployment: ongoing()})
 	selective.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"tier": "web"}}
-	elsewhere := managing("elsewhere", sustainv1alpha1.UpdateTypes{Deployment: ongoing()})
-	elsewhere.Spec.Selector.Namespaces = []string{"other"}
-	jobsOnly := managing("jobs-only", sustainv1alpha1.UpdateTypes{Job: ongoing()})
+	templateLabelled := deployment("prod", "template-labelled", base, optIn("selective"))
+	templateLabelled.Spec.Template.Labels = map[string]string{"tier": "web"}
+	objectLabelled := deployment("prod", "object-labelled", base, optIn("selective"))
+	objectLabelled.Labels = map[string]string{"tier": "web"}
+	workloadLevel := deployment("prod", "workload-level", base, nil)
+	workloadLevel.Annotations = optIn("p")
+	team := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team", Annotations: optIn("p")}}
 
-	labelled := deployment("prod", "labelled", base, optIn("selective"))
-	labelled.Labels = map[string]string{"tier": "web"}
-	cases := map[string]*appsv1.Deployment{
-		"selector rejects labels": deployment("prod", "unlabelled", base, optIn("selective")),
-		"namespace not selected":  deployment("prod", "misplaced", base, optIn("elsewhere")),
-		"kind not managed":        deployment("prod", "wrong-kind", base, optIn("jobs-only")),
-		"policy missing":          deployment("prod", "dangling", base, optIn("ghost")),
-		"excluded namespace":      deployment("kube-system", "excluded", base, optIn("selective")),
-	}
-	objs := []client.Object{selective, elsewhere, jobsOnly, labelled}
-	for _, d := range cases {
-		objs = append(objs, d)
-	}
-	snap := take(t, inventory.Options{ExcludedNamespaces: []string{"kube-system"}}, objs...)
+	snap := take(t, inventory.Options{ExcludedNamespaces: []string{"kube-system"}},
+		everyKind("p"), selective, team, templateLabelled, objectLabelled, workloadLevel,
+		deployment("team", "namespace-level", base, nil),
+		deployment("kube-system", "excluded", base, optIn("p")),
+	)
 
-	if got := lookup(t, snap, key("prod", "Deployment", "labelled")).Policy; got != "selective" {
-		t.Errorf("labelled: policy = %q, want selective", got)
-	}
-	for name, d := range cases {
-		id := lookup(t, snap, key(d.Namespace, "Deployment", d.Name))
-		if id.Policy != "" || id.Members[0].Policy != "" {
-			t.Errorf("%s: policy = %q, want none", name, id.Policy)
+	for k, want := range map[promclient.WorkloadIdentity]string{
+		key("prod", "Deployment", "template-labelled"): "selective",
+		key("prod", "Deployment", "object-labelled"):   "",
+		key("prod", "Deployment", "workload-level"):    "p",
+		key("team", "Deployment", "namespace-level"):   "p",
+		key("kube-system", "Deployment", "excluded"):   "",
+	} {
+		id := lookup(t, snap, k)
+		if id.Policy != want || id.Members[0].Policy != want {
+			t.Errorf("%s: policy = %q, want %q", k.OwnerName, id.Policy, want)
 		}
-	}
-}
-
-// Replays the shared annotation contract: the three opt-in levels resolve
-// here exactly as policymatch.ResolvePolicy says.
-func TestAnnotationLevels(t *testing.T) {
-	for _, tc := range policymatchtest.AnnotationCases() {
-		t.Run(tc.Name, func(t *testing.T) {
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Annotations: tc.Namespace}}
-			d := deployment("team-a", "web", base, tc.Template, container("app", ""))
-			d.Annotations = tc.Workload
-
-			snap := take(t, inventory.Options{}, everyKind("p"), everyKind("other"), ns, d)
-
-			if got := lookup(t, snap, key("team-a", "Deployment", "web")).Policy; got != tc.WantPolicy {
-				t.Errorf("policy = %q, want %q", got, tc.WantPolicy)
-			}
-		})
 	}
 }
 
@@ -389,6 +370,76 @@ func TestOptionsNarrowTheSnapshot(t *testing.T) {
 	}
 	if got := lookup(t, snap, key("b", "Deployment", "gone")).Policy; got != "" {
 		t.Errorf("departed outside the selector: policy = %q, want none", got)
+	}
+}
+
+// A snapshot decides with the lister it is handed, so a caller holding one
+// lister compiles a version of a Policy once, not once per snapshot. The same
+// version listed with other content tells the two apart.
+func TestTakeDecidesWithTheListerItIsHanded(t *testing.T) {
+	objs := func(tier string) []client.Object {
+		p := everyKind("p")
+		p.UID, p.ResourceVersion = "uid-p", "7"
+		p.Spec.Selector.LabelSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"tier": tier}}
+		web := deployment("a", "web", base, optIn("p"))
+		web.Spec.Template.Labels = map[string]string{"tier": "web"}
+		return []client.Object{p, web}
+	}
+	policyOfWeb := func(opts inventory.Options, tier string) string {
+		return lookup(t, take(t, opts, objs(tier)...), key("a", "Deployment", "web")).Policy
+	}
+	lister := &governance.PolicyLister{}
+
+	if got := policyOfWeb(inventory.Options{Policies: lister}, "web"); got != "p" {
+		t.Fatalf("first snapshot: policy = %q, want p", got)
+	}
+	if got := policyOfWeb(inventory.Options{Policies: lister}, "api"); got != "p" {
+		t.Errorf("with the lister that compiled this version: policy = %q, want p", got)
+	}
+	if got := policyOfWeb(inventory.Options{}, "api"); got != "" {
+		t.Errorf("with a lister of its own: policy = %q, want none", got)
+	}
+}
+
+// A Policy's snapshot reads only its selector's namespaces and the kinds it
+// manages, governs nothing in an excluded namespace, and is empty for a
+// Policy managing no kind rather than reading every kind.
+func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
+	p := managing("p", sustainv1alpha1.UpdateTypes{Deployment: ongoing()})
+	p.Spec.Selector.Namespaces = []string{"a", "excluded"}
+	none := managing("none", sustainv1alpha1.UpdateTypes{})
+	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(
+		p, none,
+		deployment("a", "web", base, optIn("p")),
+		deployment("b", "web", base, optIn("p")),
+		deployment("excluded", "web", base, optIn("p")),
+		job("a", "nightly", optIn("p")),
+		deployment("a", "idle", base, optIn("none")),
+	).Build()
+
+	snap, err := inventory.TakeForPolicy(context.Background(), c, p, []string{"excluded"}, nil)
+	if err != nil {
+		t.Fatalf("TakeForPolicy: %v", err)
+	}
+	var governed []promclient.WorkloadIdentity
+	for _, id := range snap.GovernedBy("p") {
+		governed = append(governed, id.Key)
+	}
+	if want := []promclient.WorkloadIdentity{key("a", "Deployment", "web")}; !slices.Equal(governed, want) {
+		t.Errorf("governed = %v, want %v", governed, want)
+	}
+	for _, k := range []promclient.WorkloadIdentity{key("b", "Deployment", "web"), key("a", "Job", "nightly")} {
+		if _, ok := snap.Lookup(k); ok {
+			t.Errorf("%v read outside the Policy's namespaces and kinds", k)
+		}
+	}
+
+	snap, err = inventory.TakeForPolicy(context.Background(), c, none, nil, nil)
+	if err != nil {
+		t.Fatalf("TakeForPolicy: %v", err)
+	}
+	if len(snap.Identities) != 0 {
+		t.Errorf("a Policy managing no kind read %v", keys(snap))
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -229,8 +230,7 @@ func (p *Patcher) resizePodInPlaceWith(ctx context.Context, pod *corev1.Pod, rec
 	logger := log.FromContext(ctx).WithValues("pod", pod.Name, "namespace", pod.Namespace)
 
 	base := pod.DeepCopy()
-	containers, regChanged := applyRecsFiltered(pod.Spec.Containers, recs, nil)
-	initContainers, initChanged := applyRecsFiltered(pod.Spec.InitContainers, recs, isRestartableInitContainer)
+	containers, initContainers, regChanged, initChanged := resized(logger, pod, recs)
 	if !regChanged && !initChanged {
 		switch verdict := resizePendingReason(pod); verdict {
 		case corev1.PodReasonInfeasible, corev1.PodReasonError:
@@ -681,71 +681,24 @@ func isRestartableInitContainer(c corev1.Container) bool {
 	return c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
 }
 
-// applyRecsFiltered copies the containers and applies recommendations to
-// those the predicate accepts (nil accepts all). Returns the copy and whether
-// anything changed.
-func applyRecsFiltered(in []corev1.Container, recs map[string]ContainerRecommendation, accept func(corev1.Container) bool) ([]corev1.Container, bool) {
-	if len(in) == 0 {
-		return in, false
-	}
-	// Deep copy: a shallow copy shares the ResourceList maps and would mutate
-	// the caller's pod spec.
-	out := make([]corev1.Container, len(in))
-	for i := range in {
-		out[i] = *in[i].DeepCopy()
-	}
-	changed := false
-	for i := range out {
-		if accept != nil && !accept(out[i]) {
+// resized returns the pod's containers and init containers with recs applied,
+// and whether each list changed. Of the init containers only sidecars are
+// resized: a classic one has already exited.
+func resized(logger logr.Logger, pod *corev1.Pod, recs map[string]ContainerRecommendation) (containers, initContainers []corev1.Container, regChanged, initChanged bool) {
+	containers = slices.Clone(pod.Spec.Containers)
+	initContainers = slices.Clone(pod.Spec.InitContainers)
+	for _, w := range Inject(pod.Spec.Containers, pod.Spec.InitContainers, false, recs).Writes {
+		switch {
+		case !w.Init:
+			containers[w.Index].Resources = w.Resources
+			regChanged = true
+		case isRestartableInitContainer(initContainers[w.Index]):
+			initContainers[w.Index].Resources = w.Resources
+			initChanged = true
+		default:
 			continue
 		}
-		if applyRecToContainer(&out[i], recs[out[i].Name]) {
-			changed = true
-		}
+		w.LogRaisedLimits(logger)
 	}
-	return out, changed
-}
-
-func applyRecToContainer(c *corev1.Container, rec ContainerRecommendation) bool {
-	changed := setQuantity(&c.Resources.Requests, corev1.ResourceCPU, rec.CPURequest)
-	if applyLimit(&c.Resources.Limits, corev1.ResourceCPU, rec.CPULimit, rec.RemoveCPULimit) {
-		changed = true
-	}
-	if setQuantity(&c.Resources.Requests, corev1.ResourceMemory, rec.MemoryRequest) {
-		changed = true
-	}
-	if applyLimit(&c.Resources.Limits, corev1.ResourceMemory, rec.MemoryLimit, rec.RemoveMemoryLimit) {
-		changed = true
-	}
-	return changed
-}
-
-// setQuantity sets list[name] = *q, returning whether the value changed. A
-// nil q is a no-op; an absent key compares as zero.
-func setQuantity(list *corev1.ResourceList, name corev1.ResourceName, q *resource.Quantity) bool {
-	if q == nil {
-		return false
-	}
-	if cur := (*list)[name]; cur.Cmp(*q) == 0 {
-		return false
-	}
-	if *list == nil {
-		*list = corev1.ResourceList{}
-	}
-	(*list)[name] = *q
-	return true
-}
-
-// applyLimit deletes the limit when remove is set, otherwise defers to
-// setQuantity. remove wins over a non-nil q.
-func applyLimit(list *corev1.ResourceList, name corev1.ResourceName, q *resource.Quantity, remove bool) bool {
-	if !remove {
-		return setQuantity(list, name, q)
-	}
-	cur, ok := (*list)[name]
-	if !ok {
-		return false
-	}
-	delete(*list, name)
-	return !cur.IsZero()
+	return containers, initContainers, regChanged, initChanged
 }

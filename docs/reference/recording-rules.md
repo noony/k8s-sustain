@@ -23,6 +23,24 @@ Computing percentiles over multi-day windows from raw `container_cpu_usage_secon
 | `workload_oom_24h`, `workload_drifted` | Risk signals: the OOM count feeds the recommender's OOM floor and the dashboard's At risk state; `workload_drifted` is for your own alerts and dashboards |
 | `workload_*_usage:*` | Per-workload usage totals (dashboard trend) |
 
+## Signal contracts
+
+Each [recommendation signal](../concepts/recommendation-pipeline.md#signals) declares what it needs from Prometheus next to its query, as a `PromContract` (`internal/recommender`): the rules it reads, the labels they aggregate by, the evaluation interval its query cost assumes, and the raw series those rules compute from, through every rule they read in turn.
+
+| Signal | Rules it reads | Aggregated by | Interval | cAdvisor series | kube-state-metrics series |
+|---|---|---|---|---|---|
+| CPU usage | `workload_max_pod_cpu:cores` | `namespace`, `owner_kind`, `owner_name`, `container` | 1m | `container_cpu_usage_seconds_total` | `kube_pod_owner`, `kube_job_owner`, `kube_replicaset_owner`, `kube_pod_annotations` |
+| Memory usage | `workload_max_pod_memory:bytes` | the same | 1m | `container_memory_working_set_bytes` | the same four |
+| OOM floor | `workload_oom_24h`, `container_peak_memory_24h:bytes`, `container_oom_limit_24h:bytes` | the same | none assumed | `container_memory_max_usage_bytes`, `container_memory_peak_working_set_bytes`, `container_memory_working_set_bytes`, `container_spec_memory_limit_bytes` | `kube_pod_container_status_restarts_total`, `kube_pod_container_status_last_terminated_reason` and the same four |
+
+- **Labels.** A query reads a whole shard of identities at once and attributes each series by these four labels. A series missing one is dropped; a rule keeping one more, such as `pod`, would hand a container several series, and the usage signals keep only one of them.
+- **Interval.** The usage signals read their rule as a plain range vector, so its 1m interval is the percentile's sample resolution and what the shard sample budget counts. The OOM floor reads its rules as an instant vector, one sample per rule, whatever their interval.
+- **Series.** The four kube-state-metrics series shared by every signal are what `pod_workload` maps a pod to its identity from; `kube_pod_annotations` carries the owner-name override.
+
+`go test ./hack/signalcontract`, part of `make test`, checks the chart against every contract. Each rule a signal reads must be recorded in `prometheusRule.groups`, be one aggregation `by` exactly the declared labels over its whole expression, evaluate at the declared interval, and be evaluated with expected samples by a promtool fixture in `charts/k8s-sustain/tests/promtool/` (run by `make helm-promtool`). Following the rules they read down to raw series, those series must be exactly the declared ones, and each must be kept by its exporter's keep-list in the bundled Prometheus: the `metric_relabel_configs` of `prometheus.scrapeConfigs.kubernetes-nodes-cadvisor`, or of the `kube-state-metrics` job in `prometheus.extraScrapeConfigs`. A signal that needs a series the chart does not keep yet, such as cAdvisor's CFS throttling counters, fails the test until the keep-list keeps it. Expressions are read textually, without the PromQL parser, so a rule a signal reads has to stay a single `<aggregation> by (…) (…)`.
+
+If you bring your own Prometheus, it must scrape every series in the table.
+
 ## Rules
 
 ### `k8s_sustain:pod_workload`
@@ -44,24 +62,28 @@ Computing percentiles over multi-day windows from raw `container_cpu_usage_secon
     )
   )
 )
-unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}
+unless on(namespace, pod) kube_pod_annotations{annotation_k8s_sustain_io_owner_name=~"[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?"}
 ```
 
-Five rules share this name and map every pod to its top-level workload:
+Five rules share this name and map each pod to the identity the controller groups it under (`workload.ResolveControllerOwner`, then `workload.ApplyOwnerNameOverride`):
 
 1. Direct owners (StatefulSet, DaemonSet, Job), excluding CronJob-owned Jobs — shown above.
 2. Pod → Job → CronJob via `kube_job_owner`.
 3. Pod → ReplicaSet → Deployment.
 4. Pod → ReplicaSet → Argo Rollout.
-5. Owner-name override: pods whose `kube_pod_labels` carry a non-empty `label_k8s_sustain_io_owner_name` (the label the webhook mirrors from the [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation). `owner_name` becomes the label value; `owner_kind` is the pod's real owner kind, or `Pod` when it has none.
+5. Owner-name override: pods whose `kube_pod_annotations` carry an `annotation_k8s_sustain_io_owner_name` (the pod's own [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation) that is a valid, non-empty Kubernetes label value. `owner_name` becomes the annotation value; `owner_kind` is the kind of the pod's controller as the controller resolves it (the Deployment or Rollout of its ReplicaSet, the CronJob of its Job, otherwise the controller's own kind, whatever it is), or `Pod` when the pod has no controller.
 
-Rules 1–4 end with `unless on(namespace, pod) kube_pod_labels{label_k8s_sustain_io_owner_name!=""}`, so a pod with an override is mapped only by rule 5 and every pod has exactly one row. The CronJob exclusion in rule 1 likewise stops a pod carrying both `owner_kind=Job` and `owner_kind=CronJob`.
+Rules 1–4 end with `unless on(namespace, pod) kube_pod_annotations{annotation_k8s_sustain_io_owner_name=~"…"}`, so a pod with an override is mapped only by rule 5 and every pod has at most one row. The CronJob exclusion in rule 1 likewise stops a pod carrying both `owner_kind=Job` and `owner_kind=CronJob`.
 
-Rule 5 needs the kube-state-metrics `metricLabelsAllowlist: pods=[k8s.sustain.io/owner-name]` setting (on by default in the bundled subchart); without it, override pods are not mapped at all.
+Rules 1–4 map only the kinds a Policy can manage. A pod whose controller is of another kind (an orphan ReplicaSet, a ReplicationController, a custom controller) has no row without an override: the controller resolves it to an identity of that kind, which no Policy manages and nothing queries. With an override, rule 5 maps it under that kind, as the controller groups it, never under `Pod`, so its usage stays out of a bare-pod identity of the same name.
+
+All five rules select the annotation with the same regex, `[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?`. PromQL anchors a regex matcher at both ends, so it matches exactly the non-empty values Kubernetes accepts as a label value (apimachinery's `IsValidLabelValue`: at most 63 characters, alphanumerics, `-`, `_` and `.`, starting and ending with an alphanumeric), which are the values the controller applies the override for (`workload.ApplyOwnerNameOverride`). A pod whose annotation is empty or invalid keeps its real owner in rules 1–4, as it does in the controller, and a bare pod with one is not mapped at all. `go test ./hack/signalcontract` fails when their regexes differ or stop matching exactly the values the controller accepts, when rule 5 gives a pod without a controller another kind than the controller does, or when the bundled kube-state-metrics stops exporting the annotation. `pod_workload_owner_name_test.yaml` pins the kind rule 5 gives a pod of each controller kind.
+
+Rule 5 needs the kube-state-metrics `metricAnnotationsAllowList: ["pods=[k8s.sustain.io/owner-name]"]` setting (the `--metric-annotations-allowlist` flag, on by default in the bundled subchart); without it, pods using the override are mapped to their real owner, and bare pods not at all.
 
 ### `k8s_sustain:pod_owner_kind_internal`
 
-Helper for rule 5: the pod's real `owner_kind` via the same four resolution paths as rules 1–4, but without their owner-name exclusion. Not meant to be queried directly.
+Helper for rule 5: the kind of each pod's controller as `workload.ResolveControllerOwner` resolves it (the CronJob of a CronJob's Job, the Deployment or Rollout of a ReplicaSet, otherwise the controller's own kind), with no owner-name exclusion, so it has a row for every pod with a controller, overridden or not. Its last alternative selects every controller kind: filtering it would make rule 5 map the pods of a kind it leaves out as `Pod`. Not meant to be queried directly.
 
 ### `k8s_sustain:container_cpu_usage:rate1m`
 
@@ -211,6 +233,8 @@ sum(
 
 Cluster-total CPU savings: sum of `template_request - recommendation`. Uses `k8s_sustain_workload_template_cpu_cores` (the original pod-template request, stable across webhook injection) so savings reflect the gap from the user's original spec, not the injected pod's already-rightsized value.
 
+Both gauges exist only for the live members of the identities a Policy governs, under that Policy, so the savings rules count each member once: a member that is deleted, opts out or becomes part of a Conflicted identity drops out at its Policy's next reconcile, and one that moves to another Policy counts under the new one only, once both have reconciled (see [Series lifecycle](metrics.md#series-lifecycle)).
+
 ### `k8s_sustain:cluster_memory_savings_bytes`
 
 ```promql
@@ -253,7 +277,7 @@ sum by (policy) (
 )
 ```
 
-Per-policy CPU savings. Carries a static `resource="cpu"` label.
+Per-policy CPU savings: the members of the identities the policy governs. Carries a static `resource="cpu"` label.
 
 ### `k8s_sustain:policy_memory_savings_bytes`
 
@@ -440,7 +464,7 @@ Busiest-replica CPU rate, per container, per workload: at each instant this is t
 
 Collapsing across pods **here** (in the recording rule) rather than at query time is deliberate: it keeps the recommender's `quantile_over_time(p, …[window])` range-vector scan cheap (one series per workload×container instead of one per historical pod) and immune to pod-name churn — a pod that briefly ran hot then died is the `max` for only those instants and drops out afterward, so its partial-lifetime samples can't distort the percentile.
 
-This rule (and `workload_max_pod_memory:bytes` below) lives in the `k8s_sustain.workload_max_pod` group, which evaluates at `interval: 1m`. The recommender reads it as a plain range vector rather than a `[window:1m]` subquery, so that `interval` **is** the percentile's effective sample resolution — there is no subquery step left to resample it. Raising the group's interval to cut Prometheus load would silently coarsen every recommendation percentile in the product; it is not a free knob.
+This rule (and `workload_max_pod_memory:bytes` below) lives in the `k8s_sustain.workload_max_pod` group, which evaluates at `interval: 1m`. The recommender reads it as a plain range vector rather than a `[window:1m]` subquery, so that `interval` **is** the percentile's effective sample resolution — there is no subquery step left to resample it. Raising the group's interval to cut Prometheus load would coarsen every recommendation percentile in the product; it is not a free knob, and the usage signals' [contract](#signal-contracts) fails the build when it changes.
 
 ### `k8s_sustain:workload_max_pod_memory:bytes`
 
@@ -454,7 +478,7 @@ Busiest-replica memory working set, per container, per workload. Same rationale 
 
 ## Customising
 
-The chart exposes the rules via `prometheusRule.groups` in `values.yaml`. Override individual rules to adapt to your environment, but keep names stable — the recommender queries by name.
+The chart exposes the rules via `prometheusRule.groups` in `values.yaml`. Override individual rules to adapt to your environment, but keep names stable — the recommender queries by name — and keep each rule a signal reads to its [contract](#signal-contracts): the same labels, interval and source series.
 
 ## See also
 

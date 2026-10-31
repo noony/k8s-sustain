@@ -104,6 +104,15 @@ The clamp `[0.5, 2.0]` exists so a single reconcile can't catastrophically up- o
 ## Detection rules
 
 - HPA matched by `scaleTargetRef`; `ScaledObject` by `spec.scaleTargetRef`.
+- Each member of an identity is looked up under its own kind and name, never
+  under the identity's: an [owner-name group](../guides/standalone-pods-and-grouping.md)
+  `api` of Deployments `api-blue` and `api-green` is coordinated by an HPA
+  targeting `api-green`. The group's one Recommendation is shaped by the
+  autoscaler of its first member, in name order, that has one; members that
+  disagree count `k8s_sustain_group_autoscaler_mismatch_total`. A departed
+  identity has no member, and no autoscaler.
+- The dashboard's [Simulations](../guides/dashboard.md#policy-simulator) read
+  the autoscalers the same way, through the same code.
 - Both objects targeting one workload → `ScaledObject` wins (KEDA owns the
   HPA).
 - Only HPA `Resource` metrics with `averageUtilization` count. Other metric
@@ -135,14 +144,16 @@ spec:
 ## Observability
 
 The factors applied are recorded per container in the identity's
-`WorkloadRecommendation`, in `status.trace.<container>.<cpu|memory>.coordination`:
-`overheadFactor`, `replicaFactor` (CPU, with a `replicaBudgetAnchor`), the
-request they `scaled` to and the `value` after the min/max clamp is applied
-again (see [Trace](recommendation-pipeline.md#trace)). The dashboard shows them
-as the **Coordinated** badge on the workload list and detail page.
+`WorkloadRecommendation`, as the `coordination` stage of
+`status.trace.<container>.<cpu|memory>.request`: its `value` is the request
+after the min/max clamp is applied again, and its facts are `overheadFactor`,
+`replicaFactor` (CPU, with a `replicaBudgetAnchor`) and, when that clamp
+capped it, the request the factors `scaled` to (see
+[Trace](recommendation-pipeline.md#trace)). The dashboard shows them as the
+**Coordinated** badge on the workload list and detail page.
 
 ```bash
-kubectl get wlrec -n example deployment-web -o jsonpath='{.status.trace.app.cpu.coordination}'
+kubectl get wlrec -n example deployment-web -o jsonpath='{.status.trace.app.cpu.request[?(@.stage=="coordination")]}'
 ```
 
 `k8s_sustain_autoscaler_present` and `k8s_sustain_autoscaler_target_configured`

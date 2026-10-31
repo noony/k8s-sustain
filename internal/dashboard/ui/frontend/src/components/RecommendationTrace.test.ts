@@ -13,21 +13,34 @@ function cells(trace: ContainerTrace): Record<string, string[]> {
   return out
 }
 
+function stages(trace: ContainerTrace): string[] {
+  const w = mount(RecommendationTrace, { props: { trace } })
+  return w.findAll('tbody tr').map((row) => row.attributes('data-stage') ?? '')
+}
+
 describe('RecommendationTrace', () => {
-  it('shows each stage per resource in one unit, with the coordination factors', () => {
+  it('shows each stage per resource in one unit, with its facts', () => {
     const got = cells({
       cpu: {
-        percentile: '123400u',
-        withHeadroom: '136m',
-        clamped: '150m',
-        coordination: { overheadFactor: 1.375, replicaFactor: 2, scaled: '414m', value: '414m' },
-        limit: '414m',
+        request: [
+          { stage: 'percentile', value: '123400u' },
+          { stage: 'headroom', value: '136m' },
+          { stage: 'clamp', value: '150m' },
+          {
+            stage: 'coordination',
+            value: '414m',
+            facts: { replicaFactor: '2', overheadFactor: '1.375' },
+          },
+        ],
+        limit: [{ stage: 'equalsToRequest', value: '414m' }],
       },
       memory: {
-        percentile: '104857600',
-        withHeadroom: '110Mi',
-        clamped: '110Mi',
-        coordination: { overheadFactor: 1, scaled: '110Mi', value: '110Mi' },
+        request: [
+          { stage: 'percentile', value: '104857600' },
+          { stage: 'headroom', value: '110Mi' },
+          { stage: 'clamp', value: '110Mi' },
+        ],
+        limit: [{ stage: 'keepLimit' }],
       },
     })
 
@@ -35,41 +48,63 @@ describe('RecommendationTrace', () => {
     expect(got['With headroom']).toEqual(['136m', '110Mi'])
     expect(got['Min/max clamp']).toEqual(['150m', '110Mi'])
     expect(got['Autoscaler coordination']).toEqual([
-      '×1.38 overhead, ×2 replica → 414m',
-      '×1 overhead → 110Mi',
+      '414m · overheadFactor: 1.375 · replicaFactor: 2',
+      '–',
     ])
-    expect(got['Limit']).toEqual(['414m', 'kept'])
+    expect(got['Limit equal to request']).toEqual(['414m', '–'])
+    expect(got['Limit kept']).toEqual(['–', 'none'])
     expect(got['OOM floor']).toBeUndefined()
   })
 
-  it('says when the OOM floor set the request and when a clamp replaced the coordinated value', () => {
+  it('lists request stages then limit stages, each resource in its own order', () => {
+    expect(
+      stages({
+        cpu: {
+          request: [
+            { stage: 'percentile', value: '100m' },
+            { stage: 'headroom', value: '100m' },
+            { stage: 'clamp', value: '100m' },
+          ],
+          limit: [{ stage: 'noLimit', removed: true }],
+        },
+        memory: {
+          request: [
+            { stage: 'percentile', value: '100Mi' },
+            { stage: 'oomFloor', value: '240Mi', facts: { determined: 'true' } },
+            { stage: 'headroom', value: '240Mi' },
+            { stage: 'clamp', value: '240Mi' },
+          ],
+          limit: [
+            { stage: 'keepLimit', value: '200Mi' },
+            { stage: 'guard', value: '240Mi' },
+          ],
+        },
+      }),
+    ).toEqual([
+      'request:percentile',
+      'request:oomFloor',
+      'request:headroom',
+      'request:clamp',
+      'limit:noLimit',
+      'limit:keepLimit',
+      'limit:guard',
+    ])
+  })
+
+  it('renders a stage it has no name for under its own name, facts as they are', () => {
     const got = cells({
       memory: {
-        oomFloor: { value: '240Mi', determined: false },
-        withHeadroom: '240Mi',
-        clamped: '240Mi',
-        coordination: { overheadFactor: 1.375, scaled: '330Mi', value: '256Mi' },
-        removeLimit: true,
+        request: [{ stage: 'clamp', value: '256Mi' }],
+        limit: [
+          { stage: 'keepLimit', value: '256Mi' },
+          { stage: 'burst', value: '512Mi', facts: { factor: '2', determined: 'true' } },
+          { stage: 'noLimit', removed: true },
+        ],
       },
     })
 
-    expect(got['Usage percentile']).toBeUndefined()
-    expect(got['OOM floor']).toEqual(['–', '240Mi'])
-    expect(got['Autoscaler coordination']).toEqual([
-      '–',
-      '×1.38 overhead → 330Mi, clamped to 256Mi',
-    ])
-    expect(got['Limit']).toEqual(['–', 'removed'])
-
-    const determined = cells({
-      memory: {
-        oomFloor: { value: '240Mi', determined: true },
-        withHeadroom: '240Mi',
-        clamped: '240Mi',
-      },
-    })
-    expect(determined['OOM floor']).toEqual(['–', '240Mi · set the request'])
-    expect(determined['Autoscaler coordination']).toBeUndefined()
+    expect(got['burst']).toEqual(['–', '512Mi · determined: true · factor: 2'])
+    expect(got['Limit removed']).toEqual(['–', 'removed'])
   })
 
   it('renders nothing for an empty trace', () => {

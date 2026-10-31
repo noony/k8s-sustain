@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"sync/atomic"
 	"testing"
@@ -10,18 +11,94 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
+
+// When the claim on an identity's WorkloadRecommendation fails, the identity
+// is still computed but not applied: its recommendation has nowhere to be
+// cached. A persistent cause (missing RBAC, a rejecting admission webhook, a
+// quota) must not leave the Policy reporting Ready while the cache silently
+// goes stale, and the one failure is counted once, as its withheld member's.
+func TestReconcile_FailedClaimWithholdsTheIdentityAndCountsOnce(t *testing.T) {
+	const ns = "unclaimed"
+	scheme := testFullScheme(t)
+	c := fakeClientBuilder(scheme, ongoingDeployments("p"), annotatedDeployment(ns, "web", "p")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*sustainv1alpha1.WorkloadRecommendation); ok {
+					return apierrors.NewForbidden(
+						schema.GroupResource{Group: "k8s.sustain.io", Resource: "workloadrecommendations"},
+						obj.GetName(), errors.New("no RBAC"))
+				}
+				return cl.Create(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := reconcilerOn(c, scheme, recommendertest.NewStaticInputs(), true)
+
+	reconcileOnce(t, r, "p")
+
+	ready := readyCondition(t, r, "p")
+	if want := "1 of 1 workloads failed; Blocked workload identities: 1"; ready.Status != metav1.ConditionFalse || ready.Message != want {
+		t.Errorf("Ready = %s %q, want False %q: the failed claim counted once", ready.Status, ready.Message, want)
+	}
+	state := seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, "Deployment", "web")
+	if len(state) != 1 || labelOf(state[0], "reason") != phaseStore {
+		t.Errorf("retry_state = %v, want the identity Blocked on %s", state, phaseStore)
+	}
+}
+
+// A Policy that adopts an identity records into the object its own claim
+// wrote, so the Recommendation it computes is attributed to it. Recording into
+// the inventory's copy, read before the claim, would attribute the new numbers
+// to the previous Policy, and the webhook would withhold them from this
+// Policy's pods (ADR 0003).
+func TestReconcile_AdoptedRecommendationIsComputedByTheAdoptingPolicy(t *testing.T) {
+	const ns = "adopted"
+	previous := &sustainv1alpha1.WorkloadRecommendation{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns, Name: wlrcache.Name("Deployment", "web"),
+			Labels:            map[string]string{wlrPolicyLabel: "old"},
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
+		},
+		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
+			WorkloadRef: sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: ns, Name: "web"},
+			Policy:      "old",
+		},
+		Status: sustainv1alpha1.WorkloadRecommendationStatus{
+			ObservedAt: metav1.NewTime(time.Now().Add(-time.Hour).Truncate(time.Second)),
+			Outcome:    sustainv1alpha1.OutcomeComputed,
+			ComputedBy: "old",
+			Containers: map[string]sustainv1alpha1.ContainerRecommendation{"app": {CPURequest: qty("250m")}},
+		},
+	}
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		ongoingDeployments("new"), establishedDeployment(ns, "web", "new"), previous)
+
+	reconcileOnce(t, r, "new")
+
+	got := getWLRFor(t, r, ns, "Deployment", "web")
+	if got.Spec.Policy != "new" || got.Status.ComputedBy != "new" {
+		t.Errorf("spec.policy/computedBy = %q/%q, want both the adopting Policy", got.Spec.Policy, got.Status.ComputedBy)
+	}
+	if cpu := got.Status.Containers["app"].CPURequest; cpu == nil || cpu.String() != "100m" {
+		t.Errorf("stored CPU = %v, want the adopting Policy's 100m", cpu)
+	}
+}
 
 // A departed identity with no observed-resources snapshot has no container
 // set to compute against, so it is not computed; the skip is counted so a
@@ -34,7 +111,7 @@ func TestReconcileSkipsDepartedIdentityWithoutSnapshot(t *testing.T) {
 	bare := departedWLR(ns)
 	bare.Status.ObservedResources = nil
 	inputs := recommendertest.NewStaticInputs()
-	r := reconcilerWithInputs(t, inputs, false, barePodPolicy(t, "pol"), bare)
+	r := reconcilerWithInputs(t, inputs, false, barePodPolicy("pol"), bare)
 	before := testutil.ToFloat64(wlrRefreshTotal.WithLabelValues(ns, "Pod", WLRRefreshNoSnapshot))
 
 	reconcileOnce(t, r, "pol")
@@ -45,20 +122,8 @@ func TestReconcileSkipsDepartedIdentityWithoutSnapshot(t *testing.T) {
 	if after := testutil.ToFloat64(wlrRefreshTotal.WithLabelValues(ns, "Pod", WLRRefreshNoSnapshot)); after-before != 1 {
 		t.Errorf("no-snapshot refresh delta = %v, want 1", after-before)
 	}
-}
-
-func TestContainersFromObservedRespectsExcludeInit(t *testing.T) {
-	obs := map[string]sustainv1alpha1.ObservedContainerResources{
-		"main": {Init: false},
-		"prep": {Init: true},
-	}
-	got := containersFromObserved(obs, true)
-	if len(got) != 1 || got[0].Name != "main" {
-		t.Fatalf("excludeInit=true gave %v, want [main]", got)
-	}
-	got = containersFromObserved(obs, false)
-	if len(got) != 2 {
-		t.Fatalf("excludeInit=false gave %d containers, want 2", len(got))
+	if got := readyCondition(t, r, "pol").Message; got != "All 0 workloads have been processed." {
+		t.Errorf("Ready message = %q: an identity the pass did not compute was not processed", got)
 	}
 }
 
@@ -72,67 +137,23 @@ func TestContainersFromObservedRespectsExcludeInit(t *testing.T) {
 // the identity's inputs, not re-fetch per member.
 func TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup(t *testing.T) {
 	const ns = "grouped"
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	p95 := int32(95)
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p", Finalizers: []string{"k8s.sustain.io/cleanup"}},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-					CPU:    sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-					Memory: sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-				},
-				Update: sustainv1alpha1.UpdateSpec{Types: sustainv1alpha1.UpdateTypes{Deployment: &ongoing}},
-			},
-		},
-	}
-
-	// Both Deployments report into the single "Deployment/api" identity.
-	dep := func(name string) *appsv1.Deployment {
-		d := annotatedDeployment(ns, name, "p")
-		d.CreationTimestamp = metav1.NewTime(time.Now().Add(-48 * time.Hour))
-		d.Spec.Template.Annotations[sustainv1alpha1.OwnerNameAnnotation] = "api"
-		d.Spec.Template.Spec.Containers[0].Resources = corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")},
-		}
-		return d
-	}
+	inputs := usageFor(ns, "Deployment", "api")
 	// 10m current vs ~100m recommended: an increase, so the downsize threshold
 	// cannot suppress it and any non-application is unambiguous.
-	pod := func(name, app string) *corev1.Pod {
-		return &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: ns, Name: name, Labels: map[string]string{"app": app},
-				OwnerReferences: controllerRef("Deployment", app),
-			},
-			Spec: corev1.PodSpec{Containers: []corev1.Container{{
-				Name:      "app",
-				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")}},
-			}}},
-			Status: corev1.PodStatus{Phase: corev1.PodRunning},
-		}
-	}
+	r := reconcilerWithInputs(t, inputs, true /* in-place */, ongoingDeployments("p"),
+		groupedDeployment(ns, "api-blue", "api", "p"), groupedDeployment(ns, "api-green", "api", "p"),
+		runningPod(ns, "blue-pod", "api-blue"), runningPod(ns, "green-pod", "api-green"))
 
-	inputs := usageFor(ns, "Deployment", "api")
-	r := reconcilerWithInputs(t, inputs, true /* in-place */, policy,
-		dep("api-blue"), dep("api-green"), pod("blue-pod", "api-blue"), pod("green-pod", "api-green"))
-
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileOnce(t, r, "p")
 
 	for _, name := range []string{"blue-pod", "green-pod"} {
-		var got corev1.Pod
-		if err := r.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: name}, &got); err != nil {
-			t.Fatalf("get %s: %v", name, err)
-		}
-		if got.Spec.Containers[0].Resources.Requests.Cpu().Cmp(resource.MustParse("10m")) == 0 {
+		if cpu := podCPU(t, r, ns, name); cpu == "10m" {
 			t.Errorf("%s still at its original 10m: every member of an owner-name group must be applied, not just the last one listed", name)
 		}
 	}
 
 	var list sustainv1alpha1.WorkloadRecommendationList
-	if err := r.List(context.Background(), &list); err != nil {
+	if err := r.List(context.Background(), &list, client.InNamespace(ns)); err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if len(list.Items) != 1 {
@@ -144,20 +165,14 @@ func TestReconcileAppliesToEveryMemberOfAnOwnerNameGroup(t *testing.T) {
 
 	// The group is one identity, fetched once. A second request would mean the
 	// fan-out re-fetched per member.
-	if calls := inputs.Calls(); len(calls) != 1 || len(calls[0]) != 1 {
+	if calls := inputs.Calls(); len(calls) != 1 || len(calls[0].Requests) != 1 {
 		t.Errorf("fetch calls = %v, want one call requesting the one identity: group members must share one computation", calls)
 	}
 }
 
-// barePodPolicy computes like policyForReconcileWorkload and manages bare
-// pods, so it governs departedWLR's identity.
-func barePodPolicy(t *testing.T, name string) *sustainv1alpha1.Policy {
-	t.Helper()
-	p := policyForReconcileWorkload(t, name)
-	p.Finalizers = []string{"k8s.sustain.io/cleanup"}
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	p.Spec.RightSizing.Update.Types.Pod = &ongoing
-	return p
+// barePodPolicy manages bare pods, so it governs departedWLR's identity.
+func barePodPolicy(name string) *sustainv1alpha1.Policy {
+	return policyManaging(name, sustainv1alpha1.UpdateTypes{Pod: updateMode(sustainv1alpha1.UpdateModeOngoing)})
 }
 
 // departedWLR is the WorkloadRecommendation of a bare-pod identity whose pods
@@ -185,7 +200,7 @@ func departedWLR(ns string) *sustainv1alpha1.WorkloadRecommendation {
 // its runs between them.
 func TestReconcile_RefreshesDepartedIdentity(t *testing.T) {
 	const ns = "airflow-refresh"
-	r := reconcilerWithInputs(t, usageFor(ns, "Pod", "dag-task"), false, barePodPolicy(t, "pol"), departedWLR(ns))
+	r := reconcilerWithInputs(t, usageFor(ns, "Pod", "dag-task"), false, barePodPolicy("pol"), departedWLR(ns))
 	r.RecommendationRetention = 24 * time.Hour
 
 	reconcileOnce(t, r, "pol")
@@ -205,7 +220,7 @@ func TestReconcile_MarksDepartedIdentity(t *testing.T) {
 	const ns = "airflow-departs"
 	wlr := departedWLR(ns)
 	wlr.Status.Departed = false
-	r := reconcilerWithInputs(t, usageFor(ns, "Pod", "dag-task"), false, barePodPolicy(t, "pol"), wlr)
+	r := reconcilerWithInputs(t, usageFor(ns, "Pod", "dag-task"), false, barePodPolicy("pol"), wlr)
 	r.RecommendationRetention = 24 * time.Hour
 
 	reconcileOnce(t, r, "pol")
@@ -222,7 +237,7 @@ func TestReconcile_MarksDepartedIdentity(t *testing.T) {
 func TestReconcile_DepartedIdentityCostsNoWriteOnceRecorded(t *testing.T) {
 	const ns = "airflow-steady"
 	var writes atomic.Int32
-	r := reconcilerCountingWLRStatusWrites(t, usageFor(ns, "Pod", "dag-task"), &writes, barePodPolicy(t, "pol"), departedWLR(ns))
+	r := reconcilerCountingWLRStatusWrites(t, usageFor(ns, "Pod", "dag-task"), &writes, barePodPolicy("pol"), departedWLR(ns))
 	r.RecommendationRetention = 24 * time.Hour
 
 	reconcileOnce(t, r, "pol")
@@ -241,6 +256,96 @@ func TestReconcile_DepartedIdentityCostsNoWriteOnceRecorded(t *testing.T) {
 	}
 }
 
+// shutdownDuringFetch cancels the reconcile's context while its fetch runs, as
+// a manager shutting down mid-pass does.
+type shutdownDuringFetch struct {
+	*recommendertest.StaticInputs
+	cancel context.CancelFunc
+}
+
+func (s shutdownDuringFetch) FetchInputs(
+	ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest,
+) map[promclient.WorkloadIdentity]recommender.InputsResult {
+	s.cancel()
+	return s.StaticInputs.FetchInputs(ctx, cfg, reqs)
+}
+
+// As for a live member, a departed identity's failed fetch is a failure,
+// counted and refreshed as an error, unless the reconcile's own context
+// ended: then it is shutdown, and counts nothing.
+func TestReconcile_DepartedFailureCountsUnlessAtShutdown(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		shutdown   bool
+		wantReady  metav1.ConditionStatus
+		wantErrors float64
+	}{
+		{"failure", false, metav1.ConditionFalse, 1},
+		{"shutdown", true, metav1.ConditionTrue, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := "airflow-" + tc.name
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			static := recommendertest.NewStaticInputs().Fail(identityOf(ns, "Pod", "dag-task"), context.Canceled)
+			var inputs recommender.InputsFetcher = static
+			if tc.shutdown {
+				inputs = shutdownDuringFetch{StaticInputs: static, cancel: cancel}
+			}
+			r := reconcilerWithInputs(t, inputs, false, barePodPolicy("pol"), departedWLR(ns))
+			r.RecommendationRetention = 24 * time.Hour
+			errorRefreshes := func() float64 {
+				return testutil.ToFloat64(wlrRefreshTotal.WithLabelValues(ns, "Pod", WLRRefreshError))
+			}
+			before := errorRefreshes()
+
+			if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "pol"}}); err != nil {
+				t.Fatal(err)
+			}
+
+			if ready := readyCondition(t, r, "pol"); ready.Status != tc.wantReady {
+				t.Errorf("Ready = %s %q, want %s", ready.Status, ready.Message, tc.wantReady)
+			}
+			if got := errorRefreshes() - before; got != tc.wantErrors {
+				t.Errorf("error refresh delta = %v, want %v", got, tc.wantErrors)
+			}
+		})
+	}
+}
+
+// The same rule holds for a live member: one whose eviction fails as the
+// reconcile's own context ends was cut short by shutdown, so it is neither
+// counted failed nor Blocked, and warned about to no one.
+func TestReconcile_MemberFailingAtShutdownKeepsItsState(t *testing.T) {
+	const ns = "member-shutdown"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheme := testFullScheme(t)
+	c := fakeClientBuilder(scheme, ongoingDeployments("p"), establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceCreate: func(context.Context, client.Client, string, client.Object, client.Object, ...client.SubResourceCreateOption) error {
+				cancel()
+				return apierrors.NewServiceUnavailable("apiserver shutting down")
+			},
+		}).
+		Build()
+	r := reconcilerOn(c, scheme, usageFor(ns, "Deployment", "web"), false)
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if ready := readyCondition(t, r, "p"); ready.Status != metav1.ConditionTrue {
+		t.Errorf("Ready = %s %q, want True: a failure at shutdown counts nothing", ready.Status, ready.Message)
+	}
+	if got := seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, "Deployment", "web"); len(got) != 0 {
+		t.Errorf("retry_state = %v, want the identity not Blocked", got)
+	}
+	if evs := drainEvents(r.recorder.(*events.FakeRecorder)); eventsWith(evs, "ReconciliationRetryScheduled") != 0 {
+		t.Errorf("a failure at shutdown was warned about: %v", evs)
+	}
+}
+
 // Recomputing every identity every cycle means a departed one WILL eventually
 // produce nothing: its samples age out of the query window while the retention
 // window still holds the recommendation. Writing anything on that path — even
@@ -255,7 +360,7 @@ func TestReconcile_DepartedRefreshNeverWipesGoodRecommendation(t *testing.T) {
 	wlr.Status.Outcome = sustainv1alpha1.OutcomeComputed
 	wlr.Status.Containers = map[string]sustainv1alpha1.ContainerRecommendation{"app": {CPURequest: &q}}
 	// Prometheus returns nothing: the identity's samples aged out of the window.
-	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), false, barePodPolicy(t, "pol"), wlr)
+	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), false, barePodPolicy("pol"), wlr)
 	r.RecommendationRetention = 24 * time.Hour
 
 	reconcileOnce(t, r, "pol")
@@ -273,7 +378,7 @@ func TestReconcile_DepartedRefreshNeverWipesGoodRecommendation(t *testing.T) {
 }
 
 // The snapshot Lists WorkloadRecommendations through the cache-backed client,
-// which has not caught up on the one discover() is about to Create — the
+// which has not caught up on the one the claim is about to Create — the
 // read-after-write race internal/wlrcache documents. Nothing watches
 // WorkloadRecommendation, so an identity the cache has not caught up on must
 // still be computed from its members, not wait for the next
@@ -282,22 +387,15 @@ func TestReconcile_DepartedRefreshNeverWipesGoodRecommendation(t *testing.T) {
 // The interceptor models that lag. A fake client is read-your-writes and cannot
 // express it on its own, which is why the defect was invisible to the suite.
 func TestReconcile_ComputesIdentityMissingFromLaggingWLRList(t *testing.T) {
-	ongoing := sustainv1alpha1.UpdateModeOngoing
 	const policyName = "lagging"
-	policy := policyForReconcileWorkload(t, policyName)
-	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
-	policy.Spec.RightSizing.Update.Types = sustainv1alpha1.UpdateTypes{Deployment: &ongoing}
-	dep := annotatedDeployment("default", "web", policyName)
 	// Older than MinWorkloadAge so the young-workload gate is not what decides
 	// this test: the object's own age is the signal, and it is well past it.
-	dep.CreationTimestamp = metav1.NewTime(time.Now().Add(-24 * time.Hour))
+	dep := establishedDeployment("default", "web", policyName)
 
 	var wlrLists atomic.Int32
-	r := reconcilerWithLaggingWLRList(t, usageFor("default", "Deployment", "web"), &wlrLists, policy, dep)
+	r := reconcilerWithLaggingWLRList(t, usageFor("default", "Deployment", "web"), &wlrLists, ongoingDeployments(policyName), dep)
 
-	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName}}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
+	reconcileOnce(t, r, policyName)
 	if wlrLists.Load() == 0 {
 		t.Fatal("the interceptor never saw a WorkloadRecommendationList; the test is not exercising the race")
 	}
@@ -309,7 +407,7 @@ func TestReconcile_ComputesIdentityMissingFromLaggingWLRList(t *testing.T) {
 	}
 	if len(wlr.Status.Containers) == 0 {
 		t.Error("a newly discovered workload produced no recommendation on the cycle it was first seen: " +
-			"the pass trusted a cache-backed List that cannot yet see what discover just created")
+			"the pass trusted a cache-backed List that cannot yet see what the claim just created")
 	}
 }
 
@@ -321,32 +419,16 @@ func TestReconcile_ComputesIdentityMissingFromLaggingWLRList(t *testing.T) {
 //
 // The invariant: a STABLE group writes nothing after the first cycle, and what
 // is stored is the union of the members' containers rather than any one
-// member's. Only a full Reconcile discriminates — discovery alone already writes
-// one merged snapshot per identity.
+// member's. Only a full Reconcile discriminates — the claim alone already
+// writes one merged snapshot per identity.
 func TestGroupedIdentityStopsWritingStatusAfterTheFirstCycle(t *testing.T) {
 	const ns = "flapgroup"
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	p95 := int32(95)
-	policy := &sustainv1alpha1.Policy{
-		ObjectMeta: metav1.ObjectMeta{Name: "p", Finalizers: []string{"k8s.sustain.io/cleanup"}},
-		Spec: sustainv1alpha1.PolicySpec{
-			RightSizing: sustainv1alpha1.RightSizingSpec{
-				ResourcesConfigs: sustainv1alpha1.ResourcesConfigs{
-					CPU:    sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-					Memory: sustainv1alpha1.ResourceConfig{Window: "168h", Requests: sustainv1alpha1.ResourceRequestsConfig{Percentile: &p95}},
-				},
-				Update: sustainv1alpha1.UpdateSpec{Types: sustainv1alpha1.UpdateTypes{Deployment: &ongoing}},
-			},
-		},
-	}
 
 	// Deliberately DIFFERENT container specs: blue runs "main" alone at 100m,
 	// green runs "main" at 250m plus a "sidecar" blue does not have. Identical
 	// members would make the flap invisible.
 	dep := func(name string, containers ...corev1.Container) *appsv1.Deployment {
-		d := annotatedDeployment(ns, name, "p")
-		d.CreationTimestamp = metav1.NewTime(time.Now().Add(-48 * time.Hour))
-		d.Spec.Template.Annotations[sustainv1alpha1.OwnerNameAnnotation] = "api"
+		d := groupedDeployment(ns, name, "api", "p")
 		d.Spec.Template.Spec.Containers = containers
 		return d
 	}
@@ -364,15 +446,13 @@ func TestGroupedIdentityStopsWritingStatusAfterTheFirstCycle(t *testing.T) {
 		MemPerPod: promclient.ContainerValues{"main": 64 << 20, "sidecar": 32 << 20},
 	})
 	var statusWrites atomic.Int32
-	r := reconcilerCountingWLRStatusWrites(t, inputs, &statusWrites, policy, blue, green)
+	r := reconcilerCountingWLRStatusWrites(t, inputs, &statusWrites, ongoingDeployments("p"), blue, green)
 
 	key := types.NamespacedName{Namespace: ns, Name: wlrcache.Name("Deployment", "api")}
 	cycle := func(n int) (sustainv1alpha1.WorkloadRecommendationStatus, int32) {
 		t.Helper()
 		statusWrites.Store(0)
-		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}}); err != nil {
-			t.Fatalf("Reconcile cycle %d: %v", n, err)
-		}
+		reconcileOnce(t, r, "p")
 		var got sustainv1alpha1.WorkloadRecommendation
 		if err := r.Get(context.Background(), key, &got); err != nil {
 			t.Fatalf("get WorkloadRecommendation after cycle %d: %v", n, err)
@@ -410,44 +490,17 @@ func TestGroupedIdentityStopsWritingStatusAfterTheFirstCycle(t *testing.T) {
 	}
 }
 
-// An identity's recommendation covers the union of its group's containers, so a
-// member can be handed one for a container it does not declare. Nothing would
-// be applied to it — no pod has that container — but changedContainers counts a
-// recommended name with no matching container as CHANGED, which would put a
-// phantom container into that member's ResourcesUpdated event on every cycle.
-func TestRecsForTargetDropsContainersTheMemberDoesNotRun(t *testing.T) {
-	recs := map[string]workload.ContainerRecommendation{
-		"main":    {CPURequest: qty("100m")},
-		"sidecar": {CPURequest: qty("50m")},
-	}
-	got := recsForTarget(recs, []corev1.Container{{Name: "main"}})
-	if len(got) != 1 {
-		t.Fatalf("got %d recommendations, want 1 (only the container this member runs): %v", len(got), got)
-	}
-	if _, ok := got["sidecar"]; ok {
-		t.Error("sidecar must not be applied to a member that does not declare it")
-	}
-	if got["main"].CPURequest.Cmp(*qty("100m")) != 0 {
-		t.Errorf("main = %v, want the identity's 100m unchanged", got["main"].CPURequest)
-	}
-}
-
 // A LIVE identity whose fetch comes back empty must be recorded as nodata,
 // exactly as the departed path records it.
 //
 // The cost of leaving it unmarked is downstream: a zero status.observedAt reads
 // to the webhook as "no recommendation exists yet", which it answers with a stub
-// Create/Get per identity per dedup window for an object discovery had already
+// Create/Get per identity per dedup window for an object the claim had already
 // created — and it keeps the nodata bucket permanently empty.
 func TestReconcile_MarksNoDataForLiveIdentityWithoutSamples(t *testing.T) {
 	const ns = "nodata"
-	dep := annotatedDeployment(ns, "api", "p")
-	dep.CreationTimestamp = metav1.NewTime(time.Now().Add(-48 * time.Hour)) // past MinWorkloadAge
-	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), true, ongoingDeployments("p"), dep)
+	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), true, ongoingDeployments("p"), establishedDeployment(ns, "api", "p"))
 
-	// Two passes: discovery creates the WLR on the first, computation sees it
-	// on the second.
-	reconcileOnce(t, r, "p")
 	reconcileOnce(t, r, "p")
 
 	got := getWLRFor(t, r, ns, "Deployment", "api")

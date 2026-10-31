@@ -7,26 +7,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// applyIsNoOp reports whether applying rec to a container with the given
-// current resources leaves the resulting CPU/memory requests and limits
-// unchanged (compared numerically). This is the ground truth ContainerMatches
-// must agree with: "matches" iff applying the recommendation changes no value.
-func applyIsNoOp(current corev1.ResourceRequirements, rec ContainerRecommendation) bool {
-	c := corev1.Container{Resources: *current.DeepCopy()}
-	applyRecToContainer(&c, rec)
-	return resourcesValueEqual(current, c.Resources)
-}
-
-// resourcesValueEqual compares requests+limits for CPU and memory numerically,
-// treating an absent key as a zero Quantity (the same normalization the
-// Kubernetes ResourceList accessors use).
-func resourcesValueEqual(a, b corev1.ResourceRequirements) bool {
-	return a.Requests.Cpu().Cmp(*b.Requests.Cpu()) == 0 &&
-		a.Requests.Memory().Cmp(*b.Requests.Memory()) == 0 &&
-		a.Limits.Cpu().Cmp(*b.Limits.Cpu()) == 0 &&
-		a.Limits.Memory().Cmp(*b.Limits.Memory()) == 0
-}
-
 func reqs(cpu, mem string) corev1.ResourceList {
 	rl := corev1.ResourceList{}
 	if cpu != "" {
@@ -146,17 +126,21 @@ func TestContainerMatches(t *testing.T) {
 			rec:     ContainerRecommendation{CPURequest: qtyp("1")},
 			want:    true,
 		},
+		{
+			// Applying would raise the recommended limit back to the running
+			// request, which changes nothing: the container is at target, or
+			// the patcher would resize or evict it on every pass.
+			name:    "limit below the running request matches once raised",
+			current: reqsRR("500m", "", "500m", ""),
+			rec:     ContainerRecommendation{CPULimit: qtyp("400m")},
+			want:    true,
+		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := ContainerMatches(c.current, c.rec)
-			if got != c.want {
+			if got := ContainerMatches(c.current, c.rec); got != c.want {
 				t.Errorf("ContainerMatches = %v, want %v", got, c.want)
-			}
-			// The predicate must agree with whether applying the rec is a no-op.
-			if noop := applyIsNoOp(c.current, c.rec); got != noop {
-				t.Errorf("ContainerMatches = %v but applying rec no-op = %v; predicate must equal apply-is-no-op", got, noop)
 			}
 		})
 	}
@@ -276,8 +260,5 @@ func TestContainerMatches_MissingResourceMapEntries(t *testing.T) {
 	rec := ContainerRecommendation{CPURequest: qtyp("100m"), MemoryLimit: qtyp("256Mi")}
 	if ContainerMatches(current, rec) {
 		t.Error("expected mismatch: nil resource maps vs concrete recommendation")
-	}
-	if applyIsNoOp(current, rec) {
-		t.Error("sanity: applying a concrete rec to empty resources must change something")
 	}
 }

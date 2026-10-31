@@ -132,6 +132,16 @@ func Read(known *sustainv1alpha1.WorkloadRecommendation, policy string, now time
 	}
 }
 
+// Held is the Recommendation known holds that policy computed, however old:
+// what the controller publishes for policy's members whatever this pass
+// decided. Nil when known holds none of policy's.
+func Held(known *sustainv1alpha1.WorkloadRecommendation, policy string) map[string]workload.ContainerRecommendation {
+	if known == nil || known.Status.ComputedBy != policy || len(known.Status.Containers) == 0 {
+		return nil
+	}
+	return recsFromStatus(known.Status)
+}
+
 func recsFromStatus(status sustainv1alpha1.WorkloadRecommendationStatus) map[string]workload.ContainerRecommendation {
 	out := make(map[string]workload.ContainerRecommendation, len(status.Containers))
 	for name, c := range status.Containers {

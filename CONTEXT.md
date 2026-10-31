@@ -11,7 +11,7 @@ The unit a recommendation is computed for: one namespace, owner kind and owner n
 _Avoid_: target, entry, workload (when the unit is meant)
 
 **Member**:
-One live object (a Deployment, Job, bare Pod, …) that belongs to an identity. A member is governed by the Policy it opts into when that Policy exists, manages its kind and selects it. An identity's containers are the union of its governed members' containers, the newest member's winning for a container several declare, and its age runs from its earliest governed member or from when it was first seen, whichever is older. A finished standalone Job and a CronJob's Jobs are never members.
+One live object (a Deployment, Job, bare Pod, …) that belongs to an identity. A member is governed by the Policy it opts into when that Policy exists, manages its kind and selects it: accepts its namespace, and its pod template's labels (a bare Pod's own), never the object's own labels. An identity's containers are the union of its governed members' containers, the newest member's winning for a container several declare, and its age runs from its earliest governed member or from when it was first seen, whichever is older. A finished standalone Job and a CronJob's Jobs are never members.
 _Avoid_: representative
 
 **In-place-only kind**:
@@ -38,22 +38,22 @@ The stored record of one identity's Recommendation, the Policy that computed it,
 _Avoid_: cache entry, wlrec (outside kubectl)
 
 **Recommendation**:
-The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. It is served only to pods of the Policy that computed it: an identity another Policy adopts gets none until that Policy computes its own. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold.
+The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. It is served only to pods of the Policy that computed it: an identity another Policy adopts gets none until that Policy computes its own. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold, and it never leaves a container's request above its limit: where it would, the limit is raised to the request.
 _Avoid_: applied recommendation, current recommendation
 
 **Signal**:
-An observed input that contributes one stage to a Recommendation: the CPU and memory usage of the busiest replica, which set the requests, and recent OOM kills, which can only raise the memory request. An identity whose usage cannot be read gets no Recommendation; one whose OOM kills cannot be read is recommended without them.
+An observed input that contributes one stage to a Recommendation: the CPU and memory usage of the busiest replica, which set the requests, and recent OOM kills, which can only raise the memory request and excuse a Too young identity. A signal's stage shapes either a request or a limit; one that shapes a limit can only raise it. An identity whose usage cannot be read gets no Recommendation; one whose OOM kills cannot be read is recommended without them.
 _Avoid_: metric, input (when one source is meant)
 
 **Trace**:
-The record of how a Recommendation was derived: for each container and resource, the value after every stage of the computation that ran (usage percentile, OOM floor, headroom, min/max clamp, autoscaler coordination and its factors, limit). Stored in the WorkloadRecommendation with the Recommendation it explains, never on its own.
+The record of how a Recommendation was derived: for each container and resource, the stages that ran, in order, each with its value and its own facts — on the request (each signal's contribution, headroom, min/max clamp, autoscaler coordination and its factors), then on the limit (the Policy's limit strategy, any signal that raises the limit, and the guard that raises a limit below the request to the request). Stored in the WorkloadRecommendation with the Recommendation it explains, never on its own.
 _Avoid_: breakdown, explanation, debug info
 
 **Running resources**:
 The requests and limits a pod is actually running with.
 
 **Simulation**:
-A recommendation recomputed on demand by the dashboard, possibly under what-if settings. It is never what gets applied.
+A recommendation recomputed on demand by the dashboard: the computation the controller would run for an identity, from its governing Policy's settings or another Policy's, with any what-if changes merged in. With none, it differs from the controller's only by the OOM kills the controller has seen live and Prometheus does not hold yet. It is never what gets applied.
 _Avoid_: preview, dry-run (dry-run means recommend-only)
 
 ### Health
@@ -62,7 +62,7 @@ _Avoid_: preview, dry-run (dry-run means recommend-only)
 The single most actionable condition of an identity, in this precedence: Conflicted, then Blocked, then At risk, then Drifted, then Safe.
 
 **Blocked**:
-The controller keeps failing to apply an identity's Recommendation and is backing off. One failing member is enough to block the identity.
+The controller's last attempt to apply an identity's Recommendation to one of its members failed, and none has succeeded since. A transient failure is retried with a backoff that grows with each consecutive transient failure; a permanent one (forbidden, invalid, a member the controller refuses to apply to) every reconcile, until something outside the controller fixes it. A member left alone because its Recommendation could not be stored for the webhook has failed too. One Blocked member is enough to block the identity, and a Policy with a Blocked identity is not Ready.
 
 **At risk**:
 An identity with an OOM kill in the last 24 hours.

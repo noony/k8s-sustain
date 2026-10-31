@@ -3,8 +3,6 @@ package controller
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
-
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 var (
@@ -51,12 +49,12 @@ var (
 
 	workloadRetryState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_workload_retry_state",
-		Help: "1 while any member of the workload identity is in retry backoff, with the failed phase of the first such member as reason; absent otherwise.",
+		Help: "1 while any member of the workload identity is Blocked (its last apply failed, transiently or permanently), with the failed step of the first such member as reason; absent otherwise.",
 	}, []string{"namespace", "owner_kind", "owner_name", "reason"})
 
 	workloadRetryAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_workload_retry_attempts",
-		Help: "Total failed reconcile steps across the workload identity's members.",
+		Help: "Total failed apply attempts across the workload identity's members, transient or permanent.",
 	}, []string{"namespace", "owner_kind", "owner_name"})
 
 	policyWorkloadCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -66,7 +64,7 @@ var (
 
 	policyBlockedCount = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "k8s_sustain_policy_blocked_count",
-		Help: "Number of a policy's live workload identities with a member in retry backoff.",
+		Help: "Number of a policy's live workload identities with a Blocked member.",
 	}, []string{"policy"})
 
 	autoscalerPresent = prometheus.NewGaugeVec(
@@ -153,8 +151,8 @@ var (
 	groupAutoscalerMismatchTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "k8s_sustain_group_autoscaler_mismatch_total",
 		Help: "Owner-name groups whose members disagree on autoscaler presence or kind, counted once per " +
-			"reconcile per identity. The group's shared recommendation is still shaped by the first sorted " +
-			"member's autoscaler (see groupAutoscalerInfo) -- this counter exists to surface the resulting " +
+			"reconcile per identity. The group's shared recommendation is still shaped by the autoscaler of its " +
+			"first member, in name order, that has one -- this counter exists to surface the resulting " +
 			"misconfiguration, e.g. an un-autoscaled member silently inheriting an HPA-coordinated value it " +
 			"was never meant to get.",
 	}, []string{"namespace", "owner_kind", "owner_name"})
@@ -190,26 +188,9 @@ func init() {
 	)
 }
 
-// EmitOOMObserved increments the observed-OOM counter for a workload container.
-func EmitOOMObserved(namespace, ownerKind, ownerName, container string) {
-	oomObservedTotal.WithLabelValues(namespace, ownerKind, ownerName, container).Inc()
-}
-
-// EmitOOMReactionLatency records the elapsed time between the cache record's
-// TerminatedAt and the floor-driven memory recommendation that responds to it.
-func EmitOOMReactionLatency(namespace, ownerKind, ownerName string, seconds float64) {
-	oomReactionLatencySeconds.WithLabelValues(namespace, ownerKind, ownerName).Observe(seconds)
-}
-
 // SetOOMCacheEntries sets the current cache size gauge.
 func SetOOMCacheEntries(n int) {
 	oomCacheEntries.Set(float64(n))
-}
-
-// EmitRecycleSuppressed counts pods of the identity on which the downsize
-// threshold held back a decrease of resource.
-func EmitRecycleSuppressed(id promclient.WorkloadIdentity, resource string, pods int) {
-	recycleSuppressedTotal.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, resource).Add(float64(pods))
 }
 
 // WorkloadRecommendation refresh outcomes for EmitWLRRefresh.
@@ -240,10 +221,4 @@ const (
 // EmitWLRRefresh records the outcome of one WorkloadRecommendation refresh.
 func EmitWLRRefresh(namespace, ownerKind, outcome string) {
 	wlrRefreshTotal.WithLabelValues(namespace, ownerKind, outcome).Inc()
-}
-
-// EmitGroupAutoscalerMismatch increments the counter for an owner-name group
-// whose members disagree on autoscaler presence or kind this reconcile.
-func EmitGroupAutoscalerMismatch(namespace, ownerKind, ownerName string) {
-	groupAutoscalerMismatchTotal.WithLabelValues(namespace, ownerKind, ownerName).Inc()
 }

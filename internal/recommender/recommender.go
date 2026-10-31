@@ -2,11 +2,14 @@ package recommender
 
 import (
 	"math"
+	"strconv"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 const (
@@ -63,6 +66,22 @@ func (r resourceKind) config(cfg sustainv1alpha1.ResourcesConfigs) sustainv1alph
 	return cfg.Memory
 }
 
+// usage is where in holds the resource's usage percentile of each container.
+func (r resourceKind) usage(in *WorkloadInputs) *promclient.ContainerValues {
+	if r == cpuResource {
+		return &in.CPUPerPod
+	}
+	return &in.MemPerPod
+}
+
+// value is q in cores or bytes.
+func (r resourceKind) value(q resource.Quantity) float64 {
+	if r == cpuResource {
+		return float64(q.MilliValue()) / 1000
+	}
+	return float64(q.Value())
+}
+
 // quantity renders a value (cores or bytes) for the trace: CPU at nanocore
 // precision, so the trace shows the value headroom was applied to rather than
 // a rounded one, and memory in whole bytes, as withHeadroom reads it.
@@ -94,53 +113,19 @@ func (r resourceKind) withHeadroom(v float64, headroom *int32) resource.Quantity
 	return *resource.NewQuantity(mib*mebibyte, resource.BinarySI)
 }
 
-// LimitResult holds the outcome of a limit computation.
-type LimitResult struct {
-	// Quantity is the computed limit value. Nil means "keep the existing limit".
-	Quantity *resource.Quantity
-	// Remove, when true, signals that the limit should be deleted entirely.
-	Remove bool
+// of is the resource's value in rl, nil when rl has none. ResourceList.Cpu()
+// and Memory() return zero for an absent value, which must not read as a
+// limit or request of 0.
+func (r resourceKind) of(rl corev1.ResourceList) *resource.Quantity {
+	q, ok := rl[corev1.ResourceName(r)]
+	if !ok || q.IsZero() {
+		return nil
+	}
+	return &q
 }
 
-// ComputeLimit derives a resource limit from the computed request and the limit
-// config. Returns LimitResult{} (keep existing) when no change is required.
-func ComputeLimit(request *resource.Quantity, currentRequest, currentLimit *resource.Quantity, cfg sustainv1alpha1.ResourceLimitsConfig) LimitResult {
-	if request == nil || cfg.KeepLimit {
-		return LimitResult{}
-	}
-	if cfg.NoLimit {
-		return LimitResult{Remove: true}
-	}
-	if cfg.EqualsToRequest {
-		q := request.DeepCopy()
-		return LimitResult{Quantity: &q}
-	}
-	if cfg.RequestsLimitsRatio != nil {
-		return LimitResult{Quantity: scaleByRatio(request, *cfg.RequestsLimitsRatio)}
-	}
-	if cfg.KeepLimitRequestRatio && currentRequest != nil && currentLimit != nil && !currentRequest.IsZero() {
-		ratio := float64(currentLimit.MilliValue()) / float64(currentRequest.MilliValue())
-		return LimitResult{Quantity: scaleByRatio(request, ratio)}
-	}
-	return LimitResult{}
-}
-
-// scaleByRatio multiplies request by ratio, rounding up. Memory quantities
-// (BinarySI) are scaled in whole bytes — milli math would carry float64
-// representation error into fractional-byte limits (e.g. 100Mi * 1.1 →
-// 115343360001 milli-bytes), which Kubernetes warns about in pod specs.
-// CPU keeps millivalue precision.
-func scaleByRatio(request *resource.Quantity, ratio float64) *resource.Quantity {
-	if request.Format == resource.BinarySI {
-		return resource.NewQuantity(
-			int64(math.Ceil(float64(request.Value())*ratio)),
-			request.Format,
-		)
-	}
-	return resource.NewMilliQuantity(
-		int64(math.Ceil(float64(request.MilliValue())*ratio)),
-		request.Format,
-	)
+func formatFactor(f float64) string {
+	return strconv.FormatFloat(f, 'g', 4, 64)
 }
 
 // clamp raises q to minQ and caps it at maxQ, maxQ winning a conflict.

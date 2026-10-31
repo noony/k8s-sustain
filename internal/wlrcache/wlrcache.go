@@ -40,6 +40,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 // maxNameLength is the Kubernetes object-name limit (DNS subdomain).
@@ -56,6 +57,16 @@ func Name(kind, name string) string {
 	sum := sha256.Sum256([]byte(n))
 	hash := hex.EncodeToString(sum[:])[:10]
 	return n[:maxNameLength-len(hash)-1] + "-" + hash
+}
+
+// WorkloadRef is how id's WorkloadRecommendation names its identity.
+func WorkloadRef(id promclient.WorkloadIdentity) sustainv1alpha1.WorkloadReference {
+	return sustainv1alpha1.WorkloadReference{Kind: id.OwnerKind, Namespace: id.Namespace, Name: id.OwnerName}
+}
+
+// Key is the object key of id's WorkloadRecommendation.
+func Key(id promclient.WorkloadIdentity) types.NamespacedName {
+	return keyOf(WorkloadRef(id))
 }
 
 func keyOf(ref sustainv1alpha1.WorkloadReference) types.NamespacedName {

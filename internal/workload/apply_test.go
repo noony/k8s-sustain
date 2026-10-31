@@ -289,7 +289,7 @@ func TestApply_RefusesMemberWithoutUID(t *testing.T) {
 			var acts podActions
 			p := New(acts.client(t, fx.objs...), true)
 			out, err := p.Apply(context.Background(), m, applyRecs, ApplySettings{})
-			if err == nil {
+			if !errors.Is(err, ErrRefused) {
 				t.Fatal("expected a member without UID to be refused")
 			}
 			if len(acts.resized)+len(acts.evicted) > 0 {
@@ -309,7 +309,7 @@ func TestApply_RefusesWorkloadWithoutSelector(t *testing.T) {
 	p := New(acts.client(t, cpuPod("a", "50m")), true)
 	m := testMember()
 	m.Object.(*appsv1.DaemonSet).Spec.Selector = nil
-	if _, err := p.Apply(context.Background(), m, applyRecs, ApplySettings{}); err == nil {
+	if _, err := p.Apply(context.Background(), m, applyRecs, ApplySettings{}); !errors.Is(err, ErrRefused) {
 		t.Fatal("expected a workload without selector to be refused")
 	}
 }
@@ -318,7 +318,7 @@ func TestApply_RefusesKindWithoutRule(t *testing.T) {
 	var acts podActions
 	p := New(acts.client(t), true)
 	m := Member{Kind: "ReplicaSet", Object: &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "rs", UID: "rs-uid"}}}
-	if _, err := p.Apply(context.Background(), m, applyRecs, ApplySettings{}); err == nil {
+	if _, err := p.Apply(context.Background(), m, applyRecs, ApplySettings{}); !errors.Is(err, ErrRefused) {
 		t.Fatal("expected a kind without apply rule to be refused")
 	}
 }
@@ -327,7 +327,7 @@ func TestApply_RefusesObjectOfAnotherKind(t *testing.T) {
 	var acts podActions
 	p := New(acts.client(t), true)
 	m := Member{Kind: "CronJob", Object: &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "j", UID: "j-uid"}}}
-	if _, err := p.Apply(context.Background(), m, applyRecs, ApplySettings{}); err == nil {
+	if _, err := p.Apply(context.Background(), m, applyRecs, ApplySettings{}); !errors.Is(err, ErrRefused) {
 		t.Fatal("expected a CronJob member carrying a Job to be refused")
 	}
 }

@@ -753,6 +753,24 @@ tbody tr:last-child td {
   color: var(--accent-light);
   font-family: var(--font-mono);
 }
+.sim-shared {
+  margin-top: 24px;
+}
+.sim-starting-point {
+  margin: 0 0 16px;
+}
+.sim-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 16px;
+  cursor: pointer;
+}
+.sim-check input[type='checkbox'] {
+  accent-color: var(--accent);
+}
 .sim-subsection {
   margin-bottom: 8px;
 }
@@ -944,6 +962,12 @@ tbody tr:last-child td {
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.03em;
   line-height: 1.2;
+}
+.stat-card.tone-warn .stat-value {
+  color: var(--yellow);
+}
+.stat-card.tone-danger .stat-value {
+  color: var(--red);
 }
 .stat-card .stat-detail {
   font-size: 13px;
@@ -1623,11 +1647,11 @@ a.kpi-card {
   background: var(--green-soft);
   color: var(--green);
 }
-.risk-drift {
+.risk-drifted {
   background: var(--yellow-soft);
   color: var(--yellow);
 }
-.risk-risk {
+.risk-at-risk {
   background: var(--red-soft);
   color: var(--red);
 }
@@ -1948,12 +1972,12 @@ a.kpi-card {
 .aq-header:hover {
   background: var(--bg-hover);
 }
-.aq-header.risk-risk {
+.aq-header.risk-at-risk {
   background: transparent;
   color: var(--text);
   border-left-color: var(--red);
 }
-.aq-header.risk-drift {
+.aq-header.risk-drifted {
   background: transparent;
   color: var(--text);
   border-left-color: var(--yellow);
@@ -1962,6 +1986,11 @@ a.kpi-card {
   background: transparent;
   color: var(--text);
   border-left-color: var(--accent);
+}
+.aq-header.risk-conflicted {
+  background: transparent;
+  color: var(--text);
+  border-left-color: var(--red);
 }
 .aq-caret {
   color: var(--text-dim);
@@ -2022,6 +2051,12 @@ a.kpi-card {
   padding: 12px 14px;
   color: var(--text-dim);
   font-size: 13px;
+  border-top: 1px solid var(--border);
+}
+.aq-more {
+  padding: 10px 14px;
+  color: var(--accent-light);
+  font-size: 12px;
   border-top: 1px solid var(--border);
 }
 .trend-chart {

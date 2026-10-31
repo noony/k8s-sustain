@@ -102,7 +102,7 @@ To avoid churning pods over noise, the controller ignores small **decreases**. A
 - Setting both `percent` and `minDecrease` to `0` acts on every decrease.
 - The threshold only gates resizing and eviction of running pods; new pods still receive the exact recommendation from the webhook.
 
-See the [Policy reference](../reference/policy.md#cpudownsizethreshold-memorydownsizethreshold).
+See the [Policy reference](../reference/policy.md#downsize-threshold).
 
 ---
 
@@ -149,7 +149,7 @@ Recommend-only is a dry-run that works independently of `OnCreate` or `Ongoing`,
 In this mode:
 
 - The controller still reconciles, computes and caches recommendations in `WorkloadRecommendation` objects, but **never resizes or evicts pods**
-- The webhook still resolves pods and reads the cache, but **never injects resources** (only the owner-name label mirror is still applied)
+- The webhook still resolves pods and reads the cache, but **never injects resources**: every pod is admitted unmutated
 - The controller logs each recommendation at `info` level — the chart's default `controller.logLevel: error` hides these, so read `kubectl get wlrec` or the dashboard instead, or raise the log level
 
 ---

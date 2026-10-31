@@ -84,6 +84,14 @@ describe('WorkloadsView', () => {
   it('writes filter changes to the query string and resets the page', async () => {
     const { w, r } = await mountAt('/workloads?page=3&kind=Deployment')
     const riskSelect = w.findAll('select').find((s) => s.text().includes('Any risk'))!
+    expect(riskSelect.findAll('option').map((o) => o.text())).toEqual([
+      'Any risk',
+      'Conflicted',
+      'Blocked',
+      'At risk',
+      'Drifted',
+      'Safe',
+    ])
     await riskSelect.setValue('blocked')
     await flushPromises()
     expect(r.currentRoute.value.query).toEqual({ kind: 'Deployment', risk: 'blocked' })

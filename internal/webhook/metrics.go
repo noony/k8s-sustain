@@ -61,14 +61,18 @@ const (
 	RecSourceOtherPolicy = "other-policy"
 )
 
-// Panic label values for PanicTotal that are not HTTP routes. The singleflight
-// leaders in optin.go run off the request goroutine, so their panics are
-// recovered by sfPanicSafe rather than the httpx middleware — still webhook
-// panics an operator alerting on k8s_sustain_webhook_panic_total must see.
-// Constants, so they add exactly two bounded series.
+// Panic label values for PanicTotal that are not HTTP routes. The webhook
+// recovers these panics itself rather than leaving them to the httpx
+// middleware: the singleflight leaders in optin.go and the stub goroutine run
+// off the request goroutine, where nothing else would, and a panic admitting
+// a decoded pod still admits it instead of answering 500, which a
+// failurePolicy of Fail turns into a rejection. Constants, so they add
+// exactly four bounded series.
 const (
 	panicLabelOwnerRef         = "singleflight/ownerRef"
 	panicLabelOwnerAnnotations = "singleflight/ownerAnnotations"
+	panicLabelAdmit            = "admit"
+	panicLabelStub             = "stub/request"
 )
 
 // RecommendationSourceTotal is the only place the health of the

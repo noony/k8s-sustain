@@ -90,8 +90,8 @@ func TestUsage_CollectsOneValuePerContainer(t *testing.T) {
 }
 
 // A usage signal contributes the percentile of a container it has samples for,
-// which justifies a request on its own, and records it as the trace's
-// percentile at its resource's precision.
+// which justifies a request on its own, records it as the trace's percentile
+// stage at its resource's precision, and never excuses an identity's age.
 func TestUsage_StageAndTrace(t *testing.T) {
 	in := &WorkloadInputs{
 		CPUPerPod: promclient.ContainerValues{"app": 0.1234},
@@ -113,11 +113,13 @@ func TestUsage_StageAndTrace(t *testing.T) {
 			if _, ok := tc.signal.contribute(in, "absent"); ok {
 				t.Error("a container without samples contributed")
 			}
-			var tr sustainv1alpha1.ResourceTrace
-			tc.signal.record(&tr, c.value, true)
-			assertQty(t, "percentile", tr.Percentile, tc.want)
-			if tr.OOMFloor != nil {
-				t.Errorf("usage recorded an OOM floor: %+v", tr.OOMFloor)
+			st := tc.signal.stage(in, "app", c.value, true)
+			if st.Stage != "percentile" || st.Removed || len(st.Facts) != 0 {
+				t.Errorf("stage = %+v, want a bare percentile", st)
+			}
+			assertQty(t, "percentile", st.Value, tc.want)
+			if tc.signal.excusesAge(in) {
+				t.Error("usage excused the identity's age")
 			}
 		})
 	}

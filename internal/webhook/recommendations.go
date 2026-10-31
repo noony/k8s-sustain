@@ -5,24 +5,24 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/types"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 )
 
 // storedRecommendation reads the WorkloadRecommendation the controller keeps
-// for identity (kind, name) in namespace, nil when there is none. It is the
-// webhook's only recommendation source: it never queries Prometheus itself.
-func (h *Handler) storedRecommendation(ctx context.Context, namespace, kind, name string) (*sustainv1alpha1.WorkloadRecommendation, error) {
-	objName := wlrcache.Name(kind, name)
+// for id, nil when there is none. It is the webhook's only recommendation
+// source: it never queries Prometheus itself.
+func (h *Handler) storedRecommendation(ctx context.Context, id promclient.WorkloadIdentity) (*sustainv1alpha1.WorkloadRecommendation, error) {
+	key := wlrcache.Key(id)
 	var wlr sustainv1alpha1.WorkloadRecommendation
-	err := h.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: objName}, &wlr)
+	err := h.Client.Get(ctx, key, &wlr)
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("reading WorkloadRecommendation %s/%s: %w", namespace, objName, err)
+		return nil, fmt.Errorf("reading WorkloadRecommendation %s: %w", key, err)
 	}
 	return &wlr, nil
 }

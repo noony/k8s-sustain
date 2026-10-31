@@ -6,20 +6,26 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"go.uber.org/goleak"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
+	clocktesting "k8s.io/utils/clock/testing"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -50,7 +56,9 @@ func readyCondition(t *testing.T, r *PolicyReconciler, name string) *metav1.Cond
 	return nil
 }
 
-func ongoingPolicy(name string, kinds sustainv1alpha1.UpdateTypes) *sustainv1alpha1.Policy {
+// policyManaging is a Policy managing kinds, holding the cleanup finalizer a
+// first Reconcile would add.
+func policyManaging(name string, kinds sustainv1alpha1.UpdateTypes) *sustainv1alpha1.Policy {
 	return &sustainv1alpha1.Policy{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Finalizers: []string{"k8s.sustain.io/cleanup"}},
 		Spec: sustainv1alpha1.PolicySpec{
@@ -63,7 +71,7 @@ func ongoingPolicy(name string, kinds sustainv1alpha1.UpdateTypes) *sustainv1alp
 
 func ongoingDeployments(name string) *sustainv1alpha1.Policy {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
-	return ongoingPolicy(name, sustainv1alpha1.UpdateTypes{Deployment: &ongoing})
+	return policyManaging(name, sustainv1alpha1.UpdateTypes{Deployment: &ongoing})
 }
 
 // establishedDeployment is an opted-in Deployment old enough to clear the age
@@ -80,6 +88,10 @@ func establishedDeployment(ns, name, policy string) *appsv1.Deployment {
 // runningPod is a Running pod of establishedDeployment(ns, app), with
 // container "app" at 10m CPU.
 func runningPod(ns, name, app string) *corev1.Pod {
+	return runningPodAt(ns, name, app, "10m")
+}
+
+func runningPodAt(ns, name, app, cpu string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns, Name: name, Labels: map[string]string{"app": app},
@@ -87,7 +99,7 @@ func runningPod(ns, name, app string) *corev1.Pod {
 		},
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
 			Name:      "app",
-			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("10m")}},
+			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse(cpu)}},
 		}}},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
@@ -183,10 +195,11 @@ func TestReconcile_DeletedPolicy_RemovesFinalizer(t *testing.T) {
 }
 
 // The failing target is a standalone Job, an arbitrary choice: every kind goes
-// through the same fetch and a failure propagates identically.
+// through the same fetch and a failure propagates identically. The next pass
+// is due when the retry is, not a whole reconcile interval later.
 func TestReconcile_PartialFailure_SetsConditionAndRequeues(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
-	policy := ongoingPolicy("p", sustainv1alpha1.UpdateTypes{Job: &ongoing})
+	policy := policyManaging("p", sustainv1alpha1.UpdateTypes{Job: &ongoing})
 	job := annotatedJob("default", "app", "p")
 	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Job", "app"), errors.New("prometheus down"))
 	r := reconcilerWithInputs(t, inputs, false, policy, job)
@@ -195,8 +208,8 @@ func TestReconcile_PartialFailure_SetsConditionAndRequeues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if res.RequeueAfter != time.Hour {
-		t.Errorf("RequeueAfter = %v, want 1h even on partial failure", res.RequeueAfter)
+	if res.RequeueAfter != baseRetryDelay {
+		t.Errorf("RequeueAfter = %v, want %v: the failed member's first retry", res.RequeueAfter, baseRetryDelay)
 	}
 
 	ready := readyCondition(t, r, "p")
@@ -208,12 +221,38 @@ func TestReconcile_PartialFailure_SetsConditionAndRequeues(t *testing.T) {
 	}
 }
 
+// Every count of workloads is a count of identities: an owner-name group is
+// one workload in the Ready message, whether its two members fail or succeed.
+func TestReconcile_ReadyCountsIdentities(t *testing.T) {
+	const ns = "counted"
+	api := identityOf(ns, "Deployment", "api")
+	for _, tc := range []struct {
+		name   string
+		inputs *recommendertest.StaticInputs
+		want   string
+	}{
+		{"failing", recommendertest.NewStaticInputs().Fail(api, errors.New("prometheus down")), "1 of 1 workloads failed; Blocked workload identities: 1"},
+		{"succeeding", usageFor(ns, "Deployment", "api"), "All 1 workloads have been processed."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := reconcilerWithInputs(t, tc.inputs, true, ongoingDeployments("p"),
+				groupedDeployment(ns, "api-blue", "api", "p"), groupedDeployment(ns, "api-green", "api", "p"))
+
+			reconcileOnce(t, r, "p")
+
+			if got := readyCondition(t, r, "p").Message; got != tc.want {
+				t.Errorf("Ready message = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Job and bare-Pod identities are fetched like every other kind, and counted
 // by k8s_sustain_policy_batch_requested_count.
 func TestReconcileFetchesJobAndPodIdentities(t *testing.T) {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
 	const policyName = "batch-job-pod"
-	policy := ongoingPolicy(policyName, sustainv1alpha1.UpdateTypes{Job: &ongoing, Pod: &ongoing})
+	policy := policyManaging(policyName, sustainv1alpha1.UpdateTypes{Job: &ongoing, Pod: &ongoing})
 	job := annotatedJob("default", "nightly", policyName)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -257,10 +296,10 @@ func TestReconcile_FetchesEveryIdentityInOneCall(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("got %d fetch calls, want 1 for the whole Policy", len(calls))
 	}
-	if len(calls[0]) != numWorkloads {
-		t.Errorf("the call requested %d identities, want %d", len(calls[0]), numWorkloads)
+	if len(calls[0].Requests) != numWorkloads {
+		t.Errorf("the call requested %d identities, want %d", len(calls[0].Requests), numWorkloads)
 	}
-	for _, req := range calls[0] {
+	for _, req := range calls[0].Requests {
 		if req.Containers != 1 {
 			t.Errorf("%v requested with size %d, want its 1 container", req.Identity, req.Containers)
 		}
@@ -268,22 +307,30 @@ func TestReconcile_FetchesEveryIdentityInOneCall(t *testing.T) {
 }
 
 // The normal path: the identity's Recommendation and its trace are written to
-// its WorkloadRecommendation and applied to its running pod.
+// its WorkloadRecommendation and applied to its running pod, which is then
+// counted and no longer stale.
 func TestReconcile_RecommendsPersistsAndApplies(t *testing.T) {
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true,
-		ongoingDeployments("p"), establishedDeployment("default", "web", "p"), runningPod("default", "web-pod", "web"))
+	const ns = "applied"
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		ongoingDeployments("p"), establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web"))
 
 	reconcileOnce(t, r, "p")
 
-	wlr := getWLRFor(t, r, "default", "Deployment", "web")
+	wlr := getWLRFor(t, r, ns, "Deployment", "web")
 	if got := wlr.Status.Containers["app"].CPURequest; got == nil || got.String() != "100m" {
 		t.Errorf("stored CPU recommendation = %v, want 100m", got)
 	}
-	if tr := wlr.Status.Trace["app"].CPU; tr == nil || tr.Percentile == nil || tr.Clamped.String() != "100m" {
+	if tr := wlr.Status.Trace["app"].CPU; tr == nil || len(tr.Request) < 2 || tr.Request[len(tr.Request)-1].Value.String() != "100m" {
 		t.Errorf("stored CPU trace = %+v, want the stages that arrived at 100m", tr)
 	}
-	if cpu := podCPU(t, r, "default", "web-pod"); cpu != "100m" {
+	if cpu := podCPU(t, r, ns, "web-pod"); cpu != "100m" {
 		t.Errorf("pod CPU = %s, want the 100m recommendation applied in place", cpu)
+	}
+	if got := gaugeOf(t, "k8s_sustain_workload_pods", ns, "Deployment", "web"); got != 1 {
+		t.Errorf("pods = %v, want 1", got)
+	}
+	if got := gaugeOf(t, "k8s_sustain_workload_stale_pods", ns, "Deployment", "web"); got != 0 {
+		t.Errorf("stale pods = %v, want 0 after the in-place resize", got)
 	}
 	if ready := readyCondition(t, r, "p"); ready.Status != metav1.ConditionTrue {
 		t.Errorf("Ready = %s, want True", ready.Status)
@@ -312,31 +359,353 @@ func TestReconcile_FetchFailureFailsOnlyThatIdentity(t *testing.T) {
 	if ready.Status == metav1.ConditionTrue || !strings.Contains(ready.Message, "1 of 2 workloads failed") {
 		t.Errorf("Ready = %s %q, want False naming 1 of 2 workloads failed", ready.Status, ready.Message)
 	}
-	if state := r.retries.getState("Deployment/default/broken"); state == nil || state.attempts < 1 {
-		t.Errorf("broken: retry state = %+v, want a recorded attempt", state)
+	if got := r.ledger.health("Deployment/default/broken").blockedOn; got != phasePrometheus {
+		t.Errorf("broken: blocked on %q, want %q", got, phasePrometheus)
 	}
 	if cpu := podCPU(t, r, "default", "broken-pod"); cpu != "10m" {
 		t.Errorf("broken pod CPU = %s, want it untouched at 10m", cpu)
 	}
-	if state := r.retries.getState("Deployment/default/healthy"); state != nil {
-		t.Errorf("healthy: retry state = %+v, want none", state)
+	if got := r.ledger.health("Deployment/default/healthy").blockedOn; got != "" {
+		t.Errorf("healthy: blocked on %q, want not Blocked", got)
 	}
 	if cpu := podCPU(t, r, "default", "healthy-pod"); cpu != "100m" {
 		t.Errorf("healthy pod CPU = %s, want its 100m recommendation despite its neighbour failing", cpu)
 	}
 }
 
-// slowInputs delays every fetch, standing in for a batch that takes minutes on
-// a real cluster.
-type slowInputs struct {
-	*recommendertest.StaticInputs
-	delay time.Duration
+// A Prometheus call that runs out of its own timeout wraps
+// context.DeadlineExceeded. That is a failed fetch, not a shutdown: an
+// overloaded Prometheus must turn the Policy not-Ready and back the identity
+// off, never pass for a healthy cycle.
+func TestReconcile_QueryTimeoutIsAFetchFailure(t *testing.T) {
+	timeout := fmt.Errorf("querying cpu: %w", context.DeadlineExceeded)
+	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), timeout)
+	r := reconcilerWithInputs(t, inputs, true,
+		ongoingDeployments("p"), establishedDeployment("default", "web", "p"), runningPod("default", "web-pod", "web"))
+	rec := r.recorder.(*events.FakeRecorder)
+
+	reconcileOnce(t, r, "p")
+
+	ready := readyCondition(t, r, "p")
+	if ready.Status == metav1.ConditionTrue || !strings.Contains(ready.Message, "1 of 1 workloads failed") {
+		t.Errorf("Ready = %s %q, want False naming 1 of 1 workloads failed", ready.Status, ready.Message)
+	}
+	if got := r.ledger.health("Deployment/default/web").blockedOn; got != phasePrometheus {
+		t.Errorf("blocked on %q, want %q", got, phasePrometheus)
+	}
+	if !slices.ContainsFunc(drainEvents(rec), func(e string) bool { return strings.Contains(e, "ReconciliationRetryScheduled") }) {
+		t.Error("want a ReconciliationRetryScheduled event on the workload")
+	}
 }
 
-func (s slowInputs) FetchInputs(
+func eventsWith(evs []string, reason string) int {
+	n := 0
+	for _, e := range evs {
+		if strings.Contains(e, " "+reason+" ") {
+			n++
+		}
+	}
+	return n
+}
+
+// A forbidden eviction cannot succeed until someone fixes RBAC, but it is
+// still a failure: the identity is Blocked and the Policy not Ready. It is
+// retried every pass, so a fix is picked up without a restart, while the
+// member's Warning is emitted once, when it enters the permanent failure.
+func TestReconcile_ForbiddenEvictionBlocksAndWarnsOnce(t *testing.T) {
+	const ns = "forbidden"
+	scheme := testFullScheme(t)
+	c := fakeClientBuilder(scheme, ongoingDeployments("p"), establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, obj, _ client.Object, _ ...client.SubResourceCreateOption) error {
+				return apierrors.NewForbidden(schema.GroupResource{Resource: "pods/" + sub}, obj.GetName(), errors.New("no RBAC"))
+			},
+		}).
+		Build()
+	r := reconcilerOn(c, scheme, usageFor(ns, "Deployment", "web"), false)
+	rec := r.recorder.(*events.FakeRecorder)
+	var evs []string
+
+	for pass := range 2 {
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
+		if err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+		if res.RequeueAfter != r.ReconcileInterval {
+			t.Errorf("pass %d: RequeueAfter = %v, want the reconcile interval: a permanent failure does not back off", pass, res.RequeueAfter)
+		}
+		evs = append(evs, drainEvents(rec)...)
+	}
+
+	if ready := readyCondition(t, r, "p"); ready.Status != metav1.ConditionFalse {
+		t.Errorf("Ready = %s %q, want False", ready.Status, ready.Message)
+	}
+	state := seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, "Deployment", "web")
+	if len(state) != 1 || labelOf(state[0], "reason") != phasePatch {
+		t.Errorf("retry_state = %v, want the identity Blocked on %s", state, phasePatch)
+	}
+	if got := policyGauge(t, "k8s_sustain_policy_blocked_count", "p"); got != 1 {
+		t.Errorf("policy_blocked_count = %v, want 1", got)
+	}
+	if got := eventsWith(evs, "ReconciliationFailed"); got != 1 {
+		t.Errorf("ReconciliationFailed events over two passes = %d, want 1: %v", got, evs)
+	}
+}
+
+// Two failed attempts are Warned about separately, each naming when the next
+// pass runs, and that pass is the one Reconcile schedules.
+func TestReconcile_RetryEventNamesTheScheduledPass(t *testing.T) {
+	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), errors.New("prometheus down"))
+	r := reconcilerWithInputs(t, inputs, true, ongoingDeployments("p"), establishedDeployment("default", "web", "p"))
+	clk := clocktesting.NewFakePassiveClock(time.Now())
+	r.ledger = newLedger(clk)
+	rec := r.recorder.(*events.FakeRecorder)
+
+	for attempt, wantDelay := range []time.Duration{baseRetryDelay, 2 * baseRetryDelay} {
+		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.RequeueAfter != wantDelay {
+			t.Errorf("attempt %d: RequeueAfter = %v, want %v", attempt+1, res.RequeueAfter, wantDelay)
+		}
+		due := clk.Now().Add(wantDelay).Format(time.RFC3339)
+		if !slices.ContainsFunc(drainEvents(rec), func(e string) bool {
+			return strings.Contains(e, "ReconciliationRetryScheduled") && strings.Contains(e, due)
+		}) {
+			t.Errorf("attempt %d: want a ReconciliationRetryScheduled event naming %s", attempt+1, due)
+		}
+		clk.SetTime(clk.Now().Add(res.RequeueAfter))
+	}
+}
+
+// reconcilerWithFailingRetry is a reconciler for Policy "p" over one
+// Deployment whose fetch always fails, so its first pass leaves a transient
+// retry due after baseRetryDelay. Listing Deployments fails once listFails is
+// set.
+func reconcilerWithFailingRetry(t *testing.T, listFails *atomic.Bool) *PolicyReconciler {
+	t.Helper()
+	scheme := testFullScheme(t)
+	c := fakeClientBuilder(scheme, ongoingDeployments("p"), establishedDeployment("default", "web", "p")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*appsv1.DeploymentList); ok && listFails.Load() {
+					return apierrors.NewServiceUnavailable("apiserver unavailable")
+				}
+				return cl.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+	return reconcilerOn(c, scheme, recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), errors.New("prometheus down")), true)
+}
+
+// A pass that cannot list its workloads still runs when the retry the last
+// pass's events named falls due, not a whole reconcile interval later.
+func TestReconcile_ListFailedRequeuesAtTheDueRetry(t *testing.T) {
+	var listFails atomic.Bool
+	r := reconcilerWithFailingRetry(t, &listFails)
+	reconcileOnce(t, r, "p")
+	listFails.Store(true)
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := readyCondition(t, r, "p").Reason; got != "ListFailed" {
+		t.Fatalf("Ready reason = %q, want ListFailed", got)
+	}
+	if res.RequeueAfter != baseRetryDelay {
+		t.Errorf("RequeueAfter = %v, want %v: the retry the first pass scheduled", res.RequeueAfter, baseRetryDelay)
+	}
+}
+
+// A retry already due cannot run while the workloads cannot be listed: it
+// waits for the next pass that can list, and the failing passes meanwhile
+// come no sooner than a first retry would, nor later than the interval.
+func TestReconcile_ListFailedWithADueRetryRequeuesNoSoonerThanAFirstRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		interval time.Duration
+		want     time.Duration
+	}{
+		{"after the base retry delay", time.Hour, baseRetryDelay},
+		{"capped at a shorter interval", baseRetryDelay / 3, baseRetryDelay / 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var listFails atomic.Bool
+			r := reconcilerWithFailingRetry(t, &listFails)
+			r.ReconcileInterval = tc.interval
+			clk := clocktesting.NewFakePassiveClock(time.Now())
+			r.ledger = newLedger(clk)
+			reconcileOnce(t, r, "p")
+			listFails.Store(true)
+			clk.SetTime(clk.Now().Add(2 * baseRetryDelay))
+
+			for pass := range 3 {
+				res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := readyCondition(t, r, "p").Reason; got != "ListFailed" {
+					t.Fatalf("pass %d: Ready reason = %q, want ListFailed", pass, got)
+				}
+				if res.RequeueAfter != tc.want {
+					t.Errorf("pass %d: RequeueAfter = %v, want %v", pass, res.RequeueAfter, tc.want)
+				}
+				clk.SetTime(clk.Now().Add(res.RequeueAfter))
+			}
+		})
+	}
+}
+
+// A pass that leaves a member in backoff has not processed every workload: the
+// Policy stays not Ready until the member's retry succeeds.
+func TestReconcile_PassSkippingABackedOffMemberIsNotReady(t *testing.T) {
+	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), errors.New("prometheus down"))
+	r := reconcilerWithInputs(t, inputs, true, ongoingDeployments("p"), establishedDeployment("default", "web", "p"))
+
+	reconcileOnce(t, r, "p")
+	reconcileOnce(t, r, "p")
+
+	ready := readyCondition(t, r, "p")
+	if ready.Status != metav1.ConditionFalse || !strings.Contains(ready.Message, "Blocked workload identities: 1") {
+		t.Errorf("Ready = %s %q, want False naming the Blocked identity", ready.Status, ready.Message)
+	}
+	if strings.Contains(ready.Message, "workloads failed") {
+		t.Errorf("message = %q: the backed-off member was skipped, not failed again", ready.Message)
+	}
+}
+
+// The controller's own status write must not trigger the next pass: that pass
+// would find the member that had just failed in backoff, and do nothing.
+func TestPolicyEvents_OnlyGenerationChangesTriggerAPass(t *testing.T) {
+	old := ongoingDeployments("p")
+	old.Generation = 1
+	statusOnly := old.DeepCopy()
+	statusOnly.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "PartialFailure"}}
+	finalizerOnly := old.DeepCopy()
+	finalizerOnly.Finalizers = nil
+	specChange := old.DeepCopy()
+	specChange.Generation = 2
+	for _, tc := range []struct {
+		name string
+		next *sustainv1alpha1.Policy
+		want bool
+	}{
+		{"status write", statusOnly, false},
+		{"finalizer write", finalizerOnly, false},
+		{"spec change", specChange, true},
+	} {
+		if got := policyEvents.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: tc.next}); got != tc.want {
+			t.Errorf("%s: triggers a pass = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if !policyEvents.Create(event.CreateEvent{Object: old}) || !policyEvents.Delete(event.DeleteEvent{Object: old}) {
+		t.Error("creating or deleting a Policy must trigger a pass")
+	}
+}
+
+// observeOOMAsync runs r.ObserveOOM for a kill of web's container "app"
+// under Policy "p" in a goroutine, and returns once the kill is counted, so
+// ObserveOOM is at its trigger send. done closes when it returns.
+func observeOOMAsync(ctx context.Context, t *testing.T, r *PolicyReconciler, web promclient.WorkloadIdentity) (done <-chan struct{}) {
+	t.Helper()
+	t.Cleanup(func() { r.forget("p") })
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		r.ObserveOOM(ctx, "p", web, "app")
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for testutilCounterValue(t, oomObservedTotal, web.Namespace, web.OwnerKind, web.OwnerName, "app") == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the kill was never counted")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return returned
+}
+
+func returnsSoon(done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	case <-time.After(5 * time.Second):
+		return false
+	}
+}
+
+// A full trigger channel delays the trigger, never drops it: the pass it
+// triggers is what forgets a Policy deleted by the time its kill is counted.
+func TestObserveOOM_WaitsForRoomOnTheTriggerChannel(t *testing.T) {
+	triggers := make(chan event.GenericEvent, 1)
+	triggers <- event.GenericEvent{Object: &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "earlier"}}}
+	r := &PolicyReconciler{OOMTriggers: triggers}
+
+	done := observeOOMAsync(context.Background(), t, r, identityOf("oom-trigger-full", "Deployment", "web"))
+
+	select {
+	case <-done:
+		t.Fatal("ObserveOOM returned while the trigger channel was full")
+	default:
+	}
+	if got := (<-triggers).Object.GetName(); got != "earlier" {
+		t.Fatalf("first trigger = %q, want the one already queued", got)
+	}
+	select {
+	case ev := <-triggers:
+		if got := ev.Object.GetName(); got != "p" {
+			t.Errorf("trigger = %q, want p", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no trigger sent once the channel had room")
+	}
+	if !returnsSoon(done) {
+		t.Error("ObserveOOM did not return after sending its trigger")
+	}
+}
+
+// A shutdown while the trigger channel stays full ends the wait: ObserveOOM
+// returns, and leaves no goroutine behind.
+func TestObserveOOM_ReturnsWhenItsContextEndsWhileWaiting(t *testing.T) {
+	defer goleak.VerifyNone(t, goleak.IgnoreCurrent())
+	r := &PolicyReconciler{OOMTriggers: make(chan event.GenericEvent)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := observeOOMAsync(ctx, t, r, identityOf("oom-trigger-shutdown", "Deployment", "web"))
+	cancel()
+
+	if !returnsSoon(done) {
+		t.Fatal("ObserveOOM still waits for room after its context ended")
+	}
+}
+
+func drainEvents(rec *events.FakeRecorder) []string {
+	var out []string
+	for {
+		select {
+		case e := <-rec.Events:
+			out = append(out, e)
+		default:
+			return out
+		}
+	}
+}
+
+// clockAdvancingInputs moves clk forward by took during every fetch, as a
+// batch that takes minutes on a real cluster moves the ledger's clock.
+type clockAdvancingInputs struct {
+	*recommendertest.StaticInputs
+	clk  *clocktesting.FakePassiveClock
+	took time.Duration
+}
+
+func (s clockAdvancingInputs) FetchInputs(
 	ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest,
 ) map[promclient.WorkloadIdentity]recommender.InputsResult {
-	time.Sleep(s.delay)
+	s.clk.SetTime(s.clk.Now().Add(s.took))
 	return s.StaticInputs.FetchInputs(ctx, cfg, reqs)
 }
 
@@ -347,11 +716,13 @@ func (s slowInputs) FetchInputs(
 // its retry state.
 func TestReconcile_BackedOffIdentityIsNotFetched(t *testing.T) {
 	static := recommendertest.NewStaticInputs()
-	r := reconcilerWithInputs(t, slowInputs{StaticInputs: static, delay: 500 * time.Millisecond}, true,
-		ongoingDeployments("p"), annotatedDeployment("default", "expiring", "p"), annotatedDeployment("default", "healthy", "p"))
-	r.retries.mu.Lock()
-	r.retries.states["Deployment/default/expiring"] = &retryState{attempts: 1, nextRetry: time.Now().Add(250 * time.Millisecond)}
-	r.retries.mu.Unlock()
+	clk := clocktesting.NewFakePassiveClock(time.Now())
+	expiring := annotatedDeployment("default", "expiring", "p")
+	r := reconcilerWithInputs(t, clockAdvancingInputs{StaticInputs: static, clk: clk, took: 2 * baseRetryDelay}, true,
+		ongoingDeployments("p"), expiring, annotatedDeployment("default", "healthy", "p"))
+	r.ledger = newLedger(clk)
+	member := targetFromObject(expiring, "Deployment")
+	r.ledger.record(failedStep(&member, phasePatch, errors.New("apiserver unavailable")))
 
 	reconcileOnce(t, r, "p")
 
@@ -361,8 +732,8 @@ func TestReconcile_BackedOffIdentityIsNotFetched(t *testing.T) {
 	if !static.Requested(identityOf("default", "Deployment", "healthy")) {
 		t.Error("the healthy identity was not fetched")
 	}
-	if state := r.retries.getState("Deployment/default/expiring"); state == nil || state.attempts != 1 {
-		t.Errorf("expiring: retry state = %+v, want it untouched: the member skipped at fetch time must be skipped at apply time", state)
+	if got := r.ledger.health(member.key()).blockedOn; got != phasePatch {
+		t.Errorf("expiring: blocked on %q, want it still Blocked on %s: the member skipped at fetch time must be skipped at apply time", got, phasePatch)
 	}
 }
 
@@ -388,8 +759,8 @@ func TestReconcile_EmptySuccessfulResponse_DeploymentSucceedsWithNoRetry(t *test
 	if ready.Status != metav1.ConditionTrue || ready.Reason != "ReconciliationSucceeded" {
 		t.Errorf("Ready = %s/%s, want True/ReconciliationSucceeded", ready.Status, ready.Reason)
 	}
-	if state := r.retries.getState("Deployment/default/app"); state != nil && state.attempts != 0 {
-		t.Errorf("expected no retry state for a successful-but-empty response, got %+v", state)
+	if got := r.ledger.health("Deployment/default/app").blockedOn; got != "" {
+		t.Errorf("blocked on %q for a successful-but-empty response, want not Blocked", got)
 	}
 }
 

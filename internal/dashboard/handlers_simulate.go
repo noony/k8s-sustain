@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -9,16 +10,14 @@ import (
 	"strings"
 	"time"
 
-	"k8s.io/apimachinery/pkg/api/resource"
-
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
 // windowPattern mirrors the CRD validator on Policy.Spec.RightSizing.ResourcesConfigs.*.Window
 // exactly. Observation windows are coarse — sub-minute units are deliberately
-// excluded. Reused here so the simulate API rejects junk strings before they
-// hit Prometheus and either error out late or, worse, serialise into an
-// unbounded query.
+// excluded. Reused for the chart window so the simulate API rejects junk
+// strings before they hit Prometheus and either error out late or, worse,
+// serialise into an unbounded query.
 var windowPattern = regexp.MustCompile(`^([0-9]+(m|h|d|w|y))+$`)
 
 // stepPattern allows sub-minute resolution (e.g. "30s", "5m") for the chart's
@@ -26,9 +25,9 @@ var windowPattern = regexp.MustCompile(`^([0-9]+(m|h|d|w|y))+$`)
 // rendering concern, not a CRD field.
 var stepPattern = regexp.MustCompile(`^([0-9]+(ms|s|m|h|d|w|y))+$`)
 
-// simulateRequest is the body accepted by POST /api/simulate. It mirrors a
-// subset of the Policy spec so users can preview how a configuration change
-// would re-shape recommendations against the workload's historical signal.
+// simulateRequest is the body accepted by POST /api/simulate: the identity,
+// the range its charts span, and what to change of the settings the
+// controller recommends it with.
 type simulateRequest struct {
 	Namespace string `json:"namespace"`
 	OwnerKind string `json:"ownerKind"`
@@ -38,29 +37,20 @@ type simulateRequest struct {
 	FromTs    int64  `json:"fromTs,omitempty"`
 	ToTs      int64  `json:"toTs,omitempty"`
 
-	CPU    simulateResourceConfig `json:"cpu"`
-	Memory simulateResourceConfig `json:"memory"`
-
-	// AutoscalerCoordination overrides the governing Policy's setting; absent
-	// means "what the controller does today".
-	AutoscalerCoordination *sustainv1alpha1.AutoscalerCoordination `json:"autoscalerCoordination,omitempty"`
+	// Policy names the Policy the Simulation starts from; empty means the
+	// identity's governing Policy.
+	Policy string `json:"policy,omitempty"`
+	// Override is a JSON merge patch (RFC 7386) of simulationSettings onto the
+	// starting Policy's. Absent, the Simulation runs what the controller does.
+	Override json.RawMessage `json:"override,omitempty"`
 }
 
-type simulateResourceConfig struct {
-	Percentile *int32                `json:"percentile,omitempty"`
-	Headroom   *int32                `json:"headroom,omitempty"`
-	MinAllowed *string               `json:"minAllowed,omitempty"`
-	MaxAllowed *string               `json:"maxAllowed,omitempty"`
-	Window     string                `json:"window,omitempty"`
-	Limits     *simulateLimitsConfig `json:"limits,omitempty"`
-}
-
-type simulateLimitsConfig struct {
-	EqualsToRequest       bool     `json:"equalsToRequest,omitempty"`
-	KeepLimit             bool     `json:"keepLimit,omitempty"`
-	KeepLimitRequestRatio bool     `json:"keepLimitRequestRatio,omitempty"`
-	NoLimit               bool     `json:"noLimit,omitempty"`
-	RequestsLimitsRatio   *float64 `json:"requestsLimitsRatio,omitempty"`
+type simulateResponse struct {
+	simulationResult
+	// LiveOOMWindowSeconds is how long a kill the controller's OOM watcher saw
+	// counts as recent: a kill Prometheus does not hold yet is one the
+	// Simulation cannot see.
+	LiveOOMWindowSeconds int64 `json:"liveOOMWindowSeconds"`
 }
 
 func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +61,10 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	var req simulateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	// A body of the former shape would otherwise simulate the Policy unchanged.
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
 		return
 	}
@@ -103,20 +96,6 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid step %q: must be a Prometheus duration (e.g. 30s, 5m, 1h)", req.Step))
 		return
 	}
-	if err := validateSimulateResource(req.CPU, "cpu"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := validateSimulateResource(req.Memory, "memory"); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if c := req.AutoscalerCoordination; c != nil && c.ReplicaBudgetAnchor != nil &&
-		(*c.ReplicaBudgetAnchor < 0 || *c.ReplicaBudgetAnchor > 1) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid autoscalerCoordination.replicaBudgetAnchor %v: must be 0..1", *c.ReplicaBudgetAnchor))
-		return
-	}
 
 	if req.FromTs != 0 || req.ToTs != 0 {
 		if req.FromTs == 0 || req.ToTs == 0 {
@@ -130,68 +109,18 @@ func (s *Server) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := s.runSimulation(r.Context(), req)
-	if err != nil {
+	var invalid *settingsError
+	switch {
+	case errors.As(err, &invalid):
+		writeFieldError(w, http.StatusBadRequest, "invalid override: "+invalid.Error(), invalid.field)
+	case errors.Is(err, errBasePolicy):
+		writeK8sGetError(w, err, err.Error())
+	case err != nil:
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("simulation failed: %v", err))
-		return
+	default:
+		writeJSON(w, http.StatusOK, simulateResponse{
+			simulationResult:     *result,
+			LiveOOMWindowSeconds: int64(recommender.LiveOOMWindow / time.Second),
+		})
 	}
-
-	writeJSON(w, http.StatusOK, result)
-}
-
-// validateSimulateResource bounds-checks user-supplied percentile/headroom
-// (matching the CRD's accepted ranges) and rejects unparseable Quantity
-// strings before they reach resource.MustParse — which would otherwise panic
-// and surface as an unhelpful HTTP 500. Per-resource window is also validated.
-func validateSimulateResource(cfg simulateResourceConfig, label string) error {
-	if cfg.Percentile != nil {
-		p := *cfg.Percentile
-		if p < 1 || p > 100 {
-			return fmt.Errorf("invalid %s percentile %d: must be 1..100", label, p)
-		}
-	}
-	if cfg.Headroom != nil {
-		h := *cfg.Headroom
-		if h < 0 || h > 100 {
-			return fmt.Errorf("invalid %s headroom %d: must be 0..100", label, h)
-		}
-	}
-	if cfg.Window != "" && !windowPattern.MatchString(cfg.Window) {
-		return fmt.Errorf("invalid %s window %q: must be a duration like 168h, 14d (no sub-minute units)", label, cfg.Window)
-	}
-	if cfg.MinAllowed != nil {
-		if _, err := resource.ParseQuantity(*cfg.MinAllowed); err != nil {
-			return fmt.Errorf("invalid %s minAllowed %q: %w", label, *cfg.MinAllowed, err)
-		}
-	}
-	if cfg.MaxAllowed != nil {
-		if _, err := resource.ParseQuantity(*cfg.MaxAllowed); err != nil {
-			return fmt.Errorf("invalid %s maxAllowed %q: %w", label, *cfg.MaxAllowed, err)
-		}
-	}
-	if cfg.Limits != nil {
-		l := cfg.Limits
-		n := 0
-		if l.EqualsToRequest {
-			n++
-		}
-		if l.KeepLimit {
-			n++
-		}
-		if l.KeepLimitRequestRatio {
-			n++
-		}
-		if l.NoLimit {
-			n++
-		}
-		if l.RequestsLimitsRatio != nil {
-			n++
-			if *l.RequestsLimitsRatio < 1 {
-				return fmt.Errorf("invalid %s requestsLimitsRatio %v: must be >= 1", label, *l.RequestsLimitsRatio)
-			}
-		}
-		if n > 1 {
-			return fmt.Errorf("invalid %s limits: at most one of equalsToRequest, keepLimit, keepLimitRequestRatio, noLimit, requestsLimitsRatio may be set", label)
-		}
-	}
-	return nil
 }

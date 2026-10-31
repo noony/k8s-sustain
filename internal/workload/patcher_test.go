@@ -53,88 +53,6 @@ func evictionInterceptor(evictedNames *[]string) interceptor.Funcs {
 
 func qtyp(s string) *resource.Quantity { q := resource.MustParse(s); return &q }
 
-func TestApplyRecommendations_AlwaysApplies(t *testing.T) {
-	containers := []corev1.Container{
-		{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceCPU: resource.MustParse("100m"),
-				},
-			},
-		},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app": {CPURequest: qtyp("200m"), MemoryRequest: qtyp("64Mi")},
-	}
-
-	out, changed := applyRecsFiltered(containers, recs, nil)
-	if !changed {
-		t.Error("expected change")
-	}
-	if out[0].Resources.Requests.Cpu().Cmp(resource.MustParse("200m")) != 0 {
-		t.Errorf("expected 200m CPU, got %s", out[0].Resources.Requests.Cpu())
-	}
-	if out[0].Resources.Requests.Memory().Cmp(resource.MustParse("64Mi")) != 0 {
-		t.Errorf("expected 64Mi memory, got %s", out[0].Resources.Requests.Memory())
-	}
-}
-
-func TestApplyRecommendations_SetsWhenNoCPU(t *testing.T) {
-	containers := []corev1.Container{
-		{Name: "app"},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app": {CPURequest: qtyp("200m")},
-	}
-
-	out, changed := applyRecsFiltered(containers, recs, nil)
-	if !changed {
-		t.Error("expected change when no CPU request set")
-	}
-	if out[0].Resources.Requests.Cpu().Cmp(resource.MustParse("200m")) != 0 {
-		t.Errorf("expected 200m, got %s", out[0].Resources.Requests.Cpu())
-	}
-}
-
-func TestApplyRecommendations_RemovesLimit(t *testing.T) {
-	containers := []corev1.Container{
-		{
-			Name: "app",
-			Resources: corev1.ResourceRequirements{
-				Limits: corev1.ResourceList{
-					corev1.ResourceCPU: resource.MustParse("500m"),
-				},
-			},
-		},
-	}
-	recs := map[string]ContainerRecommendation{
-		"app": {CPURequest: qtyp("100m"), RemoveCPULimit: true},
-	}
-
-	out, changed := applyRecsFiltered(containers, recs, nil)
-	if !changed {
-		t.Error("expected change")
-	}
-	if _, exists := out[0].Resources.Limits[corev1.ResourceCPU]; exists {
-		t.Error("expected CPU limit to be removed")
-	}
-}
-
-func TestApplyRecommendations_NoMatchingContainer(t *testing.T) {
-	containers := []corev1.Container{
-		{Name: "app"},
-	}
-	recs := map[string]ContainerRecommendation{
-		"sidecar": {CPURequest: qtyp("100m")},
-	}
-
-	_, changed := applyRecsFiltered(containers, recs, nil)
-	if changed {
-		t.Error("expected no change when container names don't match")
-	}
-}
-
 func TestPodIsStale_DetectsChangedCPU(t *testing.T) {
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{
@@ -275,37 +193,6 @@ func TestPodIsStale_ClassicInitContainerDriftIsIgnored(t *testing.T) {
 	}
 	if podIsStale(pod, recs) {
 		t.Error("expected pod to NOT be stale: classic init container drift should not trigger recycle")
-	}
-}
-
-// The sidecar-only path skips classic init containers, which have already
-// exited, while updating restartable ones.
-func TestApplyRecommendationsToSidecars_OnlyMutatesRestartableContainers(t *testing.T) {
-	always := corev1.ContainerRestartPolicyAlways
-	in := []corev1.Container{
-		{
-			Name:          "sidecar",
-			RestartPolicy: &always,
-			Resources:     corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}},
-		},
-		{
-			Name:      "migrate",
-			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}},
-		},
-	}
-	recs := map[string]ContainerRecommendation{
-		"sidecar": {CPURequest: qtyp("100m")},
-		"migrate": {CPURequest: qtyp("100m")},
-	}
-	out, changed := applyRecsFiltered(in, recs, isRestartableInitContainer)
-	if !changed {
-		t.Fatal("expected change for sidecar")
-	}
-	if got := out[0].Resources.Requests.Cpu().String(); got != "100m" {
-		t.Errorf("sidecar CPU: got %s, want 100m", got)
-	}
-	if got := out[1].Resources.Requests.Cpu().String(); got != "50m" {
-		t.Errorf("classic init CPU: got %s, want unchanged 50m", got)
 	}
 }
 
@@ -1044,8 +931,8 @@ func TestApply_InPlace_DeferredWithNewTargetPatches(t *testing.T) {
 	}
 }
 
-// applyRecToContainer compares before setting, so a pod already at target must
-// submit no patch at all rather than an empty one every cycle.
+// Inject writes only what changes, so a pod already at target must submit no
+// patch at all rather than an empty one every cycle.
 func TestApply_InPlace_AlreadyAtTarget_NoPatch(t *testing.T) {
 	fresh := runningPod("fresh", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m")})
 
@@ -2345,6 +2232,99 @@ func TestApply_InPlaceOnly_MixedRecAppliesCrossingDimensionOnly(t *testing.T) {
 	}
 }
 
+// The tolerance withholds a request decrease, keeping the running request,
+// but lets the limit's decrease through: written as such, the limit would sit
+// below the request and the apiserver would reject the resize on every pass.
+// The limit is raised to the running request instead, and the next pass finds
+// the pod at target.
+func TestApply_InPlace_SuppressedRequestDecreaseNeverLeavesTheLimitBelowIt(t *testing.T) {
+	pod := jobPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")})
+	pod.Spec.Containers[0].Resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1000m")}
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	var patched *corev1.Pod
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+				if sub == "resize" {
+					patched = obj.(*corev1.Pod).DeepCopy()
+				}
+				return nil
+			},
+		}).Build()
+	p := New(c, true)
+	// Request -20m is inside the band max(25m, 10m); limit -510m is not.
+	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("480m"), CPULimit: qtyp("490m")}}
+
+	if _, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if patched == nil {
+		t.Fatal("expected a /resize patch carrying the limit decrease")
+	}
+	res := patched.Spec.Containers[0].Resources
+	if res.Requests.Cpu().Cmp(resource.MustParse("500m")) != 0 || res.Limits.Cpu().Cmp(resource.MustParse("500m")) != 0 {
+		t.Fatalf("resized to request %s limit %s, want the suppressed 500m request and the limit raised to it",
+			res.Requests.Cpu(), res.Limits.Cpu())
+	}
+
+	patched.ResourceVersion = ""
+	c = fake.NewClientBuilder().WithScheme(scheme).WithObjects(patched).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(context.Context, client.Client, string, client.Object, client.Patch, ...client.SubResourcePatchOption) error {
+				t.Error("a pod at its raised limit was resized again")
+				return nil
+			},
+		}).Build()
+	out, err := New(c, true).Apply(context.Background(), jobMember(), recs, ApplySettings{Tolerance: tol5})
+	if err != nil {
+		t.Fatalf("second Apply: %v", err)
+	}
+	if out.Pods.Stale != 0 {
+		t.Errorf("stale pods = %d, want 0: the pod runs everything that can be applied", out.Pods.Stale)
+	}
+}
+
+// Of the init containers only sidecars are resized in place; a classic one
+// has already exited.
+func TestApply_InPlace_ResizesSidecarsNotClassicInitContainers(t *testing.T) {
+	pod := runningPod("p", corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")})
+	pod.Spec.InitContainers = []corev1.Container{
+		{Name: "migrate", Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}}},
+		{Name: "sidecar", RestartPolicy: ptr.To(corev1.ContainerRestartPolicyAlways), Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m")}}},
+	}
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	var sidecarPatch *corev1.Pod
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(pod).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, obj client.Object, patch client.Patch, _ ...client.SubResourcePatchOption) error {
+				if data, err := patch.Data(obj); err == nil && strings.Contains(string(data), "initContainers") {
+					sidecarPatch = obj.(*corev1.Pod).DeepCopy()
+				}
+				return nil
+			},
+		}).Build()
+	recs := map[string]ContainerRecommendation{
+		"app":     {CPURequest: qtyp("100m")},
+		"migrate": {CPURequest: qtyp("100m")},
+		"sidecar": {CPURequest: qtyp("100m")},
+	}
+
+	if _, err := New(c, true).Apply(context.Background(), testMember(), recs, ApplySettings{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if sidecarPatch == nil {
+		t.Fatal("expected a sidecar /resize patch")
+	}
+	if got := sidecarPatch.Spec.InitContainers[1].Resources.Requests.Cpu().String(); got != "100m" {
+		t.Errorf("sidecar CPU = %s, want 100m", got)
+	}
+	if got := sidecarPatch.Spec.InitContainers[0].Resources.Requests.Cpu().String(); got != "50m" {
+		t.Errorf("classic init container CPU = %s, want 50m untouched", got)
+	}
+}
+
 // withSafeToEvictAnnotation stamps the cluster-autoscaler safe-to-evict
 // annotation on a pod.
 func withSafeToEvictAnnotation(pod *corev1.Pod, value string) *corev1.Pod {
@@ -2468,10 +2448,11 @@ func TestApply_InPlace_InfeasibleFallbackHonorsSafeToEvict(t *testing.T) {
 }
 
 func applyRecsToPodSpec(spec *corev1.PodSpec, recs map[string]ContainerRecommendation) {
-	for i := range spec.Containers {
-		applyRecToContainer(&spec.Containers[i], recs[spec.Containers[i].Name])
-	}
-	for i := range spec.InitContainers {
-		applyRecToContainer(&spec.InitContainers[i], recs[spec.InitContainers[i].Name])
+	for _, w := range Inject(spec.Containers, spec.InitContainers, false, recs).Writes {
+		if w.Init {
+			spec.InitContainers[w.Index].Resources = w.Resources
+		} else {
+			spec.Containers[w.Index].Resources = w.Resources
+		}
 	}
 }

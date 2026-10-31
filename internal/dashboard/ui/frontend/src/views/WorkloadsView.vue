@@ -13,8 +13,10 @@ import ErrorState from '../components/ErrorState.vue'
 import EmptyState from '../components/EmptyState.vue'
 import Combobox from '../components/Combobox.vue'
 import { timeAgo } from '../lib/format'
+import { attentionStateMetaOf, riskStateMeta } from '../lib/risk'
 
 const { openRow } = useRowLink()
+const conflictedState = attentionStateMetaOf('conflicted')
 const {
   filterRef,
   page,
@@ -91,9 +93,13 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         <div class="stat-label">Manual</div>
         <div class="stat-value text-dim">{{ list.data.value.counts.manual }}</div>
       </div>
-      <div v-if="list.data.value.counts.conflicted" class="stat-card">
-        <div class="stat-label">Conflicted</div>
-        <div class="stat-value text-error">{{ list.data.value.counts.conflicted }}</div>
+      <div
+        v-if="list.data.value.counts.conflicted"
+        class="stat-card"
+        :class="'tone-' + conflictedState.tone"
+      >
+        <div class="stat-label">{{ conflictedState.label }}</div>
+        <div class="stat-value">{{ list.data.value.counts.conflicted }}</div>
       </div>
     </div>
 
@@ -126,11 +132,9 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
           </select>
           <select v-model="riskFilter">
             <option value="">Any risk</option>
-            <option value="safe">Safe</option>
-            <option value="drifted">Drifted</option>
-            <option value="at-risk">At risk</option>
-            <option value="blocked">Blocked</option>
-            <option value="conflicted">Conflicted</option>
+            <option v-for="m in riskStateMeta" :key="m.state" :value="m.state">
+              {{ m.label }}
+            </option>
           </select>
           <select v-model="autoscalerFilter">
             <option value="">Any autoscaler</option>

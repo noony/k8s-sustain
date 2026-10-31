@@ -44,16 +44,6 @@ func (p promHealthSignals) forIdentities(ctx context.Context, ids []promclient.W
 	return out, err
 }
 
-func (p promHealthSignals) unhealthy(ctx context.Context) (map[promclient.WorkloadIdentity]identityHealth, error) {
-	all, err := p.read(ctx, "")
-	for id, h := range all {
-		if riskStateOf(h) == riskSafe {
-			delete(all, id)
-		}
-	}
-	return all, err
-}
-
 var identityLabels = []string{"namespace", "owner_kind", "owner_name"}
 
 // read queries every signal, restricted by the series selector sel, and

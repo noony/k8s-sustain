@@ -76,7 +76,7 @@ func sweep(t *testing.T, r *PolicyReconciler, policyName string) {
 // governingPolicy manages every kind, so whatever opts into it is governed.
 func governingPolicy(name string) *sustainv1alpha1.Policy {
 	ongoing := sustainv1alpha1.UpdateModeOngoing
-	return ongoingPolicy(name, sustainv1alpha1.UpdateTypes{
+	return policyManaging(name, sustainv1alpha1.UpdateTypes{
 		Deployment: &ongoing, StatefulSet: &ongoing, DaemonSet: &ongoing, ArgoRollout: &ongoing,
 		CronJob: &ongoing, Job: &ongoing, Pod: &ongoing,
 	})

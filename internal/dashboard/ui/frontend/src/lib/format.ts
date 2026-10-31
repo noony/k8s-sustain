@@ -20,7 +20,12 @@ export function parseMemoryQuantity(str: string): number {
   return parseFloat(str)
 }
 
-import { format as formatDate, formatDistanceToNowStrict } from 'date-fns'
+import {
+  format as formatDate,
+  formatDistanceToNowStrict,
+  formatDuration,
+  intervalToDuration,
+} from 'date-fns'
 
 export function timeAgo(dateStr?: string): string {
   if (!dateStr) return '-'
@@ -34,6 +39,10 @@ export function formatDateTime(dateStr?: string): string {
   const d = new Date(dateStr)
   if (isNaN(d.getTime())) return '-'
   return formatDate(d, 'yyyy-MM-dd HH:mm:ss')
+}
+
+export function formatSeconds(seconds: number): string {
+  return formatDuration(intervalToDuration({ start: 0, end: seconds * 1000 }))
 }
 
 export function deltaClass(pct: number | null | undefined): string {

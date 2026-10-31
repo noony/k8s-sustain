@@ -7,10 +7,12 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -209,6 +211,38 @@ func TestReadCarriesTheWholeRecommendation(t *testing.T) {
 	}
 }
 
+// What a Policy holds does not age and survives every later outcome, but is
+// never another Policy's numbers.
+func TestHeldIsOnlyWhatThePolicyComputed(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct {
+		name   string
+		known  func() *sustainv1alpha1.WorkloadRecommendation
+		policy string
+		want   bool
+	}{
+		{"none stored", func() *sustainv1alpha1.WorkloadRecommendation { return nil }, "p", false},
+		{"computed long ago", func() *sustainv1alpha1.WorkloadRecommendation { return computed(24*time.Hour, now) }, "p", true},
+		{"kept through a later outcome", func() *sustainv1alpha1.WorkloadRecommendation {
+			w := computed(time.Hour, now)
+			w.Status.Outcome = sustainv1alpha1.OutcomeFetchFailed
+			return w
+		}, "p", true},
+		{"computed by another Policy", func() *sustainv1alpha1.WorkloadRecommendation { return computed(time.Minute, now) }, "q", false},
+		{"never computed", withoutRecommendation(now, sustainv1alpha1.OutcomeNoData), "p", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := wlrcache.Held(tc.known(), tc.policy)
+			if tc.want != (got != nil) {
+				t.Fatalf("held = %v, want a Recommendation: %v", got, tc.want)
+			}
+			if tc.want && got["app"].CPURequest.Cmp(*qty("200m")) != 0 {
+				t.Errorf("held[app] = %+v, want the stored 200m", got["app"])
+			}
+		})
+	}
+}
+
 // Every test below runs against cluster, whose cache lags behind every
 // create: each writer is exercised under the lag it meets in production.
 
@@ -241,6 +275,26 @@ func cpuOf(t *testing.T, wlr *sustainv1alpha1.WorkloadRecommendation, container 
 		t.Fatalf("no CPU request stored for %s: %+v", container, wlr.Status.Containers)
 	}
 	return c.CPURequest.String()
+}
+
+// The webhook reads an identity's object by Key, and its writers name the
+// identity by WorkloadRef: both find the same object.
+func TestAnIdentitysObjectIsWrittenAtItsKey(t *testing.T) {
+	c := newCluster(t)
+	id := promclient.WorkloadIdentity{Namespace: task.Namespace, OwnerKind: task.Kind, OwnerName: task.Name}
+	if got := wlrcache.WorkloadRef(id); got != task {
+		t.Fatalf("WorkloadRef = %+v, want %+v", got, task)
+	}
+	if err := wlrcache.Request(context.Background(), c, nil, wlrcache.WorkloadRef(id), "p", snapshotOf("100m", "app")); err != nil {
+		t.Fatalf("Request: %v", err)
+	}
+	var got sustainv1alpha1.WorkloadRecommendation
+	if err := c.store.Get(context.Background(), wlrcache.Key(id), &got); err != nil {
+		t.Fatalf("reading the object at Key: %v", err)
+	}
+	if got.Spec.WorkloadRef != task {
+		t.Errorf("object at Key names %+v, want %+v", got.Spec.WorkloadRef, task)
+	}
 }
 
 // The webhook's stub is what gets an identity the controller never catches
@@ -620,7 +674,8 @@ func TestRecordComputedStoresTheWholeRecommendation(t *testing.T) {
 			"app": {CPURequest: &req, MemoryRequest: qty("128Mi"), RemoveCPULimit: true, RemoveMemoryLimit: true},
 		},
 		Traces: map[string]sustainv1alpha1.ContainerTrace{"app": {CPU: &sustainv1alpha1.ResourceTrace{
-			Percentile: qty("299500u"), WithHeadroom: req, Clamped: req,
+			Request: []sustainv1alpha1.TraceStage{{Stage: "percentile", Value: qty("299500u")}, {Stage: "clamp", Value: &req}},
+			Limit:   []sustainv1alpha1.TraceStage{{Stage: "noLimit", Removed: true}},
 		}}},
 	}
 	if err := wlrcache.Record(context.Background(), c, known, d, now); err != nil {
@@ -632,7 +687,7 @@ func TestRecordComputedStoresTheWholeRecommendation(t *testing.T) {
 	if app.CPURequest.String() != "300m" || app.MemoryRequest.String() != "128Mi" || !app.RemoveCPULimit || !app.RemoveMemoryLimit {
 		t.Errorf("containers[app] = %+v, want 300m/128Mi with both limits removed", app)
 	}
-	if got.Status.Trace["app"].CPU == nil || got.Status.Trace["app"].CPU.Percentile.String() != "299500u" {
+	if tr := got.Status.Trace["app"].CPU; tr == nil || !equality.Semantic.DeepEqual(*tr, *d.Traces["app"].CPU) {
 		t.Errorf("trace = %+v, want it stored with the values", got.Status.Trace)
 	}
 	if got.Status.Outcome != sustainv1alpha1.OutcomeComputed || got.Status.ObservedAt.Time.Before(now.Add(-time.Second)) {
@@ -696,7 +751,7 @@ func TestRecordWritesTheTraceOnlyWithTheValues(t *testing.T) {
 		req := resource.MustParse(request)
 		d := computedDecision(request)
 		d.Traces = map[string]sustainv1alpha1.ContainerTrace{"app": {CPU: &sustainv1alpha1.ResourceTrace{
-			Percentile: qty(percentile), WithHeadroom: req, Clamped: req,
+			Request: []sustainv1alpha1.TraceStage{{Stage: "percentile", Value: qty(percentile)}, {Stage: "clamp", Value: &req}},
 		}}}
 		if err := wlrcache.Record(context.Background(), c, c.mustStored(t, web), d, now); err != nil {
 			t.Fatalf("Record: %v", err)
@@ -704,7 +759,7 @@ func TestRecordWritesTheTraceOnlyWithTheValues(t *testing.T) {
 		return c.mustStored(t, web)
 	}
 	percentileOf := func(w *sustainv1alpha1.WorkloadRecommendation) string {
-		return w.Status.Trace["app"].CPU.Percentile.String()
+		return w.Status.Trace["app"].CPU.Request[0].Value.String()
 	}
 
 	first := record("250m", "249500u")

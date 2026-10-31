@@ -23,15 +23,20 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 )
 
-var identityHealthMetrics = []string{
+// identityGauges describe an identity's live members, so a departed
+// identity has none.
+var identityGauges = []string{
 	"k8s_sustain_workload_pods",
 	"k8s_sustain_workload_stale_pods",
 	"k8s_sustain_workload_retry_state",
-	"k8s_sustain_workload_retry_attempts",
 	"k8s_sustain_autoscaler_present",
 	"k8s_sustain_autoscaler_target_configured",
-	"k8s_sustain_recycle_suppressed_total",
 }
+
+var identityHealthMetrics = append([]string{
+	"k8s_sustain_workload_retry_attempts",
+	"k8s_sustain_recycle_suppressed_total",
+}, identityGauges...)
 
 // usageForIdentities serves appUsage for each identity, so one batch fetch
 // resolves all of them.
@@ -104,16 +109,14 @@ func reconcilePolicy(t *testing.T, r *PolicyReconciler, name string) {
 // Two owner-name members of one Deployment identity and a bare-pod group must
 // each surface as ONE series per health metric under the identity's labels,
 // aggregated over the members, never under a member's own name; once the
-// identities are gone so are their series.
+// identities depart so do their gauges.
 func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	const ns, policyName = "health-agg", "health-agg"
 	api := promclient.WorkloadIdentity{Namespace: ns, OwnerKind: "Deployment", OwnerName: "api"}
 	etl := promclient.WorkloadIdentity{Namespace: ns, OwnerKind: "Pod", OwnerName: "etl"}
 
 	onCreate := sustainv1alpha1.UpdateModeOnCreate
-	policy := policyForReconcileWorkload(t, policyName)
-	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
-	policy.Spec.RightSizing.Update.Types = sustainv1alpha1.UpdateTypes{Deployment: &onCreate, Pod: &onCreate}
+	policy := policyManaging(policyName, sustainv1alpha1.UpdateTypes{Deployment: &onCreate, Pod: &onCreate})
 
 	blue := groupedDeployment(ns, "api-blue", "api", policyName)
 	green := groupedDeployment(ns, "api-green", "api", policyName)
@@ -188,8 +191,10 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	ctx := context.Background()
 	blueTarget, greenTarget := targetFromObject(blue, "Deployment"), targetFromObject(green, "Deployment")
 	transient := apierrors.NewServiceUnavailable("apiserver unavailable")
-	_ = r.handleStepError(ctx, &greenTarget, "prometheus", "Prometheus query failed", transient)
-	_ = r.handleStepError(ctx, &blueTarget, "patch", "Pod recycle failed", transient)
+	r.settle(ctx, passReport{{key: api, members: []applyResult{
+		failedStep(&greenTarget, phasePrometheus, transient),
+		failedStep(&blueTarget, phasePatch, transient),
+	}}})
 
 	reconcilePolicy(t, r, policyName)
 
@@ -199,9 +204,6 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	}
 	if got := labelOf(state[0], "reason"); got != "patch" {
 		t.Errorf("retry_state reason = %q, want the first blocked member's phase (api-blue: patch)", got)
-	}
-	if got := len(seriesForWorkload(t, "k8s_sustain_workload_retry_attempts", ns, "Deployment", "api")); got != 1 {
-		t.Errorf("retry_attempts: want one series for the identity, got %d", got)
 	}
 	if got := gaugeOf(t, "k8s_sustain_workload_pods", ns, "Deployment", "api"); got != 3 {
 		t.Errorf("backed-off members must keep their last counts: pods = %v, want 3", got)
@@ -224,7 +226,7 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	reconcilePolicy(t, r, policyName)
 
 	for _, id := range []promclient.WorkloadIdentity{api, etl} {
-		for _, metric := range identityHealthMetrics {
+		for _, metric := range identityGauges {
 			if got := seriesForWorkload(t, metric, id.Namespace, id.OwnerKind, id.OwnerName); len(got) != 0 {
 				t.Errorf("%s still has %d series for departed identity %s/%s", metric, len(got), id.OwnerKind, id.OwnerName)
 			}
@@ -235,46 +237,18 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	}
 }
 
-func TestReconcile_PolicyDeletionRemovesIdentityHealth(t *testing.T) {
-	const ns, name, policyName = "health-deleted", "web", "health-deleted"
-	dep := annotatedDeployment(ns, name, policyName)
-	dep.CreationTimestamp = metav1.NewTime(time.Now().Add(-24 * time.Hour))
-	ongoing := sustainv1alpha1.UpdateModeOngoing
-	policy := policyForReconcileWorkload(t, policyName)
-	policy.Finalizers = []string{"k8s.sustain.io/cleanup"}
-	policy.Spec.RightSizing.Update.Types = sustainv1alpha1.UpdateTypes{Deployment: &ongoing}
-	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", name), false, policy, dep)
-
-	reconcilePolicy(t, r, policyName)
-	if got := len(seriesForWorkload(t, "k8s_sustain_workload_pods", ns, "Deployment", name)); got != 1 {
-		t.Fatalf("cycle 1 must emit the pods series, got %d", got)
-	}
-
-	var live sustainv1alpha1.Policy
-	if err := r.Get(context.Background(), types.NamespacedName{Name: policyName}, &live); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Delete(context.Background(), &live); err != nil {
-		t.Fatal(err)
-	}
-	reconcilePolicy(t, r, policyName)
-	for _, metric := range identityHealthMetrics {
-		if got := seriesForWorkload(t, metric, ns, "Deployment", name); len(got) != 0 {
-			t.Errorf("deleted policy must remove %s, got %d series", metric, len(got))
-		}
-	}
-}
-
-func TestReconcileWorkload_RecycleSuppressedCountsUnderIdentity(t *testing.T) {
-	r := reconcilerWithInputs(t, usageFor("default", "Deployment", "web"), true, deploymentPod("default", "web-blue-pod", "web-blue"))
-	tgt := deploymentTarget("default", "web-blue")
-	tgt.IdentityName = "web"
-	policy := policyForReconcileWorkload(t, "p")
+// A decrease the downsize threshold withholds is counted under the identity,
+// never under the owner-name member whose pod it was withheld from.
+func TestReconcile_RecycleSuppressedCountsUnderIdentity(t *testing.T) {
+	const ns = "suppressed"
+	policy := ongoingDeployments("p")
 	policy.Spec.RightSizing.ResourcesConfigs.CPU.DownsizeThreshold = &sustainv1alpha1.DownsizeThreshold{Percent: ptr.To[int32](100)}
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		policy, groupedDeployment(ns, "web-blue", "web", "p"), deploymentPod(ns, "web-blue-pod", "web-blue"))
 
 	counter := func(name string) float64 {
 		var v float64
-		for _, m := range seriesForWorkload(t, "k8s_sustain_recycle_suppressed_total", "default", "Deployment", name) {
+		for _, m := range seriesForWorkload(t, "k8s_sustain_recycle_suppressed_total", ns, "Deployment", name) {
 			if labelOf(m, "resource") == "cpu" {
 				v += m.GetCounter().GetValue()
 			}
@@ -282,13 +256,13 @@ func TestReconcileWorkload_RecycleSuppressedCountsUnderIdentity(t *testing.T) {
 		return v
 	}
 	before := counter("web")
-	if err := runComputeAndApply(context.Background(), r, policy, itemForTarget(tgt)); err != nil {
-		t.Fatal(err)
-	}
+
+	reconcilePolicy(t, r, "p")
+
 	if got := counter("web") - before; got != 1 {
 		t.Errorf("suppressed cpu decreases under the identity = %v, want 1", got)
 	}
-	if got := len(seriesForWorkload(t, "k8s_sustain_recycle_suppressed_total", "default", "Deployment", "web-blue")); got != 0 {
+	if got := len(seriesForWorkload(t, "k8s_sustain_recycle_suppressed_total", ns, "Deployment", "web-blue")); got != 0 {
 		t.Errorf("recycle_suppressed_total must not carry the member name, got %d series", got)
 	}
 }

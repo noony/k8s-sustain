@@ -4,7 +4,7 @@ Cluster, tooling, and metrics requirements before installing k8s-sustain.
 
 ## Kubernetes
 
-Kubernetes **1.29 or later**. The CRDs' CEL validation rules use the Kubernetes `quantity()` library, which older API servers reject when the CRD is applied.
+Kubernetes **1.30 or later**. The CRDs' CEL validation rules use the Kubernetes `quantity()` library, which older API servers reject when the CRD is applied. The Policy CRD's rules also rely on CRD validation ratcheting (`CRDValidationRatcheting`, on by default from 1.30): an update that leaves a field a rule rejects unchanged is still admitted, so a stored Policy can always be updated, its finalizer removed included.
 
 Running pods are resized in place from 1.33; older clusters fall back to eviction. See the [version matrix](../concepts/in-place-updates.md#version-matrix).
 
@@ -20,12 +20,12 @@ helm version
 
 k8s-sustain queries Prometheus for historical usage data. The chart bundles a [Prometheus](https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus) instance by default, or you can point it at an existing Prometheus.
 
-If you bring your own Prometheus, make sure **kube-state-metrics** and **cAdvisor** metrics are scraped. The bundled Prometheus subchart restricts both jobs to an allowlist via `metric_relabel_configs` to keep TSDB cardinality low; bring-your-own deployments can do the same.
+If you bring your own Prometheus, make sure **kube-state-metrics** and **cAdvisor** metrics are scraped. The bundled Prometheus subchart restricts both jobs to an allowlist via `metric_relabel_configs` to keep TSDB cardinality low; bring-your-own deployments can do the same. [Signal contracts](../reference/recording-rules.md#signal-contracts) lists the series each recommendation signal computes from; the others below feed the dashboard.
 
 From **kube-state-metrics**:
 
 - `kube_pod_owner` — maps pods to their workload owner
-- `kube_pod_labels` — carries the `k8s.sustain.io/owner-name` label for [identity grouping](../guides/standalone-pods-and-grouping.md). kube-state-metrics only exports it when allowlisted: set `metricLabelsAllowlist: ["pods=[k8s.sustain.io/owner-name]"]` (the `--metric-labels-allowlist` flag)
+- `kube_pod_annotations` — carries the `k8s.sustain.io/owner-name` annotation for [identity grouping](../guides/standalone-pods-and-grouping.md). kube-state-metrics only exports it when allowlisted: start it with `--metric-annotations-allowlist=pods=[k8s.sustain.io/owner-name]` (kube-state-metrics 2.2 or later; `metricAnnotationsAllowList: ["pods=[k8s.sustain.io/owner-name]"]` in its Helm chart). Without it, a pod using the override is mapped to its real owner, or not at all for a bare pod, and its usage never reaches the identity the controller groups it under
 - `kube_job_owner` — resolves Job → CronJob
 - `kube_replicaset_owner` — resolves ReplicaSet → Deployment (or Rollout)
 - `kube_pod_container_resource_requests` / `kube_pod_container_resource_limits` — current CPU/memory requests and limits

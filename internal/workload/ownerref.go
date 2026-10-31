@@ -173,15 +173,15 @@ func podsOfJob(ctx context.Context, c client.Reader, job *batchv1.Job) ([]*corev
 }
 
 // ApplyOwnerNameOverride applies the k8s.sustain.io/owner-name annotation
-// override to a resolved (kind, name) pair. The annotation doubles as a
-// Kubernetes label value once the webhook mirrors it onto the pod (see
-// internal/webhook), so it is validated against label-value rules
-// (RFC 1123, <=63 chars) — stricter than PolicyAnnotation's DNS-1123-subdomain
-// check. An absent, empty, or invalid annotation leaves kind and name
-// unchanged. Empty is treated the same as absent because the Prometheus
-// recording rules (kube_pod_labels{label_k8s_sustain_io_owner_name!=""})
-// never produce an override row for an empty label value — Go and
-// Prometheus must agree on whether the override "applies".
+// override to a resolved (kind, name) pair. The value becomes the identity's
+// name, which the recording rules carry as the owner_name label, and they
+// apply the override only to an annotation_k8s_sustain_io_owner_name
+// matching a regex for a non-empty Kubernetes label value (RFC 1123,
+// <=63 chars), stricter than PolicyAnnotation's DNS-1123-subdomain check.
+// Go and Prometheus must agree on whether the override "applies", so an
+// absent, empty, or invalid annotation leaves kind and name unchanged;
+// hack/signalcontract fails when the regex stops matching exactly the values
+// accepted here.
 //
 // When valid: name becomes the annotation value. kind becomes the input kind
 // when non-empty (an owned workload grouping itself under a shared identity)

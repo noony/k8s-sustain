@@ -257,28 +257,21 @@ export interface RecommendationContainer {
 export type RecommendationOutcome =
   'Computed' | 'NoData' | 'TooYoung' | 'FetchFailed' | 'Conflicted'
 
-export interface OOMFloorTrace {
-  value: string
-  /** The floor, not the percentile or a min/max clamp, set the final request. */
-  determined?: boolean
+/** One stage of a resource's computation. */
+export interface TraceStage {
+  stage: string
+  /** What a signal contributed, or the request or limit after the stage, as a Kubernetes quantity. */
+  value?: string
+  /** The stage strips the limit. */
+  removed?: boolean
+  /** The stage's own details, shown as they are. */
+  facts?: Record<string, string>
 }
 
-export interface CoordinationTrace {
-  overheadFactor: number
-  replicaFactor?: number
-  scaled: string
-  value: string
-}
-
-/** One resource's request after each stage that ran, as Kubernetes quantities. */
+/** One resource's stages in the order they ran: the request's, then the limit's. */
 export interface ResourceTrace {
-  percentile?: string
-  oomFloor?: OOMFloorTrace
-  withHeadroom: string
-  clamped: string
-  coordination?: CoordinationTrace
-  limit?: string
-  removeLimit?: boolean
+  request?: TraceStage[]
+  limit?: TraceStage[]
 }
 
 export interface ContainerTrace {
@@ -295,46 +288,54 @@ export interface StoredRecommendation {
   trace?: Record<string, ContainerTrace>
 }
 
+/** The settings of a Policy's right-sizing spec that shape a Recommendation. */
+export interface SimulationSettings {
+  resourcesConfigs: { cpu?: ResourceConfig; memory?: ResourceConfig }
+  autoscalerCoordination: AutoscalerCoordination
+  excludeInitContainers?: boolean
+}
+
+export type Resource = keyof SimulationSettings['resourcesConfigs']
+
+/** A JSON merge patch (RFC 7386): a key set replaces the base's, null removes it. */
+export type MergePatch<T> = {
+  [K in keyof T]?: NonNullable<T[K]> extends object
+    ? NonNullable<T[K]> extends unknown[]
+      ? T[K] | null
+      : MergePatch<NonNullable<T[K]>> | null
+    : T[K] | null
+}
+
+export type SimulationOverride = MergePatch<SimulationSettings>
+
 export interface SimulateRequest {
   namespace: string
   ownerKind: string
   ownerName: string
+  /** The chart range; it does not change the recommendation windows. */
   window?: string
   fromTs?: number
   toTs?: number
   step: string
-  cpu: SimulateResourceConfig
-  memory: SimulateResourceConfig
-  /** Overrides the managing policy's autoscaler coordination; omit to inherit it. */
-  autoscalerCoordination?: SimulateAutoscalerCoordination
+  /** The Policy to start from; omit for the identity's governing Policy. */
+  policy?: string
+  /** Merged onto the starting Policy's settings; omit to simulate what the controller does. */
+  override?: SimulationOverride
 }
 
-export interface SimulateAutoscalerCoordination {
-  enabled?: boolean
-  replicaBudgetAnchor?: number
-}
-
-export interface SimulateResourceConfig {
-  percentile: number
-  headroom: number
-  window: string
-  minAllowed?: string
-  maxAllowed?: string
-  limits?: SimulateLimitsConfig
-}
-
-export interface SimulateLimitsConfig {
-  equalsToRequest?: boolean
-  keepLimit?: boolean
-  keepLimitRequestRatio?: boolean
-  noLimit?: boolean
-  requestsLimitsRatio?: number
-}
+/** What a Simulation's computation can decide; a failed fetch is an error, and Conflicted the controller's alone. */
+export type SimulationOutcome = Exclude<RecommendationOutcome, 'FetchFailed' | 'Conflicted'>
 
 export interface SimulationResult {
+  /** The Policy the Simulation started from; absent when none governs the identity and none was chosen. */
+  policy?: string
+  /** What it ran with: the Policy's settings, the override merged in, every default explicit. */
+  effective: SimulationSettings
+  outcome: SimulationOutcome
   containers: Record<string, RecommendationContainer>
+  /** How each container's values were derived, stage by stage. */
+  trace?: Record<string, ContainerTrace>
   initContainers?: string[]
-  tooYoung?: boolean
   cpuSeries: Record<string, TimeValue[]>
   memorySeries: Record<string, TimeValue[]>
   resources?: Record<string, ContainerResources>
@@ -342,6 +343,8 @@ export interface SimulationResult {
   memoryRequests?: Record<string, TimeValue[]>
   cpuRecommendations?: Record<string, TimeValue[]>
   memoryRecommendations?: Record<string, TimeValue[]>
+  /** How long a kill the controller's OOM watcher saw counts, which a Simulation cannot see. */
+  liveOOMWindowSeconds: number
 }
 
 export interface BatchSimulateData {
@@ -354,6 +357,8 @@ export interface BatchWorkloadResult {
   namespace: string
   kind: string
   name: string
+  /** Only a Computed identity counts toward the savings. */
+  outcome?: SimulationOutcome
   error?: string
   containers?: Record<
     string,
@@ -374,17 +379,20 @@ export interface SummaryV2 {
     memSavedBytes: number
     memSavedRatio: number
     memSpark7d: number[]
-    atRiskCount: number
-    blockedCount: number
-    driftedCount: number
+    coordinatedCount: number
   }
   headroom: { cpu: HeadroomBreakdown; memory: HeadroomBreakdown }
-  attention: {
-    risk: AttentionRow[]
-    drift: AttentionRow[]
-    blocked: AttentionRow[]
-  }
+  attention: Record<AttentionState, AttentionGroup>
   policies: PolicyRollup[]
+}
+
+/** The non-Safe Risk states, each with its own attention list. */
+export type AttentionState = Exclude<RiskState, 'safe'>
+
+/** The worst identities of one Risk state; total counts every identity in it. */
+export interface AttentionGroup {
+  total: number
+  rows: AttentionRow[]
 }
 
 export interface HeadroomBreakdown {

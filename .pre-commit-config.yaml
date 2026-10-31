@@ -65,7 +65,7 @@ repos:
         pass_filenames: false
       - id: frontend-typecheck
         name: frontend typecheck
-        entry: bash -c 'cd internal/dashboard/ui/frontend && npx vue-tsc --noEmit'
+        entry: bash -c 'cd internal/dashboard/ui/frontend && npx vue-tsc -b --noEmit'
         language: system
         files: ^internal/dashboard/ui/frontend/src/
         pass_filenames: false

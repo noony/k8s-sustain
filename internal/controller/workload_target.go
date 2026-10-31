@@ -2,7 +2,6 @@ package controller
 
 import (
 	"slices"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -22,13 +21,6 @@ type workloadTarget struct {
 	Containers     []corev1.Container
 	InitContainers []corev1.Container
 	Object         client.Object
-	// IdentityKind and IdentityName are the identity this target reports
-	// into: what Prometheus, the WorkloadRecommendation and every health
-	// series are keyed by. They differ from Kind/Name under an owner-name
-	// override; Kind/Name stay the real object, used for key(), recycling
-	// and event attribution.
-	IdentityKind string
-	IdentityName string
 	// UpdateMode is the Policy's mode for the kind. OnCreate targets get
 	// recommendations and WLR cache writes but are never recycled or
 	// resized: the webhook applies resources at pod admission.
@@ -39,7 +31,8 @@ type workloadTarget struct {
 	BarePodMembers []*corev1.Pod
 }
 
-// key returns a unique identifier for this workload target, used as the retry map key.
+// key names the member in the ledger and the health tracker, across passes
+// and Policies.
 func (w *workloadTarget) key() string {
 	return w.Kind + "/" + w.Namespace + "/" + w.Name
 }
@@ -47,20 +40,6 @@ func (w *workloadTarget) key() string {
 // member is what the apply step drives toward the Recommendation.
 func (w *workloadTarget) member() workload.Member {
 	return workload.Member{Kind: w.Kind, Object: w.Object, Pods: w.BarePodMembers}
-}
-
-// identity is the identity this target reports into: what Prometheus, the
-// WorkloadRecommendation and every health series are keyed by.
-func (w *workloadTarget) identity() promclient.WorkloadIdentity {
-	return promclient.WorkloadIdentity{Namespace: w.Namespace, OwnerKind: w.IdentityKind, OwnerName: w.IdentityName}
-}
-
-// recommendableContainers returns the containers to feed into the recommendation
-// pipeline plus a set of container names that originate from InitContainers.
-// When excludeInit is true (or the workload has no init containers), the init
-// list is dropped and the returned set is empty.
-func (w *workloadTarget) recommendableContainers(excludeInit bool) ([]corev1.Container, map[string]struct{}) {
-	return workload.MergeContainersForRecommendation(w.Containers, w.InitContainers, excludeInit)
 }
 
 // targetsOf returns the apply targets of an identity policy governs: one per
@@ -92,8 +71,6 @@ func targetsOf(id *inventory.Identity, policyName string, mode sustainv1alpha1.U
 		Containers:     id.Containers,
 		InitContainers: id.InitContainers,
 		Object:         newest,
-		IdentityKind:   id.Key.OwnerKind,
-		IdentityName:   id.Key.OwnerName,
 		UpdateMode:     mode,
 		BarePodMembers: pods,
 	})
@@ -107,18 +84,6 @@ func targetFromMember(key promclient.WorkloadIdentity, m inventory.Member, mode 
 		Containers:     m.Containers,
 		InitContainers: m.InitContainers,
 		Object:         m.Object,
-		IdentityKind:   key.OwnerKind,
-		IdentityName:   key.OwnerName,
 		UpdateMode:     mode,
 	}
-}
-
-// sortedTargets returns a copy of targets ordered by key(), so every decision
-// taken across an identity's members — which member's autoscaler shapes the
-// recommendation — depends on the members' own names rather than the
-// listing or goroutine-completion order.
-func sortedTargets(targets []*workloadTarget) []*workloadTarget {
-	return slices.SortedFunc(slices.Values(targets), func(a, b *workloadTarget) int {
-		return strings.Compare(a.key(), b.key())
-	})
 }

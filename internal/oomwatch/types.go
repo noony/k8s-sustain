@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
+
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// Key identifies an OOM record by workload + container.
+// Key identifies an OOM record by identity and container.
 type Key struct {
-	Namespace string
-	OwnerKind string
-	OwnerName string
+	promclient.WorkloadIdentity
 	Container string
 }
 
@@ -24,9 +24,9 @@ type Key struct {
 type OOMRecord struct {
 	// Container is the container name within the pod that was OOM-killed.
 	Container string
-	// PolicyName is the Policy the source pod's workload opted into, resolved
-	// across all three annotation levels (see policymatch.ResolvePolicy) — not
-	// necessarily the pod's own annotation. Never empty on a recorded event.
+	// PolicyName is the Policy governing the source pod (see
+	// governance.Decide) — not necessarily the pod's own annotation. Never
+	// empty on a recorded event: a pod no Policy governs is never recorded.
 	PolicyName string
 	// ObservedAt is the wall-clock time at which the watcher first saw the
 	// kill. Distinct from TerminatedAt because the watcher may lag a few
@@ -53,9 +53,9 @@ type OOMRecord struct {
 // Source is the read-only API consumed by the recommender, which decides
 // which of the observations it returns are still recent.
 type Source interface {
-	// ByWorkload returns a workload's per-container records, none older than
+	// ByWorkload returns an identity's per-container records, none older than
 	// the source's retention. Returns an empty map when there is nothing.
-	ByWorkload(ns, kind, name string) map[string]*OOMRecord
+	ByWorkload(id promclient.WorkloadIdentity) map[string]*OOMRecord
 }
 
 // Sink is the write-only API used by the watcher to persist observations.

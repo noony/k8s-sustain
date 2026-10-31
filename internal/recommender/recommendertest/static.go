@@ -12,16 +12,24 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
-// StaticInputs serves canned inputs per identity. An identity given inputs
-// with Set gets them, one given an error with Fail gets the error, and any
-// other identity gets empty inputs, as Prometheus answers for an identity with
-// no samples. Every request is recorded so a test can assert on what was
-// fetched.
+// StaticInputs serves canned inputs per identity, whatever the settings it is
+// asked to fetch under. An identity given inputs with Set gets them, one given
+// an error with Fail gets the error, and any other identity gets empty inputs,
+// as Prometheus answers for an identity with no samples. Every call is
+// recorded so a test can assert on what was fetched, and under which
+// settings.
 type StaticInputs struct {
 	mu     sync.Mutex
 	inputs map[promclient.WorkloadIdentity]*recommender.WorkloadInputs
 	errs   map[promclient.WorkloadIdentity]error
-	calls  [][]recommender.InputsRequest
+	calls  []Call
+}
+
+// Call is one FetchInputs call: the settings it fetched under and the
+// requests it made.
+type Call struct {
+	Resources sustainv1alpha1.ResourcesConfigs
+	Requests  []recommender.InputsRequest
 }
 
 var _ recommender.InputsFetcher = (*StaticInputs)(nil)
@@ -55,12 +63,12 @@ func (s *StaticInputs) Fail(id promclient.WorkloadIdentity, err error) *StaticIn
 // FetchInputs answers every request from what Set and Fail configured.
 func (s *StaticInputs) FetchInputs(
 	_ context.Context,
-	_ sustainv1alpha1.ResourcesConfigs,
+	cfg sustainv1alpha1.ResourcesConfigs,
 	reqs []recommender.InputsRequest,
 ) map[promclient.WorkloadIdentity]recommender.InputsResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.calls = append(s.calls, slices.Clone(reqs))
+	s.calls = append(s.calls, Call{Resources: *cfg.DeepCopy(), Requests: slices.Clone(reqs)})
 	out := make(map[promclient.WorkloadIdentity]recommender.InputsResult, len(reqs))
 	for _, r := range reqs {
 		if err, ok := s.errs[r.Identity]; ok {
@@ -82,8 +90,8 @@ func (s *StaticInputs) FetchInputs(
 	return out
 }
 
-// Calls returns the requests of every FetchInputs call, oldest first.
-func (s *StaticInputs) Calls() [][]recommender.InputsRequest {
+// Calls returns every FetchInputs call, oldest first.
+func (s *StaticInputs) Calls() []Call {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.calls)
@@ -94,7 +102,7 @@ func (s *StaticInputs) Requested(id promclient.WorkloadIdentity) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, call := range s.calls {
-		for _, r := range call {
+		for _, r := range call.Requests {
 			if r.Identity == id {
 				return true
 			}

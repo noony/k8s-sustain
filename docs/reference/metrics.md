@@ -36,7 +36,7 @@ Except for the four recommendation gauges below, `namespace`, `owner_kind` and `
 
 `container_kind` is `regular` or `init`, identifying whether the container originated as a regular pod container or an init container (including restartable sidecars). Use it to slice dashboards by container kind.
 
-These four gauges are emitted per member object: `owner_kind` and `owner_name` are the real object's kind and name, even inside an owner-name group.
+These four gauges are emitted per member object: `owner_kind` and `owner_name` are the real object's kind and name, even inside an owner-name group. Every live member of an identity the policy governs has them, for each container its Recommendation names: the one the policy computed this reconcile or, when it computed none (the fetch failed, Prometheus had no data, every member was in retry backoff), the one its `WorkloadRecommendation` kept from the policy's last computation, so a Prometheus outage does not drop the savings. A Recommendation another policy computed is never published under this one.
 
 `k8s_sustain_workload_template_cpu_cores` and `k8s_sustain_workload_template_memory_bytes` record the CPU/memory request from the workload's pod-template spec (the pre-injection value). Stable across webhook injection so savings rules can compare against the template.
 
@@ -49,8 +49,8 @@ These four gauges are emitted per member object: `owner_kind` and `owner_name` a
 | `k8s_sustain_oom_cache_entries`             | gauge   | — |
 
 - `recommendation_skipped_total` — recommendations not emitted, by `reason`. `workload_too_young`: the identity is younger than the 10-minute [workload-age gate](../concepts/recommendation-pipeline.md#stages).
-- `oom_floor_applied_total` — memory recommendations whose final request the OOM floor (`max(peak_24h, oom_time_limit × 1.20)` plus headroom, after an OOM in the last 24h) determined: it beat the percentile and no min/max clamp, before or after autoscaler coordination, replaced it. Matches `oomFloor.determined` in the [trace](../concepts/recommendation-pipeline.md#trace).
-- `oom_observed_total`, `oom_reaction_latency_seconds`, `oom_cache_entries` — from the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher): deduped OOM kills, delay from `TerminatedAt` to the responding recommendation, and current cache size.
+- `oom_floor_applied_total` — memory recommendations whose final request the OOM floor (`max(peak_24h, oom_time_limit × 1.20)` plus headroom, after an OOM in the last 24h) determined: it beat the percentile and no min/max clamp, before or after autoscaler coordination, replaced it. Read from the `determined` fact of the `oomFloor` stage in the [trace](../concepts/recommendation-pipeline.md#trace).
+- `oom_observed_total`, `oom_reaction_latency_seconds`, `oom_cache_entries` — from the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher): deduped OOM kills of pods a Policy governs, delay from `TerminatedAt` to the responding recommendation, and current cache size.
 
 ### Drift, retry, autoscaler
 
@@ -71,13 +71,13 @@ These four gauges are emitted per member object: `owner_kind` and `owner_name` a
 | `k8s_sustain_wlr_refresh_total`         | counter | `namespace`, `owner_kind`, `outcome` |
 | `k8s_sustain_group_autoscaler_mismatch_total` | counter | `namespace`, `owner_kind`, `owner_name` |
 
-- `workload_retry_state` — `1` while any member of the identity is **Blocked**: its last reconcile step failed with a transient error and no step has succeeded since. `reason` is the failed step (`prometheus`, `patch` or `resize`) of the first blocked member in name order; the identity has at most one series, absent when nothing is blocked.
-- `workload_retry_attempts` — failed steps summed over the identity's members.
+- `workload_retry_state` — `1` while any member of the identity is **Blocked**: its last apply failed and none has succeeded since. A transient failure (Prometheus errors and timeouts, API 5xx, 404, 409 and 429) backs off; a permanent one (an API rejection such as 403, 401 or Invalid, or a workload the controller refuses to apply to) is retried on every reconcile and stays Blocked until something outside the controller fixes it. `reason` is the failed step of the first blocked member in name order: `prometheus` (its inputs could not be read), `patch` (evicting or resizing its pods), `resize` (resizing the pods of a kind that is never evicted) or `store` (its recommendation could not be stored for the webhook, so it was not applied). The identity has at most one series, absent when nothing is blocked.
+- `workload_retry_attempts` — failed applies summed over the identity's members, transient and permanent alike: a permanent failure counts once per reconcile. It counts every failure, whereas a member's backoff, and the attempt number its `ReconciliationRetryScheduled` event names, grow only with its consecutive transient failures.
 - `policy_workload_count` — live identities the policy governs: an owner-name or bare-pod group counts once however many members it has, a Departed identity does not count, and a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity counts for no policy.
-- `policy_blocked_count` — those identities that are Blocked, i.e. have a `workload_retry_state` series.
-- `autoscaler_present`, `autoscaler_target_configured` — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets. The coordination factors it led to are not a metric: they are in the `WorkloadRecommendation`'s [trace](../concepts/recommendation-pipeline.md#trace).
-- `recycle_suppressed_total` — decreases held back by the policy's [`downsizeThreshold`](policy.md#cpudownsizethreshold-memorydownsizethreshold), once per resource per pod per reconcile, summed over the identity's members. Increases are never counted.
-- `group_autoscaler_mismatch_total` — once per reconcile for an [owner-name group](../guides/standalone-pods-and-grouping.md) whose members disagree on autoscaler presence or kind. The group's single recommendation follows the first sorted member's autoscaler, so any non-zero rate is a misconfiguration.
+- `policy_blocked_count` — those identities that are Blocked, i.e. have a `workload_retry_state` series. The policy is not Ready while it is above zero.
+- `autoscaler_present`, `autoscaler_target_configured` — the autoscaler the identity's recommendation is shaped against: the first member, in name order, that an HPA or KEDA ScaledObject targets. A reconcile that does not compute the identity (its fetch failed, or every member is in retry backoff) leaves them as the last computation set them. The coordination factors it led to are not a metric: they are in the `WorkloadRecommendation`'s [trace](../concepts/recommendation-pipeline.md#trace).
+- `recycle_suppressed_total` — decreases held back by the policy's [`downsizeThreshold`](policy.md#downsize-threshold), once per resource per pod per reconcile, summed over the identity's members. Increases are never counted.
+- `group_autoscaler_mismatch_total` — once per reconcile for an [owner-name group](../guides/standalone-pods-and-grouping.md) whose members disagree on autoscaler presence or kind. The group's single recommendation follows the autoscaler of its first member, in name order, that has one, so any non-zero rate is a misconfiguration.
 
 #### Batch fetch coverage vs. failures
 
@@ -89,13 +89,16 @@ Each reconcile fetches Prometheus data for all of a policy's workloads in one ba
 
 `resolved < requested` with flat `failures_total` is normal (young or quiet workloads). Alert on `failures_total`; treat a low resolved/requested ratio as a data-maturity signal.
 
-#### Series lifetime when a Policy is deleted
+#### Series lifecycle
 
-Every series with a `policy` label is removed by the Policy's `k8s.sustain.io/cleanup` finalizer, together with its `WorkloadRecommendation`s. Recreating a Policy under the same name restarts its counters from zero.
+Each reconcile of a Policy publishes the series it describes and deletes those its previous reconcile published that it no longer does, so no series outlives what it describes:
 
-#### Series lifetime when an identity departs
+- **Series with a `policy` label**: the policy's own (`reconcile_*`, `policy_*`) and the four [recommendation gauges](#recommendations) of its members. A member that is deleted, opts out, leaves the selector, moves to another Policy or becomes part of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity loses its gauges at the policy's next reconcile, and so does a container removed from a member. A workload moved from one Policy to another is therefore published, and summed by the [savings rules](recording-rules.md#k8s_sustainpolicy_cpu_savings_cores), only by the Policy that governs it once both have reconciled.
+- **Identity series**, which carry no `policy` label (`workload_pods`, `workload_stale_pods`, `workload_retry_state`, `workload_retry_attempts`, `autoscaler_present`, `autoscaler_target_configured`, `recommendation_skipped_total`, `oom_floor_applied_total`, `oom_observed_total`, `oom_reaction_latency_seconds`, `recycle_suppressed_total`, `group_autoscaler_mismatch_total`): an identity keeps them while the last reconcile of some Policy included it, live or Departed. Its pod and retry gauges describe its live members, so a Departed identity has none; its autoscaler gauges, like a live identity's, are those of its last computation, which for a Departed identity has no autoscaler to coordinate with. The counters and the histogram keep accumulating until no Policy includes the identity any more: its last member opted out or left every selector, it became Conflicted, or it stayed Departed past `--recommendation-retention` and its `WorkloadRecommendation` was swept, after which its series go at the next reconcile. They are then deleted, so a counter restarts from zero if the identity comes back; `rate()` and `increase()` treat that as a counter reset. Policies reconcile in any order, so an identity moving from one Policy to another keeps one set only when the new Policy reconciles first. When the old one reconciles first, no Policy includes the identity in between: its series go, the new Policy's next reconcile publishes its gauges again, and its counters restart from zero.
+- `oom_observed_total` is counted by the OOM watcher as a kill happens, between reconciles. It joins the identity's series under the Policy the watcher found governing the pod, and is deleted with them if the next reconcile of that Policy to finish does not include the identity, or finds that Policy deleted. That reconcile can be one already running when the kill happened, whose view of the cluster predates it: the kill of an identity it did not see yet (a workload just created or opted in) is then dropped, even though the reconcile the kill triggers includes the identity.
+- **Deleting a Policy** removes every series with its `policy` label and the series of every identity no other Policy includes: through its `k8s.sustain.io/cleanup` finalizer, together with its `WorkloadRecommendation`s, or, when the finalizer was removed by hand, at the reconcile its deletion triggers. Recreating a Policy under the same name restarts its counters from zero.
 
-When no Policy governs an identity any more (its last member was deleted, opted out or left the selector, or its members now opt into different Policies and it is Conflicted), its `workload_pods`, `workload_stale_pods`, `workload_retry_state`, `workload_retry_attempts`, `autoscaler_present`, `autoscaler_target_configured` and `recycle_suppressed_total` series are deleted in the next reconcile, so a departed identity never reports a frozen state.
+`wlr_refresh_total` (labelled by namespace and kind only) and `oom_cache_entries` are never deleted. A restarted controller publishes a Policy's series again at its first reconcile.
 
 #### `k8s_sustain_wlr_refresh_total`
 
@@ -107,7 +110,7 @@ Refresh outcomes, once per reconcile, for **departed** identities only — a `Wo
 | `nodata` | No recommendation yet and still no samples. Retried next cycle. |
 | `retained-empty` | Has a recommendation but this cycle produced nothing, so the previous values are kept and still served. Sustained for one identity means its data is gone for good — alert on this. |
 | `no-snapshot` | The object has no `status.observedResources`, so there is nothing to compute. Sustained means the snapshot write is failing. |
-| `error` | Computation or write failed. |
+| `error` | Its fetch or its write failed, whatever the outcome. A failure while the controller shuts down is not counted. |
 
 #### `k8s_sustain_workload_pods`
 
@@ -140,7 +143,7 @@ Configured `averageUtilization` (%) of the autoscaler shaping the identity's rec
 
 #### `k8s_sustain_webhook_panic_total`
 
-Every panic the webhook recovered, by route pattern (e.g. `POST /mutate`), plus two non-route values, `singleflight/ownerRef` and `singleflight/ownerAnnotations`, for panics in the [owner-resolution caches](annotation.md#the-webhooks-cost-control-does-not-fully-bound-itself). Each is contained: that admission fails open. Any non-zero rate is a bug.
+Every panic the webhook recovered, by route pattern (e.g. `POST /mutate`), plus four non-route values: `singleflight/ownerRef` and `singleflight/ownerAnnotations` for panics in the [owner-resolution caches](annotation.md#the-webhooks-cost-control-does-not-fully-bound-itself), `admit` for a panic admitting a decoded pod (deciding it, running what was decided, logging it), and `stub/request` for one in the detached stub write. Each is contained: the admission fails open (a panic admitting a decoded pod still admits it, unmutated), and a later admission of the identity asks for its stub again. Any non-zero rate is a bug.
 
 #### `k8s_sustain_webhook_recommendation_source_total`
 
@@ -152,9 +155,9 @@ The outcome of every admission's `WorkloadRecommendation` read, by `source`: one
 | `retained` | Injected from a kept recommendation of a departed identity (finished Job, bare-pod group between runs), or the frozen one of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity into a pod of the Policy that computed it. Its age is bounded by `--recommendation-retention` instead of the staleness budget — see [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). Steady `retained` is normal for recurring workloads; `retained` turning into `missing` means the gap between runs exceeds the retention window. |
 | `stale` | `observedAt` is older than the 30-minute staleness budget (or, for a departed or Conflicted identity, older than the retention window): the controller is behind, stuck, or the workload left its policy's scope. |
 | `missing` | No recommendation exists yet. The webhook creates a [stub](../concepts/workload-recommendations.md#cold-start-stub-recommendations) so the controller picks it up. Transient for new workloads; sustained for one identity means the controller never computes it. |
-| `undecided` | The object exists but the controller has decided nothing for it yet: a stub awaiting its first reconcile, or one discovery just created. No stub is created. Sustained for one identity means its Policy's reconcile is not reaching it. |
+| `undecided` | The object exists but the controller has decided nothing for it yet: a stub awaiting its first reconcile, or one the controller's claim just created. No stub is created. Sustained for one identity means its Policy's reconcile is not reaching it. |
 | `nodata` | The recommendation exists and has an outcome but holds no values yet (too young, quiet, unmatched by the recording rules, or its fetch failed). No stub is created. Takes precedence over `stale`. |
-| `other-policy` | The recommendation was withheld: the object, or the values it holds, belong to a Policy other than the one the pod opts into ([ADR 0003](../adr/0003-a-recommendation-is-served-only-to-its-policy.md)). The other side of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity, or an identity moving between Policies until the new one computes its own values. Admitted unchanged; no stub is created. |
+| `other-policy` | The recommendation was withheld: the object, or the values it holds, belong to a Policy other than the one the pod opts into. The other side of a [Conflicted](../concepts/workload-recommendations.md#conflicted-identities) identity, or an identity moving between Policies until the new one computes its own values. Admitted unchanged; no stub is created. |
 | `error` | The read failed with an apiserver error other than NotFound. |
 
 #### About the `path` label

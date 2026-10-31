@@ -17,127 +17,38 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
 	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
-	"github.com/noony/k8s-sustain/internal/policymatch/policymatchtest"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// optInFixture builds a Deployment→ReplicaSet→Pod chain in an annotated
-// namespace, with each level's annotations supplied by the caller.
-func optInFixture(t *testing.T, tmplAnn, workloadAnn, nsAnn map[string]string, policies ...client.Object) (*Handler, *corev1.Pod) {
-	t.Helper()
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a", Annotations: nsAnn}}
-	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
-		Namespace: "team-a", Name: "web", Annotations: workloadAnn,
-	}}
-	rs := deploymentReplicaSet("team-a", "web-abc", "web")
-	pod := podWithRSOwner("team-a", "web-abc-1", "web-abc", "")
-	pod.Annotations = tmplAnn
-
-	// The ad-hoc scheme in newAdmitEnv does not register corev1, which the
-	// Namespace read needs; config.Scheme() is the full manager scheme.
-	objs := append([]client.Object{ns, d, rs}, policies...)
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(objs...).Build()
-	return &Handler{Client: c}, pod
-}
-
-// Replays the shared contract table against the webhook's own wiring.
-func TestResolveOptIn_AnnotationLevels(t *testing.T) {
-	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
-	for _, tc := range policymatchtest.AnnotationCases() {
-		t.Run(tc.Name, func(t *testing.T) {
-			h, pod := optInFixture(t, tc.Template, tc.Workload, tc.Namespace, policy)
-			gotName, gotLevel, owner, err := h.resolveOptIn(context.Background(), log.Log, pod)
-			if err != nil {
-				t.Fatalf("resolveOptIn: %v", err)
-			}
-			if gotName != tc.WantPolicy || gotLevel != tc.WantLevel {
-				t.Errorf("resolveOptIn = (%q, %q), want (%q, %q)", gotName, gotLevel, tc.WantPolicy, tc.WantLevel)
-			}
-			if gotName != "" && (!owner.Resolved || owner.Kind != "Deployment" || owner.Name != "web") {
-				t.Errorf("owner = %+v, want a resolved Deployment/web so admit() need not resolve it twice", owner)
-			}
-		})
-	}
-}
-
-// The pre-gate is the whole cost story: a pod no Policy selector could ever
-// claim must not trigger the owner Get.
-func TestResolveOptIn_PreGateSkipsOwnerLookup(t *testing.T) {
-	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
-	policy.Spec.Selector.Namespaces = []string{"some-other-namespace"}
-
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}}
-	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "web"}}
-	rs := deploymentReplicaSet("team-a", "web-abc", "web")
-	pod := podWithRSOwner("team-a", "web-abc-1", "web-abc", "")
-
-	var replicaSetGets int
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(ns, d, rs, policy).
-		WithInterceptorFuncs(interceptor.Funcs{
-			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				if _, ok := obj.(*appsv1.ReplicaSet); ok {
-					replicaSetGets++
-				}
-				return cl.Get(ctx, key, obj, opts...)
-			},
-		}).Build()
-	h := &Handler{Client: c}
-
-	name, _, _, err := h.resolveOptIn(context.Background(), log.Log, pod)
-	if err != nil {
-		t.Fatalf("resolveOptIn: %v", err)
-	}
-	if name != "" {
-		t.Errorf("expected no opt-in, got %q", name)
-	}
-	if replicaSetGets != 0 {
-		t.Errorf("pre-gate must short-circuit before owner resolution, but issued %d ReplicaSet Gets", replicaSetGets)
-	}
-}
-
-// An excluded namespace is a hard deny — the pre-gate must reject it even when
-// a cluster-wide Policy would otherwise cover the pod.
-func TestResolveOptIn_ExcludedNamespaceShortCircuits(t *testing.T) {
-	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}}
-	h, pod := optInFixture(t,
-		nil, nil,
-		map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
-		policy)
-	h.ExcludedNamespaces = []string{"team-a"}
-
-	name, _, _, err := h.resolveOptIn(context.Background(), log.Log, pod)
-	if err != nil {
-		t.Fatalf("resolveOptIn: %v", err)
-	}
-	if name != "" {
-		t.Errorf("excluded namespace must never opt in, got %q", name)
-	}
-}
-
-// Under a selector-less Policy, anyPolicyCovers is unconditionally true, so
-// every pod CREATE reaches the owner-chain walk. A rolling restart is N pods
-// behind the SAME ReplicaSet and must collapse to one Get, not N.
-func TestResolveOptIn_CachesReplicaSetGetAcrossPodsBehindSameOwner(t *testing.T) {
-	policy := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: "p"}} // empty selector: covers every pod
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}}
+// Under a selector-less Policy the pre-gate always passes, so every pod CREATE
+// of a workload opted in above its pod template reads its owner chain and the
+// owner's annotations. A rolling restart is N pods behind the SAME ReplicaSet
+// and must collapse to one Get of each, not N.
+func TestAdmit_WorkloadLevelOptInCachesOwnerReadsAcrossPodsBehindSameOwner(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
 		Namespace:   "team-a",
 		Name:        "web",
 		Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: "p"},
 	}}
-	rs := deploymentReplicaSet("team-a", "web-abc", "web")
+	wlr := freshWLR("Deployment", "team-a", "web", map[string]sustainv1alpha1.ContainerRecommendation{
+		"app": wlrRec("100m", "64Mi"),
+	})
 
-	var rsGets int
-	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(ns, d, rs, policy).
+	var rsGets, deploymentGets int
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).
+		WithObjects(basicPolicy("p", sustainv1alpha1.UpdateModeOnCreate), d, deploymentReplicaSet("team-a", "web-abc", "web"), wlr).
+		WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				if _, ok := obj.(*appsv1.ReplicaSet); ok {
+				switch obj.(type) {
+				case *appsv1.ReplicaSet:
 					rsGets++
+				case *appsv1.Deployment:
+					deploymentGets++
 				}
 				return cl.Get(ctx, key, obj, opts...)
 			},
@@ -146,19 +57,13 @@ func TestResolveOptIn_CachesReplicaSetGetAcrossPodsBehindSameOwner(t *testing.T)
 
 	for i := range 50 {
 		pod := podWithRSOwner("team-a", fmt.Sprintf("web-abc-%d", i), "web-abc", "")
-		name, _, owner, err := h.resolveOptIn(context.Background(), log.Log, pod)
-		if err != nil {
-			t.Fatalf("resolveOptIn: %v", err)
-		}
-		if name != "p" {
-			t.Fatalf("resolveOptIn = %q, want %q", name, "p")
-		}
-		if !owner.Resolved || owner.Kind != "Deployment" || owner.Name != "web" {
-			t.Fatalf("owner = %+v, want a resolved Deployment/web", owner)
+		resp := h.admit(context.Background(), admissionRequestFor(t, pod))
+		if !strings.Contains(string(resp.Patch), "/resources") {
+			t.Fatalf("admission %d: expected an injection for a workload-level opt-in, got %s", i, resp.Patch)
 		}
 	}
-	if rsGets != 1 {
-		t.Errorf("expected 1 ReplicaSet Get for 50 pods behind the same ReplicaSet, got %d", rsGets)
+	if rsGets != 1 || deploymentGets != 1 {
+		t.Errorf("expected 1 ReplicaSet and 1 Deployment Get for 50 pods behind the same owner, got %d and %d", rsGets, deploymentGets)
 	}
 }
 
@@ -669,7 +574,7 @@ func TestOwnerAnnotations_CacheRetainsOnlyPolicyKeys(t *testing.T) {
 		t.Fatalf("expected the entry to be cached")
 	}
 	if len(cached) > 2 {
-		t.Fatalf("cached entry retains %d keys (%v), want at most the 2 keys ResolvePolicy ever reads — "+
+		t.Fatalf("cached entry retains %d keys (%v), want at most the 2 keys governance ever reads — "+
 			"this fails if the whole annotations map is cached", len(cached), cached)
 	}
 	if _, ok := cached["kubectl.kubernetes.io/last-applied-configuration"]; ok {
@@ -690,7 +595,7 @@ func mapKeys(m map[string]string) []string {
 
 // Every kind ownerAnnotations can Get must appear in k8s.OwnerChainDisableFor,
 // or the first pod CREATE reaching that kind stands up a cluster-wide informer
-// instead of costing one Get — its LIST is charged against optInTimeout, so on
+// instead of costing one Get — its LIST is charged against governanceTimeout, so on
 // a large cluster it silently times out and fails open. The two lists live in
 // different packages with nothing else forcing them to agree.
 func TestDisableForCoversOwnerAnnotationKinds(t *testing.T) {

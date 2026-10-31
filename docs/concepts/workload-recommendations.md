@@ -19,7 +19,7 @@ The object's name is `<lowercase-kind>-<workload-name>` in the workload's namesp
 | Writer | When | What it writes |
 | --- | --- | --- |
 | **Request** (webhook) | A pod is admitted for an identity with no object, or one the controller keeps no live view of | Creates an empty-status [stub](#cold-start-stub-recommendations) carrying the pod's containers in `status.observedResources`; refreshes that snapshot for a departed identity. Never touches a Recommendation |
-| **Ensure** (controller, discovery) | Every reconcile, for each live identity the Policy governs | Creates the object or adopts it (`spec.policy` and the `k8s.sustain.io/policy` label become the governing Policy's), replaces `status.observedResources` with the members' containers when it differs, clears `status.departed` |
+| **Ensure** (controller, claim) | Every reconcile, for each live identity the Policy governs | Creates the object or adopts it (`spec.policy` and the `k8s.sustain.io/policy` label become the governing Policy's), replaces `status.observedResources` with the members' containers when it differs, clears `status.departed` |
 | **Record** (controller, computation) | Every reconcile, once per identity on the work-list, and for each Conflicted identity the Policy is party to | One status write with the pass's decision: `status.outcome`, `status.departed`, and for `Computed` the Recommendation, its `trace`, `observedAt` and `computedBy`. An unchanged decision costs no write |
 
 Record is the only writer of the Recommendation and of `departed`, so a departed identity whose samples are still in its query window costs at most one status write per 10 minutes, the interval after which an unchanged Recommendation is rewritten only to refresh `observedAt`. That keeps `observedAt` on a stable workload well inside the webhook's 30-minute staleness budget while etcd writes scale with change rather than workload count.
@@ -40,7 +40,7 @@ The controller applies an identity's Recommendation only once its Record has lan
 
 ### A Recommendation is served only to its Policy
 
-The webhook injects a Recommendation only into pods whose resolved Policy both governs the object (`spec.policy`) and computed the values (`status.computedBy`) — [ADR 0003](../adr/0003-a-recommendation-is-served-only-to-its-policy.md). When another Policy adopts an identity, the previous Policy's values stay in the object but are withheld from every pod until the new Policy records a Recommendation of its own; until then pods start on their template resources, whatever the new Policy's first passes record (too young under its minimum age, no data under its window, a failed fetch).
+The webhook injects a Recommendation only into pods whose resolved Policy both governs the object (`spec.policy`) and computed the values (`status.computedBy`). When another Policy adopts an identity, the previous Policy's values stay in the object but are withheld from every pod until the new Policy records a Recommendation of its own; until then pods start on their template resources, whatever the new Policy's first passes record (too young under its minimum age, no data under its window, a failed fetch).
 
 An object written before `status.computedBy` existed carries none, and is withheld until its Policy records a Recommendation: a live identity with samples gets one on its next reconcile.
 
@@ -56,7 +56,7 @@ Deleting a namespace deletes its recommendations.
 
 ## Cold start: stub recommendations
 
-Discovery only creates objects for identities it sees alive. A Job that runs for ninety seconds, or a bare-pod group that is up only between two reconciles, may never be seen. Stubs get those identities into the cache:
+The controller's claim only creates objects for identities it sees alive. A Job that runs for ninety seconds, or a bare-pod group that is up only between two reconciles, may never be seen. Stubs get those identities into the cache:
 
 1. **The webhook creates a stub.** On an admission with no `WorkloadRecommendation` for the identity, the webhook creates one with `spec.workloadRef`, `spec.policy`, the `k8s.sustain.io/policy` label, the `k8s.sustain.io/stub: "true"` label and an empty `status`, records the pod's per-container requests and limits in `status.observedResources`, and admits the pod unchanged. The write runs asynchronously, never blocks the admission, and is a `Create` (never an `Update`), so it cannot clobber a populated recommendation. The container snapshot lets computation work on an identity that has no workload object left to read a template from.
 
@@ -64,7 +64,7 @@ Discovery only creates objects for identities it sees alive. A Job that runs for
 
 3. **`NoData` and `TooYoung` are retried.** If the identity produces nothing — too young for the [workload-age gate](recommendation-pipeline.md#stages), or no usable samples yet — computation sets `status.outcome` to `TooYoung` or `NoData`. That is not terminal: the next reconcile recomputes it, so a new identity converges within one reconcile interval of Prometheus having enough history. Neither outcome overwrites an existing recommendation.
 
-4. **Later runs add new containers to the snapshot.** While the identity is departed (or has no snapshot), an admitted pod running a container `status.observedResources` lacks adds it; entries the snapshot already holds are kept. An identity the controller never catches alive is still computed for every container its runs have used, and pods of one group that run different container sets cannot flip the snapshot back and forth. Once the identity is live again, discovery replaces the snapshot with its members' union, which drops containers no run uses any more.
+4. **Later runs add new containers to the snapshot.** While the identity is departed (or has no snapshot), an admitted pod running a container `status.observedResources` lacks adds it; entries the snapshot already holds are kept. An identity the controller never catches alive is still computed for every container its runs have used, and pods of one group that run different container sets cannot flip the snapshot back and forth. Once the identity is live again, the claim replaces the snapshot with its members' union, which drops containers no run uses any more.
 
 Because retained objects are recomputed whether or not their workload is alive, a standalone Job or recurring bare-pod group converges even if no reconcile ever catches it running — as long as the object survives the gap between runs (see [retention](#retention-for-ephemeral-workloads)). An identity whose **name changes on every run** (timestamp or hash suffix) never accumulates history; give it a stable name, run it under a CronJob, or group runs with the [`k8s.sustain.io/owner-name` annotation](../guides/standalone-pods-and-grouping.md).
 
@@ -99,40 +99,60 @@ status:
                                     # member; exempt from the staleness check, see below
   containers:
     app:
-      cpuRequest: 250m
-      memoryRequest: 256Mi
-      cpuLimit: 500m
-      memoryLimit: 512Mi
+      cpuRequest: 314m
+      memoryRequest: 264Mi
+      cpuLimit: 628m
+      memoryLimit: 264Mi
       removeCpuLimit: false         # true when the policy says NoLimit
       removeMemoryLimit: false
   trace:                            # how each container's values were derived
     app:
       cpu:
-        percentile: 227500u         # usage percentile of the busiest pod
-        withHeadroom: 228m          # + headroom, rounded up
-        clamped: 228m               # after minAllowed/maxAllowed
-        coordination:               # only when an autoscaler shapes it
-          overheadFactor: 1.375     # 110 / HPA target (80%)
-          scaled: 314m
+        request:                    # the stages that ran, in order
+        - stage: percentile         # usage percentile of the busiest pod
+          value: 227500u
+        - stage: headroom           # + headroom, rounded up
+          value: 228m
+        - stage: clamp              # after minAllowed/maxAllowed
+          value: 228m
+        - stage: coordination       # only when an autoscaler shapes it
           value: 314m               # re-clamped: the final request
-        limit: 628m
+          facts:
+            overheadFactor: "1.375" # 110 / HPA target (80%)
+        limit:
+        - stage: requestsLimitsRatio
+          value: 628m
+          facts:
+            ratio: "2"
       memory:
-        percentile: "183500800"
-        oomFloor:                   # only after a recent OOM kill
+        request:
+        - stage: percentile
+          value: "183500800"
+        - stage: oomFloor           # only after a recent OOM kill
           value: 240Mi
-          determined: true          # the floor set the final request
-        withHeadroom: 264Mi
-        clamped: 264Mi
-        coordination:
-          overheadFactor: 1         # the HPA has no memory target
-          scaled: 264Mi
+          facts:
+            determined: "true"      # the floor set the final request
+            anchor: killedAtLimit
+            killedAtLimit: 200Mi
+        - stage: headroom
+          value: 264Mi
+        - stage: clamp
+          value: 264Mi
+        - stage: coordination
+          value: 264Mi
+          facts:
+            overheadFactor: "1"     # the HPA has no memory target
+        limit:
+        - stage: keepLimit          # the container's own limit...
+          value: 200Mi
+        - stage: guard              # ...raised to the request it fell below
           value: 264Mi
   observedResources:                # what the workload actually ran with
     app:
       cpuRequest: "1"
-      memoryRequest: 1Gi
+      memoryRequest: 128Mi
       cpuLimit: "2"
-      memoryLimit: 2Gi
+      memoryLimit: 200Mi
     istio-proxy:
       init: true                    # init or sidecar container
       cpuRequest: 100m
@@ -143,9 +163,9 @@ status:
 
 `computedBy` is written with every `Computed` outcome and kept by every other one, like `containers`. It differs from `spec.policy` only after another Policy adopted the identity and before that Policy computed a Recommendation of its own; the webhook then withholds `containers` from every pod (see [above](#a-recommendation-is-served-only-to-its-policy)).
 
-`trace` is the record of how each container's values were derived: per resource, the request after every [stage](recommendation-pipeline.md#stages) that ran, in order, then the limit derived from the final request (`limit`, or `removeLimit`; neither means the container keeps its own). A stage that did not run is absent: `oomFloor` without a recent OOM kill, `coordination` without autoscaler coordination, `percentile` for memory anchored on an OOM kill alone; a resource whose request is kept has no trace. `percentile` is stored at full precision (nanocores, bytes). `coordination.replicaFactor` appears for CPU when the Policy sets a `replicaBudgetAnchor`, and `coordination.value` differs from `scaled` when a min/max clamp capped the coordinated request. `oomFloor.determined` says the floor set the final request: it beat the percentile and no clamp, before or after coordination, replaced it. The trace is written together with `containers`; a pass whose values are unchanged but whose trace moved (a percentile that rounds to the same request) writes nothing, so the trace can lag the latest samples by up to the 10-minute refresh.
+`trace` is the record of how each container's values were derived: per resource, the list of [stages](recommendation-pipeline.md#stages) that ran on the request, in order, then those that ran on the limit (the strategy, any limit-side signal, the guard). Each entry has a `stage` name, its `value` (or `removed: true` for a stripped limit; neither on a limit stage means the container has no limit) and the stage's own `facts`; the [Trace](recommendation-pipeline.md#trace) section lists them. A stage that did not run is absent: `oomFloor` without a recent OOM kill, `coordination` without autoscaler coordination, `percentile` for memory anchored on an OOM kill alone, `guard` when the limit was not below the request; a resource whose request is kept has no trace. `percentile` is stored at full precision (nanocores, bytes). The `oomFloor` stage's `determined` fact says the floor set the final request: it beat the percentile and no clamp, before or after coordination, replaced it. The trace is written together with `containers`; a pass whose values are unchanged but whose trace moved (a percentile that rounds to the same request) writes nothing, so the trace can lag the latest samples by up to the 10-minute refresh.
 
-`observedResources` is written by discovery from the union of the identity's governed members' containers (or by the webhook from the admitted pod, for an identity the controller sees no live member of). It keeps current-vs-recommended visible on the dashboard after the workload is gone, and supplies the container list for identities with no workload object.
+`observedResources` is written by the controller's claim from the union of the identity's governed members' containers (or by the webhook from the admitted pod, for an identity the controller sees no live member of). It keeps current-vs-recommended visible on the dashboard after the workload is gone, and supplies the container list for identities with no workload object.
 
 `kubectl get wlrec` shows `outcome` as a column next to the policy.
 
@@ -161,11 +181,11 @@ status:
 
 An identity is **Conflicted** when its members are governed by different Policies — `api-blue` opting into `p` and `api-green` into `q`, both grouped as `Deployment/api`, or two bare pods sharing an owner-name. A member that opts out, or whose Policy does not accept it (missing, kind not managed, selector not matching), is no party to a conflict.
 
-No Policy governs a Conflicted identity until its members agree again ([ADR 0002](../adr/0002-conflicted-identity-freezes-its-recommendation.md)):
+No Policy governs a Conflicted identity until its members agree again:
 
 - The controller does not rewrite its `WorkloadRecommendation`'s `spec.policy` or label, does not recompute it and applies nothing to its pods. It only records `status.outcome: Conflicted` (and, since its members are live, clears `status.departed`).
 - The stored Recommendation stays frozen, exempt from the staleness check like a departed one, and kept by the sweep for the same retention window. The webhook injects it only into pods of the Policy that computed it (counted as `retained`); pods of the other Policy are admitted unchanged (counted as `other-policy`).
-- When the conflict resolves, the Policy that governs again adopts the object. If that is the other Policy, the frozen values were never computed for its pods and stay withheld until it computes its own ([ADR 0003](../adr/0003-a-recommendation-is-served-only-to-its-policy.md)).
+- When the conflict resolves, the Policy that governs again adopts the object. If that is the other Policy, the frozen values were never computed for its pods and stay withheld until it computes its own.
 - It counts towards neither Policy's `k8s_sustain_policy_workload_count`, and loses the controller's health series (pods, stale pods, retry state). The dashboard lists it once, in the Conflicted state, under no Policy.
 - The controller logs every reconcile of a party Policy until the conflict is resolved. Fix it by aligning the members' policy annotations or giving them distinct `k8s.sustain.io/owner-name` values.
 

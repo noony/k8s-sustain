@@ -16,10 +16,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
@@ -66,6 +68,8 @@ type Server struct {
 	// Inputs fetches recommendation inputs through the same port the
 	// controller uses, so a Simulation computes from what the controller sees.
 	Inputs recommender.InputsFetcher
+	// Clock is what a Simulation computes as of. Nil is the wall clock.
+	Clock  clock.PassiveClock
 	Logger logr.Logger
 	// CORSOrigins is the allowed origin allowlist: empty means same-origin
 	// only, ["*"] allows every origin.
@@ -74,6 +78,10 @@ type Server struct {
 	// ExcludedNamespaces mirrors the controller's --excluded-namespaces flag,
 	// a hard deny applied ahead of a Policy's own selector.
 	ExcludedNamespaces []string
+
+	// policies is shared by every snapshot the views take, so a Policy's
+	// selector is compiled once per version of it.
+	policies governance.PolicyLister
 
 	cacheInit    sync.Once
 	summaryCache *Cache
@@ -144,6 +152,13 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+func (s *Server) now() time.Time {
+	if s.Clock == nil {
+		return time.Now()
+	}
+	return s.Clock.Now()
 }
 
 // NewHTTPServer creates an http.Server for the dashboard bound to addr.

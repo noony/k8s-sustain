@@ -1,19 +1,12 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { RiskState } from '../lib/api'
+import { riskStateMetaOf } from '../lib/risk'
 
-defineProps<{ state?: RiskState | string }>()
-const labels: Record<string, { text: string; cls: string }> = {
-  safe: { text: 'Safe', cls: 'risk-safe' },
-  drifted: { text: 'Drift', cls: 'risk-drift' },
-  'at-risk': { text: 'At risk', cls: 'risk-risk' },
-  blocked: { text: 'Blocked', cls: 'risk-blocked' },
-  conflicted: { text: 'Conflicted', cls: 'risk-conflicted' },
-}
-const fallback = { text: '-', cls: 'risk-unknown' }
+const props = defineProps<{ state?: RiskState | string }>()
+const meta = computed(() => riskStateMetaOf(props.state))
 </script>
 
 <template>
-  <span class="risk-badge" :class="(labels[state ?? ''] ?? fallback).cls">{{
-    (labels[state ?? ''] ?? fallback).text
-  }}</span>
+  <span class="risk-badge" :class="meta?.cls ?? 'risk-unknown'">{{ meta?.label ?? '-' }}</span>
 </template>

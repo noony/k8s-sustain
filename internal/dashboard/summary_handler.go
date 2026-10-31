@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,18 +18,17 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// summaryKPI is the top-row of cluster-wide KPIs surfaced by /api/summary.
-// The three counts are identities by Risk state, so an identity counts once.
+// summaryKPI is the top row of cluster-wide KPIs surfaced by /api/summary.
+// The per-Risk-state counts are not among them: they are the totals of the
+// response's attention groups.
 type summaryKPI struct {
-	CPUSavedCores float64   `json:"cpuSavedCores"`
-	CPUSavedRatio float64   `json:"cpuSavedRatio"`
-	CPUSpark7d    []float64 `json:"cpuSpark7d"`
-	MemSavedBytes float64   `json:"memSavedBytes"`
-	MemSavedRatio float64   `json:"memSavedRatio"`
-	MemSpark7d    []float64 `json:"memSpark7d"`
-	AtRiskCount   int       `json:"atRiskCount"`
-	BlockedCount  int       `json:"blockedCount"`
-	DriftedCount  int       `json:"driftedCount"`
+	CPUSavedCores    float64   `json:"cpuSavedCores"`
+	CPUSavedRatio    float64   `json:"cpuSavedRatio"`
+	CPUSpark7d       []float64 `json:"cpuSpark7d"`
+	MemSavedBytes    float64   `json:"memSavedBytes"`
+	MemSavedRatio    float64   `json:"memSavedRatio"`
+	MemSpark7d       []float64 `json:"memSpark7d"`
+	CoordinatedCount int       `json:"coordinatedCount"`
 }
 
 type headroomBreakdown struct {
@@ -47,6 +47,13 @@ type attentionRow struct {
 	LastSeen  string `json:"lastSeen,omitempty"`
 }
 
+// attentionGroup is the worst identities of one Risk state; Total counts
+// every identity in it.
+type attentionGroup struct {
+	Total int            `json:"total"`
+	Rows  []attentionRow `json:"rows"`
+}
+
 type policyRollup struct {
 	Name            string  `json:"name"`
 	WorkloadCount   int     `json:"workloadCount"`
@@ -59,7 +66,7 @@ type policyRollup struct {
 type summaryResponseV2 struct {
 	KPI       summaryKPI                   `json:"kpi"`
 	Headroom  map[string]headroomBreakdown `json:"headroom"`
-	Attention map[string][]attentionRow    `json:"attention"`
+	Attention map[riskState]attentionGroup `json:"attention"`
 	Policies  []policyRollup               `json:"policies"`
 }
 
@@ -77,8 +84,8 @@ const summaryComputeTimeout = 15 * time.Second
 // summaryComputation is what one shared recompute hands back to every request
 // that joined it.
 type summaryComputation struct {
-	resp     summaryResponseV2
-	promErrs int32
+	resp        summaryResponseV2
+	failedReads int32
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
@@ -122,14 +129,14 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	out := res.Val.(summaryComputation)
 
-	if out.promErrs == 0 {
+	if out.failedReads == 0 {
 		writeJSON(w, http.StatusOK, out.resp)
 		return
 	}
 
 	// Partial failure: never poison the cache. Prefer a recent last-good
 	// snapshot over the fresh-but-partial result.
-	s.Logger.V(1).Info("summary: prometheus errors", "count", out.promErrs)
+	s.Logger.V(1).Info("summary: reads failed", "count", out.failedReads)
 	if lastGood, ok := s.summaryCache.GetLastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
 		writeJSON(w, http.StatusOK, lastGood)
 		return
@@ -152,35 +159,32 @@ func (s *Server) computeAndCacheSummary() (val any, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), summaryComputeTimeout)
 	defer cancel()
 
-	resp, promErrs := s.computeSummary(ctx)
-	if promErrs == 0 {
+	resp, failedReads := s.computeSummary(ctx)
+	if failedReads == 0 {
 		s.summaryCache.Set(summaryCacheKey, resp)
 	}
-	return summaryComputation{resp: resp, promErrs: promErrs}, nil
+	return summaryComputation{resp: resp, failedReads: failedReads}, nil
 }
 
-// computeSummary runs the Prometheus fan-out and assembles the response,
-// returning it alongside the number of queries that failed.
 func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) {
 	resp := summaryResponseV2{
 		Headroom:  map[string]headroomBreakdown{},
-		Attention: map[string][]attentionRow{"risk": {}, "drift": {}, "blocked": {}},
+		Attention: map[riskState]attentionGroup{},
 		Policies:  []policyRollup{},
 	}
 
-	var promErrs int32
+	var failedReads int32
 	recordErr := func(err error) {
 		if err != nil {
-			atomic.AddInt32(&promErrs, 1)
+			atomic.AddInt32(&failedReads, 1)
 		}
 	}
 
 	var (
-		blockedByPolicy          map[string]float64
 		wlByPolicy               map[string]float64
 		cpuByPolicy, memByPolicy map[string]float64
 		cpuHeadroom, memHeadroom headroomBreakdown
-		unhealthy                map[promclient.WorkloadIdentity]identityHealth
+		statuses                 []identityStatus
 	)
 
 	var wg sync.WaitGroup
@@ -217,13 +221,13 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 		recordErr(err)
 	})
 	wg.Go(func() {
-		v, err := s.PromClient.QueryByLabel(ctx, promclient.MetricPolicyBlockedCount, "policy")
-		blockedByPolicy = v
-		recordErr(err)
-	})
-	wg.Go(func() {
-		v, err := s.Health.unhealthy(ctx)
-		unhealthy = v
+		ids, err := s.clusterIdentities(ctx)
+		if err != nil {
+			recordErr(err)
+			return
+		}
+		v, err := s.board(ctx, ids)
+		statuses = v
 		recordErr(err)
 	})
 	wg.Go(func() {
@@ -255,10 +259,6 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 
 	resp.Headroom["cpu"] = cpuHeadroom
 	resp.Headroom["memory"] = memHeadroom
-	counts := fillAttention(resp.Attention, unhealthy)
-	resp.KPI.AtRiskCount = counts[riskAtRisk]
-	resp.KPI.BlockedCount = counts[riskBlocked]
-	resp.KPI.DriftedCount = counts[riskDrifted]
 
 	// Union of policy keys so partial-data rollups still surface.
 	policyNames := make(map[string]struct{}, len(wlByPolicy)+len(cpuByPolicy)+len(memByPolicy))
@@ -278,11 +278,11 @@ func (s *Server) computeSummary(ctx context.Context) (summaryResponseV2, int32) 
 			WorkloadCount:   int(wlByPolicy[name]),
 			CPUSavingsCores: cpuByPolicy[name],
 			MemSavingsBytes: memByPolicy[name],
-			BlockedCount:    int(blockedByPolicy[name]),
 		})
 	}
+	resp.fillRisk(statuses)
 
-	return resp, promErrs
+	return resp, failedReads
 }
 
 func sparklinePoints(ctx context.Context, p PromQuerier, expr string, r promclient.TimeRange, step string) ([]float64, error) {
@@ -308,55 +308,56 @@ func readHeadroom(ctx context.Context, p PromQuerier, expr string) (headroomBrea
 	return headroomBreakdown{Used: bySeg["used"], Idle: bySeg["idle"], Free: bySeg["free"]}, nil
 }
 
-// attentionGroups maps each non-Safe Risk state to its attention-queue group
-// and row signal.
-var attentionGroups = map[riskState]struct{ group, signal string }{
-	riskAtRisk:  {"risk", "OOM"},
-	riskBlocked: {"blocked", "blocked"},
-	riskDrifted: {"drift", "drift"},
+// attentionSignals lists the non-Safe Risk states in precedence order, with
+// the signal an attention row of each shows and the severity its identities
+// are ranked by, worst highest: most retry attempts, OOM kills or stale pods.
+var attentionSignals = []struct {
+	state    riskState
+	signal   string
+	severity func(identityStatus) int
+}{
+	{riskConflicted, "conflict", func(identityStatus) int { return 0 }},
+	{riskBlocked, "blocked", func(st identityStatus) int { return st.health.Blocked.Attempts }},
+	{riskAtRisk, "OOM", func(st identityStatus) int { return st.health.OOM24h }},
+	{riskDrifted, "drift", func(st identityStatus) int { return st.health.StalePods }},
 }
 
 const maxAttentionRows = 10
 
-// fillAttention files every unhealthy identity under the group of its Risk
-// state, so an identity appears once, and returns how many identities each
-// state has. Rows are ordered worst first (most OOM kills, retry attempts or
-// stale pods) and capped per group.
-func fillAttention(attention map[string][]attentionRow, unhealthy map[promclient.WorkloadIdentity]identityHealth) map[riskState]int {
-	counts := map[riskState]int{}
-	type ranked struct {
-		id       promclient.WorkloadIdentity
-		severity int
-	}
-	byState := map[riskState][]ranked{}
-	for id, h := range unhealthy {
-		state := riskStateOf(h)
-		if _, ok := attentionGroups[state]; !ok {
-			continue
+// fillRisk renders the board as the Overview shows it: every identity counted
+// once, under its Risk state; each state's worst identities listed next to its
+// total; and the Blocked identities each Policy governs.
+func (resp *summaryResponseV2) fillRisk(statuses []identityStatus) {
+	byState := map[riskState][]identityStatus{}
+	blockedByPolicy := map[string]int{}
+	for _, st := range statuses {
+		byState[st.risk] = append(byState[st.risk], st)
+		if st.risk == riskBlocked {
+			blockedByPolicy[st.id.Policy]++
 		}
-		counts[state]++
-		severity := h.StalePods
-		switch state {
-		case riskAtRisk:
-			severity = h.OOM24h
-		case riskBlocked:
-			severity = h.Blocked.Attempts
+		if st.coordination != nil {
+			resp.KPI.CoordinatedCount++
 		}
-		byState[state] = append(byState[state], ranked{id: id, severity: severity})
 	}
-	for state, g := range attentionGroups {
-		entries := byState[state]
-		slices.SortFunc(entries, func(a, b ranked) int {
-			return cmp.Or(
-				cmp.Compare(b.severity, a.severity),
-				promclient.CompareIdentity(a.id, b.id),
-			)
+	for i := range resp.Policies {
+		resp.Policies[i].BlockedCount = blockedByPolicy[resp.Policies[i].Name]
+	}
+
+	for _, a := range attentionSignals {
+		group := byState[a.state]
+		slices.SortFunc(group, func(x, y identityStatus) int {
+			return cmp.Or(cmp.Compare(a.severity(y), a.severity(x)), promclient.CompareIdentity(x.id.Key, y.id.Key))
 		})
-		rows := []attentionRow{}
-		for _, e := range entries[:min(len(entries), maxAttentionRows)] {
-			rows = append(rows, attentionRow{Namespace: e.id.Namespace, Kind: e.id.OwnerKind, Name: e.id.OwnerName, Signal: g.signal})
+		rows := make([]attentionRow, 0, min(len(group), maxAttentionRows))
+		for _, st := range group[:min(len(group), maxAttentionRows)] {
+			rows = append(rows, attentionRow{
+				Namespace: st.id.Key.Namespace,
+				Kind:      st.id.Key.OwnerKind,
+				Name:      st.id.Key.OwnerName,
+				Signal:    a.signal,
+				Detail:    strings.Join(conflictingPolicies(st.id), ", "),
+			})
 		}
-		attention[g.group] = rows
+		resp.Attention[a.state] = attentionGroup{Total: len(group), Rows: rows}
 	}
-	return counts
 }

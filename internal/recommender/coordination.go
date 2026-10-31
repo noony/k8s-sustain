@@ -2,6 +2,7 @@ package recommender
 
 import (
 	"math"
+	"strconv"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -76,6 +77,41 @@ func applyReplicaCorrection(qty resource.Quantity, anchor float64, current, minR
 	return *resource.NewMilliQuantity(int64(math.Ceil(scaled)), qty.Format), factor
 }
 
+const (
+	stageCoordination = "coordination"
+
+	factOverheadFactor = "overheadFactor"
+	factReplicaFactor  = "replicaFactor"
+	// factScaled is the request the factors produced, recorded only when the
+	// min/max clamp after coordination replaced it.
+	factScaled = "scaled"
+)
+
+type coordinated struct {
+	// overhead is 110 / the autoscaler's averageUtilization target for the
+	// resource (clamped to 1-99), or 1 when it has none.
+	overhead float64
+	// replica is the replica-budget correction, clamp(current / target
+	// replicas, 0.5, 2); nil unless it ran.
+	replica *float64
+	// scaled is the clamped request multiplied by the factors.
+	scaled resource.Quantity
+	// value is scaled clamped to minAllowed/maxAllowed again: the request.
+	value resource.Quantity
+}
+
+func (c *coordinated) stage() sustainv1alpha1.TraceStage {
+	st := quantityStage(stageCoordination, c.value)
+	st.Facts = map[string]string{factOverheadFactor: formatFactor(c.overhead)}
+	if c.replica != nil {
+		st.Facts[factReplicaFactor] = formatFactor(*c.replica)
+	}
+	if c.scaled.Cmp(c.value) != 0 {
+		st.Facts[factScaled] = c.scaled.String()
+	}
+	return st
+}
+
 // coordinate shapes a clamped request for the autoscaler targeting the
 // workload: the overhead for the autoscaler's utilization target on res, then
 // for CPU the replica correction when the Policy sets a ReplicaBudgetAnchor,
@@ -92,18 +128,40 @@ func coordinate(
 	cfg sustainv1alpha1.AutoscalerCoordination,
 	info autoscaler.Info,
 	req sustainv1alpha1.ResourceRequestsConfig,
-) *sustainv1alpha1.CoordinationTrace {
+) *coordinated {
 	if !cfg.Enabled || info.Kind == autoscaler.KindNone {
 		return nil
 	}
-	scaled, overhead := applyOverhead(clamped, info.ConfiguredTargets[string(res)])
-	t := &sustainv1alpha1.CoordinationTrace{OverheadFactor: overhead}
+	c := &coordinated{}
+	c.scaled, c.overhead = applyOverhead(clamped, info.ConfiguredTargets[string(res)])
 	if res == cpuResource && cfg.ReplicaBudgetAnchor != nil {
 		var replica float64
-		scaled, replica = applyReplicaCorrection(scaled, *cfg.ReplicaBudgetAnchor, info.CurrentReplicas, info.MinReplicas, info.MaxReplicas)
-		t.ReplicaFactor = &replica
+		c.scaled, replica = applyReplicaCorrection(c.scaled, *cfg.ReplicaBudgetAnchor, info.CurrentReplicas, info.MinReplicas, info.MaxReplicas)
+		c.replica = &replica
 	}
-	t.Scaled = scaled
-	t.Value = clamp(scaled, req.MinAllowed, req.MaxAllowed)
-	return t
+	c.value = clamp(c.scaled, req.MinAllowed, req.MaxAllowed)
+	return c
+}
+
+// Coordination is how autoscaler coordination scaled a request, as its trace
+// stage records it.
+type Coordination struct {
+	Overhead float64
+	// Replica is the replica-budget correction, zero when none ran.
+	Replica float64
+}
+
+// TracedCoordination reads the coordination stage of a resource's trace;
+// false when coordination did not shape the request.
+func TracedCoordination(t *sustainv1alpha1.ResourceTrace) (Coordination, bool) {
+	if t == nil {
+		return Coordination{}, false
+	}
+	st, ok := stageNamed(t.Request, stageCoordination)
+	if !ok {
+		return Coordination{}, false
+	}
+	overhead, _ := strconv.ParseFloat(st.Facts[factOverheadFactor], 64)
+	replica, _ := strconv.ParseFloat(st.Facts[factReplicaFactor], 64)
+	return Coordination{Overhead: overhead, Replica: replica}, true
 }

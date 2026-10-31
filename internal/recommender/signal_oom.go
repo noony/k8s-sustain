@@ -1,12 +1,30 @@
 package recommender
 
 import (
+	"context"
 	"maps"
+	"strconv"
 	"time"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+)
+
+const (
+	stageOOMFloor = "oomFloor"
+
+	// factDetermined says the floor set the final request: it beat the
+	// percentile and no min/max clamp, before or after coordination, replaced
+	// it.
+	factDetermined = "determined"
+	// factAnchor names the observation the floor rests on: anchorPeak or
+	// anchorKilledAtLimit.
+	factAnchor          = "anchor"
+	factKilledAtLimit   = "killedAtLimit"
+	factLiveKillAt      = "liveKillAt"
+	anchorPeak          = "peak"
+	anchorKilledAtLimit = "killedAtLimit"
 )
 
 // oomBumpFactor lifts the OOM floor above the limit the kernel killed at.
@@ -75,19 +93,17 @@ func (o OOM) recent() bool {
 	return o.Kills > 0 || !o.LiveAt.IsZero()
 }
 
-func (o OOM) floor() float64 {
-	floor := o.PeakBytes
-	if o.LimitBytes > 0 {
-		floor = max(floor, o.LimitBytes*oomBumpFactor)
+// floor is the higher of the peak and the limit at the kill bumped by
+// oomBumpFactor, and the anchor that set it: anchorPeak, anchorKilledAtLimit,
+// or none when there was neither.
+func (o OOM) floor() (float64, string) {
+	if bumped := o.LimitBytes * oomBumpFactor; o.LimitBytes > 0 && bumped > o.PeakBytes {
+		return bumped, anchorKilledAtLimit
 	}
-	return floor
-}
-
-// anchored reports whether the floor rests on an observation: a peak or the
-// limit at the kill. Without one, the only request it could produce is the
-// hard 1Mi minimum, which would guarantee the next kill.
-func (o OOM) anchored() bool {
-	return o.HasPeak || o.LimitBytes > 0
+	if o.HasPeak {
+		return o.PeakBytes, anchorPeak
+	}
+	return 0, ""
 }
 
 // oomFloor is the adjuster that raises a recently OOM-killed container's
@@ -109,6 +125,25 @@ func (oomFloor) samplesPerContainer(sustainv1alpha1.ResourcesConfigs) int {
 
 func (oomFloor) query(_ sustainv1alpha1.ResourcesConfigs, shard promclient.Shard) string {
 	return shard.MetricsSelector(oomRules...)
+}
+
+// contract: the rules are read as an instant vector, so the cost does not
+// depend on their evaluation interval.
+func (oomFloor) contract() PromContract {
+	return PromContract{
+		Rules:  oomRules,
+		Labels: shardLabels,
+		CAdvisor: []string{
+			"container_memory_max_usage_bytes",
+			"container_memory_peak_working_set_bytes",
+			"container_memory_working_set_bytes",
+			"container_spec_memory_limit_bytes",
+		},
+		KubeStateMetrics: append([]string{
+			"kube_pod_container_status_restarts_total",
+			"kube_pod_container_status_last_terminated_reason",
+		}, podWorkloadMetrics...),
+	}
 }
 
 // collect sums kill counts and keeps the highest peak and limit of each
@@ -147,28 +182,114 @@ func (oomFloor) observed(in *WorkloadInputs) []string {
 	return out
 }
 
+// excusesAge: a crash-looping workload would otherwise wait out the age gate
+// while it keeps getting killed. Only the gate is identity-wide; the floor
+// applies to the killed container alone.
+func (oomFloor) excusesAge(in *WorkloadInputs) bool {
+	for _, o := range in.OOM {
+		if o.recent() {
+			return true
+		}
+	}
+	return false
+}
+
 func (oomFloor) slot() slot { return slot{role: adjuster, resource: memoryResource} }
 
 // contribute is the floor of a recently killed container. An anchored floor
 // justifies a memory request on its own, so a crash-looping container, which
-// cannot accumulate usage samples, still gets one.
+// cannot accumulate usage samples, still gets one. An unanchored floor does
+// not: the only request it could produce is the hard 1Mi minimum, which would
+// guarantee the next kill.
 func (oomFloor) contribute(in *WorkloadInputs, container string) (contribution, bool) {
 	o := in.OOM[container]
 	if !o.recent() {
 		return contribution{}, false
 	}
-	return contribution{value: o.floor(), anchors: o.anchored()}, true
+	floor, anchor := o.floor()
+	return contribution{value: floor, anchors: anchor != ""}, true
 }
 
-func (oomFloor) record(t *sustainv1alpha1.ResourceTrace, value float64, determined bool) {
-	t.OOMFloor = &sustainv1alpha1.OOMFloorTrace{Value: *memoryResource.quantity(value), Determined: determined}
+func (oomFloor) stage(in *WorkloadInputs, container string, value float64, determined bool) sustainv1alpha1.TraceStage {
+	o := in.OOM[container]
+	facts := map[string]string{factDetermined: strconv.FormatBool(determined)}
+	if _, anchor := o.floor(); anchor != "" {
+		facts[factAnchor] = anchor
+	}
+	if o.LimitBytes > 0 {
+		facts[factKilledAtLimit] = memoryResource.quantity(o.LimitBytes).String()
+	}
+	if !o.LiveAt.IsZero() {
+		facts[factLiveKillAt] = o.LiveAt.UTC().Format(time.RFC3339)
+	}
+	return sustainv1alpha1.TraceStage{Stage: stageOOMFloor, Value: memoryResource.quantity(value), Facts: facts}
 }
 
-// withLiveOOMs returns in with the OOM Pod watcher's kills merged into its
-// OOMs, so the floor does not wait for the recording rules to surface them.
-// Kills the watcher saw longer than LiveOOMWindow ago are ignored. in itself
-// is left untouched: callers keep reading their own inputs.
-func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord) *WorkloadInputs {
+// TracedOOM is what the OOM floor's stage of a container's trace records.
+type TracedOOM struct {
+	// Determined says the floor set the final memory request.
+	Determined bool
+	// LiveKillAt is when the kill the OOM Pod watcher saw happened, to the
+	// second; zero when only the recording rules saw a kill.
+	LiveKillAt time.Time
+}
+
+// TracedOOMFloor reads the OOM floor stage of a container's trace; false when
+// no floor ran.
+func TracedOOMFloor(t sustainv1alpha1.ContainerTrace) (TracedOOM, bool) {
+	if t.Memory == nil {
+		return TracedOOM{}, false
+	}
+	st, ok := stageNamed(t.Memory.Request, stageOOMFloor)
+	if !ok {
+		return TracedOOM{}, false
+	}
+	out := TracedOOM{Determined: st.Facts[factDetermined] == strconv.FormatBool(true)}
+	if at, err := time.Parse(time.RFC3339, st.Facts[factLiveKillAt]); err == nil {
+		out.LiveKillAt = at
+	}
+	return out, true
+}
+
+// liveOOMInputs is an InputsFetcher that merges the kills the OOM Pod watcher
+// saw into the inputs another fetcher read, so the floor does not wait for the
+// recording rules to surface a kill.
+type liveOOMInputs struct {
+	inputs InputsFetcher
+	source oomwatch.Source
+	now    func() time.Time
+}
+
+// WithLiveOOMs decorates inputs with the kills source holds. A kill counts
+// while the watcher saw it within LiveOOMWindow of now.
+func WithLiveOOMs(inputs InputsFetcher, source oomwatch.Source, now func() time.Time) InputsFetcher {
+	return &liveOOMInputs{inputs: inputs, source: source, now: now}
+}
+
+// FetchInputs merges every fetched identity's kills into its inputs, read
+// after the fetch so a kill seen while it ran counts. An identity whose
+// inputs could not be read stays failed.
+func (l *liveOOMInputs) FetchInputs(
+	ctx context.Context,
+	cfg sustainv1alpha1.ResourcesConfigs,
+	reqs []InputsRequest,
+) map[promclient.WorkloadIdentity]InputsResult {
+	out := l.inputs.FetchInputs(ctx, cfg, reqs)
+	now := l.now()
+	for id, r := range out {
+		if r.Inputs == nil {
+			continue
+		}
+		r.Inputs = withLiveOOMs(r.Inputs, l.source.ByWorkload(id), now)
+		out[id] = r
+	}
+	return out
+}
+
+// withLiveOOMs returns in with the watcher's kills merged into its OOMs.
+// Kills the watcher saw longer than LiveOOMWindow before now are ignored. in
+// itself is left untouched: the decorated fetcher may still hold it.
+func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord, now time.Time) *WorkloadInputs {
 	if len(live) == 0 {
 		return in
 	}
@@ -178,7 +299,7 @@ func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord) *Work
 		merged.OOM = make(map[string]OOM, len(live))
 	}
 	for container, rec := range live {
-		if rec == nil || time.Since(rec.ObservedAt) > LiveOOMWindow {
+		if rec == nil || now.Sub(rec.ObservedAt) > LiveOOMWindow {
 			continue
 		}
 		o := merged.OOM[container]
@@ -192,17 +313,4 @@ func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord) *Work
 		merged.OOM[container] = o
 	}
 	return &merged
-}
-
-// oomExcusesAge reports whether any container was OOM-killed recently, which
-// lets a Too young identity through the age gate: a crash-looping workload
-// would otherwise wait out the gate while it keeps getting killed. Only the
-// gate is identity-wide; the floor applies to the killed container alone.
-func oomExcusesAge(in *WorkloadInputs) bool {
-	for _, o := range in.OOM {
-		if o.recent() {
-			return true
-		}
-	}
-	return false
 }

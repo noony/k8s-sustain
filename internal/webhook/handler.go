@@ -3,49 +3,48 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"strings"
+	"runtime/debug"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	"golang.org/x/sync/singleflight"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
-	apivalidation "k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
-	"github.com/noony/k8s-sustain/internal/policymatch"
-	"github.com/noony/k8s-sustain/internal/wlrcache"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // maxAdmissionBodyBytes caps the AdmissionReview payload the webhook decodes.
 const maxAdmissionBodyBytes = 1 << 20
-
-// maxPolicyNameLen is the Kubernetes DNS-subdomain name limit.
-const maxPolicyNameLen = 253
-
-// apiCallTimeout bounds each Kubernetes API Get inside the admission path, so
-// one slow apiserver round-trip cannot eat the whole admission budget.
-const apiCallTimeout = 2 * time.Second
 
 // admissionTimeout caps the whole admit() handler. The apiserver's webhook
 // timeout is 5s by default; failing open inside that budget beats letting the
 // apiserver time out and fall back to failurePolicy.
 const admissionTimeout = 4 * time.Second
 
-// isValidPolicyName reports whether name is a DNS-1123 subdomain.
-func isValidPolicyName(name string) bool {
-	if name == "" || len(name) > maxPolicyNameLen {
-		return false
-	}
-	return len(apivalidation.IsDNS1123Subdomain(name)) == 0
-}
+// The admission budget is split by where its reads go. Only governance's
+// owner chain reaches the apiserver, up to two Gets one after the other (the
+// pod's ReplicaSet or Job, then its workload's own annotations); the Policies,
+// the Namespace and the WorkloadRecommendation are informer-cache reads. So
+// governance gets most of the budget, and the WorkloadRecommendation read
+// keeps a reserve a slow owner Get cannot eat into.
+const (
+	recommendationReadTimeout = 1 * time.Second
+	governanceTimeout         = admissionTimeout - recommendationReadTimeout
+)
+
+// apiCallTimeout bounds each owner-chain Get, which runs on a singleflight
+// leader detached from the admissions waiting on it, so a wedged apiserver
+// call cannot pin the leader.
+const apiCallTimeout = 2 * time.Second
 
 // Handler is the mutating admission handler. On Pod CREATE it injects the
 // resources cached in the controller-written WorkloadRecommendation; it never
@@ -83,6 +82,9 @@ type Handler struct {
 	stubStopping bool
 	stubWG       sync.WaitGroup
 
+	// policies spares an admission recompiling the Policies it lists.
+	policies governance.PolicyLister
+
 	// ownerAnnCache and ownerRefCache bound the per-admission owner Gets on
 	// clusters where a selector-less Policy covers every pod.
 	ownerAnnCache ownerAnnotationsCache
@@ -103,20 +105,6 @@ type jsonPatch struct {
 	Op    string          `json:"op"`
 	Path  string          `json:"path"`
 	Value json.RawMessage `json:"value,omitempty"`
-}
-
-// allowWithLabelPatch returns an allow response carrying only the owner-name
-// label-mirror patch, if any.
-func allowWithLabelPatch(labelPatch *jsonPatch) *admissionv1.AdmissionResponse {
-	if labelPatch == nil {
-		return &admissionv1.AdmissionResponse{Allowed: true}
-	}
-	b, err := json.Marshal([]jsonPatch{*labelPatch})
-	if err != nil {
-		return &admissionv1.AdmissionResponse{Allowed: true}
-	}
-	pt := admissionv1.PatchTypeJSONPatch
-	return &admissionv1.AdmissionResponse{Allowed: true, Patch: b, PatchType: &pt}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -146,256 +134,85 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// admit processes a single AdmissionRequest. On any error it fails open and
-// allows the pod unmutated.
+// admit decodes the pod, decides what admitting it does, runs the effects the
+// decision calls for and responds. Every path admits the pod.
 func (h *Handler) admit(ctx context.Context, req *admissionv1.AdmissionRequest) *admissionv1.AdmissionResponse {
 	ctx, cancel := context.WithTimeout(ctx, admissionTimeout)
 	defer cancel()
 
 	logger := log.FromContext(ctx).WithValues("namespace", req.Namespace, "name", req.Name, "uid", req.UID)
-	allow := &admissionv1.AdmissionResponse{Allowed: true}
-
 	logger.V(1).Info("admit invoked", "operation", req.Operation, "kind", req.Kind.Kind)
 
+	pod, err := decodePod(req)
+	if err != nil {
+		logger.Error(err, "failed to decode Pod; allowing it unmutated")
+		return respond(admission{reason: reasonUndecodable})
+	}
+	return h.admitDecoded(ctx, logger, pod)
+}
+
+// admitDecoded turns a panic anywhere past decoding into an admission like
+// any other. Left to the HTTP middleware it would answer 500, which hands the
+// pod to the webhook's failurePolicy: under Fail, the pod is rejected.
+func (h *Handler) admitDecoded(ctx context.Context, logger logr.Logger, pod *corev1.Pod) (resp *admissionv1.AdmissionResponse) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			reportPanic(logger, panicLabelAdmit, rec)
+			resp = respond(admission{reason: reasonPanic})
+		}
+	}()
+	a := h.decide(ctx, pod)
+	if a.source != "" {
+		RecommendationSourceTotal.WithLabelValues(a.source).Inc()
+	}
+	if a.stub != nil {
+		h.requestRecommendation(logger, *a.stub)
+	}
+	h.logAdmission(logger, pod, a)
+	return respond(a)
+}
+
+func decodePod(req *admissionv1.AdmissionRequest) (*corev1.Pod, error) {
 	if len(req.Object.Raw) == 0 {
-		logger.V(1).Info("admission request has empty Object.Raw, allowing without injection")
-		return allow
+		return nil, errors.New("admission request carries no object")
 	}
 	var pod corev1.Pod
 	if err := json.Unmarshal(req.Object.Raw, &pod); err != nil {
-		logger.Error(err, "failed to decode Pod")
-		return allow
+		return nil, err
 	}
 	pod.Namespace = req.Namespace
-
-	var resolvedOwner podOwner
-
-	policyName := pod.Annotations[sustainv1alpha1.PolicyAnnotation]
-	if pod.Annotations[sustainv1alpha1.OptOutAnnotation] == "true" {
-		logger.V(1).Info("pod opts out, allowing without injection")
-		return allow
-	}
-	if policyName == "" {
-		optInCtx, optInCancel := context.WithTimeout(ctx, optInTimeout)
-		name, level, owner, err := h.resolveOptIn(optInCtx, logger, &pod)
-		optInCancel()
-		if err != nil {
-			logger.Error(err, "failed to resolve multi-level policy opt-in; allowing pod without injection")
-			return allow
-		}
-		if name == "" {
-			logger.V(1).Info("pod has no policy annotation at any level, allowing without injection")
-			return allow
-		}
-		policyName, resolvedOwner = name, owner
-		logger = logger.WithValues("optInLevel", level)
-	}
-	if !isValidPolicyName(policyName) {
-		logger.Info("pod has invalid policy annotation, allowing without injection", "policy", policyName)
-		return allow
-	}
-	logger = logger.WithValues("policy", policyName)
-	logger.V(1).Info("pod is annotated with policy")
-
-	var policy sustainv1alpha1.Policy
-	policyCtx, policyCancel := context.WithTimeout(ctx, apiCallTimeout)
-	policyErr := h.Client.Get(policyCtx, types.NamespacedName{Name: policyName}, &policy)
-	policyCancel()
-	if policyErr != nil {
-		if client.IgnoreNotFound(policyErr) == nil {
-			logger.V(1).Info("policy not found, allowing pod")
-			return allow
-		}
-		logger.Error(policyErr, "failed to fetch policy")
-		return allow
-	}
-
-	// A malformed label selector is treated as non-matching, never as a denial.
-	sel, selErr := policymatch.SelectorOK(policy.Spec.Selector.LabelSelector)
-	if selErr != nil {
-		logger.Info("policy has invalid labelSelector; allowing pod without injection (fail-open)", "err", selErr)
-		return allow
-	}
-	if !policymatch.MatchesSelector(&policy, req.Namespace, pod.Labels, h.ExcludedNamespaces, sel) {
-		logger.V(1).Info("pod does not match policy selector (namespace/labels) or is in excluded namespace; allowing without injection",
-			"selectorNamespaces", policy.Spec.Selector.Namespaces,
-			"excludedNamespaces", h.ExcludedNamespaces)
-		return allow
-	}
-
-	// Mirror the owner-name annotation onto a label so kube-state-metrics
-	// exposes it for the recording rules. Applied even in recommend-only mode.
-	labelPatch := ownerNameLabelPatch(&pod)
-
-	ownerKind, ownerName := resolvedOwner.Kind, resolvedOwner.Name
-	if !resolvedOwner.Resolved {
-		ownerCtx, ownerCancel := context.WithTimeout(ctx, 2*apiCallTimeout)
-		var err error
-		ownerKind, ownerName, err = h.resolveCachedPodOwner(ownerCtx, &pod)
-		ownerCancel()
-		if err != nil {
-			logger.Error(err, "failed to resolve owner kind")
-			return allowWithLabelPatch(labelPatch)
-		}
-	}
-	ownerKind, ownerName = workload.ApplyOwnerNameOverride(ownerKind, ownerName, pod.Annotations)
-	if ownerKind == "" {
-		logger.V(1).Info("standalone pod (no controller owner), skipping injection")
-		return allowWithLabelPatch(labelPatch)
-	}
-	logger = logger.WithValues("ownerKind", ownerKind, "ownerName", ownerName)
-	logger.V(1).Info("resolved pod owner")
-
-	mode := policy.Spec.RightSizing.Update.Types.ModeForKind(ownerKind)
-	if mode == nil {
-		logger.V(1).Info("policy does not configure this workload kind, skipping")
-		return allowWithLabelPatch(labelPatch)
-	}
-	logger.V(1).Info("policy configured for workload kind", "mode", *mode)
-
-	cacheCtx, cacheCancel := context.WithTimeout(ctx, apiCallTimeout)
-	known, err := h.storedRecommendation(cacheCtx, req.Namespace, ownerKind, ownerName)
-	cacheCancel()
-	if err != nil {
-		RecommendationSourceTotal.WithLabelValues(RecSourceError).Inc()
-		logger.Error(err, "failed to read WorkloadRecommendation; allowing pod with template resources")
-		return allowWithLabelPatch(labelPatch)
-	}
-	reading := wlrcache.Read(known, policyName, time.Now(), h.freshness())
-	// RecommendationSourceTotal counts the read outcome, not whether a patch
-	// is eventually emitted.
-	RecommendationSourceTotal.WithLabelValues(recommendationSource(reading.Verdict)).Inc()
-	observed := wlrcache.BuildObservedResources(pod.Spec.Containers, pod.Spec.InitContainers)
-	if wlrcache.ShouldRequest(known, policyName, observed) {
-		ref := sustainv1alpha1.WorkloadReference{Kind: ownerKind, Namespace: req.Namespace, Name: ownerName}
-		h.requestRecommendation(logger, known, ref, policyName, observed)
-	}
-	if !reading.Verdict.Injects() {
-		logger.V(1).Info("WorkloadRecommendation has nothing to inject; allowing pod with template resources",
-			"verdict", reading.Verdict.String())
-		return allowWithLabelPatch(labelPatch)
-	}
-	recs := reading.Recs
-
-	filtered := make(map[string]workload.ContainerRecommendation)
-	addMatchingRecs(filtered, pod.Spec.Containers, recs)
-	if !policy.Spec.RightSizing.ExcludeInitContainers {
-		addMatchingRecs(filtered, pod.Spec.InitContainers, recs)
-	}
-	if len(filtered) == 0 {
-		logger.V(1).Info("no recommendations match pod containers, allowing without injection",
-			"podContainers", len(pod.Spec.Containers), "podInitContainers", len(pod.Spec.InitContainers), "recommendations", len(recs))
-		return allowWithLabelPatch(labelPatch)
-	}
-
-	recommendOnly := policy.EffectiveRecommendOnly(h.RecommendOnly)
-
-	if recommendOnly {
-		source := "policy"
-		if h.RecommendOnly {
-			source = "flag"
-		}
-		logger.Info("recommend-only: would inject resources", "source", source, "containers", len(filtered), "recommendations", filtered)
-		return allowWithLabelPatch(labelPatch)
-	}
-
-	patchBytes, err := buildPatches(&pod, filtered, labelPatch)
-	if err != nil {
-		logger.Error(err, "failed to build JSON patches")
-		return allowWithLabelPatch(labelPatch)
-	}
-	if patchBytes == nil {
-		logger.V(1).Info("no patch needed (recommendations match current pod spec)")
-		return allow
-	}
-
-	pt := admissionv1.PatchTypeJSONPatch
-	logger.Info("injecting resources", "containers", len(filtered))
-	logger.V(1).Info("injection details", "recommendations", filtered, "patchBytes", len(patchBytes))
-	return &admissionv1.AdmissionResponse{
-		Allowed:   true,
-		Patch:     patchBytes,
-		PatchType: &pt,
-	}
+	return &pod, nil
 }
 
-// ownerNameLabelPatch returns the patch mirroring a valid owner-name
-// annotation onto the pod's labels, or nil when there is nothing to mirror.
-// Marshalling a string or a string map cannot fail.
-func ownerNameLabelPatch(pod *corev1.Pod) *jsonPatch {
-	v, ok := pod.Annotations[sustainv1alpha1.OwnerNameAnnotation]
-	if !ok || len(apivalidation.IsValidLabelValue(v)) != 0 || pod.Labels[sustainv1alpha1.OwnerNameAnnotation] == v {
-		return nil
-	}
-	if pod.Labels == nil {
-		value, _ := json.Marshal(map[string]string{sustainv1alpha1.OwnerNameAnnotation: v})
-		return &jsonPatch{Op: "add", Path: "/metadata/labels", Value: value}
-	}
-	value, _ := json.Marshal(v)
-	return &jsonPatch{Op: "add", Path: "/metadata/labels/" + strings.ReplaceAll(sustainv1alpha1.OwnerNameAnnotation, "/", "~1"), Value: value}
-}
-
-func addMatchingRecs(dst map[string]workload.ContainerRecommendation, containers []corev1.Container, recs map[string]workload.ContainerRecommendation) {
-	for _, c := range containers {
-		if rec, ok := recs[c.Name]; ok {
-			dst[c.Name] = rec
-		}
-	}
-}
-
-// buildPatches generates an RFC 6902 JSON Patch setting resources on the
-// containers listed in recs, plus the owner-name label patch when present.
-func buildPatches(pod *corev1.Pod, recs map[string]workload.ContainerRecommendation, labelPatch *jsonPatch) ([]byte, error) {
+// respond is the only constructor of an admission response, and it always
+// allows the pod. It patches nothing but the resources of the containers an
+// injected admission writes.
+func respond(a admission) *admissionv1.AdmissionResponse {
 	var patches []jsonPatch
-	if labelPatch != nil {
-		patches = append(patches, *labelPatch)
+	for _, w := range a.writes {
+		path := "/spec/containers/"
+		if w.Init {
+			path = "/spec/initContainers/"
+		}
+		// Marshalling resource requirements cannot fail, and "add" replaces a
+		// value already at the path.
+		value, _ := json.Marshal(w.Resources)
+		patches = append(patches, jsonPatch{Op: "add", Path: path + strconv.Itoa(w.Index) + "/resources", Value: value})
 	}
-
-	addPatches, err := patchesForContainers(pod.Spec.Containers, recs, "/spec/containers")
-	if err != nil {
-		return nil, err
-	}
-	patches = append(patches, addPatches...)
-
-	addPatches, err = patchesForContainers(pod.Spec.InitContainers, recs, "/spec/initContainers")
-	if err != nil {
-		return nil, err
-	}
-	patches = append(patches, addPatches...)
-
 	if len(patches) == 0 {
-		return nil, nil
+		return &admissionv1.AdmissionResponse{Allowed: true}
 	}
-	return json.Marshal(patches)
+	b, err := json.Marshal(patches)
+	if err != nil {
+		return &admissionv1.AdmissionResponse{Allowed: true}
+	}
+	pt := admissionv1.PatchTypeJSONPatch
+	return &admissionv1.AdmissionResponse{Allowed: true, Patch: b, PatchType: &pt}
 }
 
-func patchesForContainers(cs []corev1.Container, recs map[string]workload.ContainerRecommendation, basePath string) ([]jsonPatch, error) {
-	var patches []jsonPatch
-	for i, c := range cs {
-		rec, ok := recs[c.Name]
-		if !ok {
-			continue
-		}
-		copyC := c.DeepCopy()
-		if !workload.ApplyRecommendation(copyC, rec) {
-			continue
-		}
-		newRes := copyC.Resources
-		// ApplyRecommendation seeds non-nil Limits; drop it back to nil when
-		// empty so the patch matches a pod that never had limits.
-		if len(newRes.Limits) == 0 {
-			newRes.Limits = nil
-		}
-
-		resJSON, err := json.Marshal(newRes)
-		if err != nil {
-			return nil, fmt.Errorf("marshaling resources for container %s: %w", c.Name, err)
-		}
-		patches = append(patches, jsonPatch{
-			Op:    "add", // "add" replaces if path already exists
-			Path:  fmt.Sprintf("%s/%d/resources", basePath, i),
-			Value: resJSON,
-		})
-	}
-	return patches, nil
+// reportPanic logs a recovered panic with its stack and counts it on
+// PanicTotal under op, which must be a bounded constant.
+func reportPanic(logger logr.Logger, op string, rec any, keysAndValues ...any) {
+	logger.Error(nil, "recovered panic", append([]any{"operation", op, "panic", fmt.Sprint(rec), "stack", string(debug.Stack())}, keysAndValues...)...)
+	PanicTotal.WithLabelValues(op).Inc()
 }

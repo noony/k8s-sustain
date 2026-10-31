@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
+
+	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 // defaultTTL comfortably outlasts the recommender's typical reconcile interval
@@ -20,18 +22,6 @@ const minSweepInterval = 30 * time.Second
 // without bound; on overflow the oldest entry by ObservedAt is evicted. High
 // enough that real clusters will never hit it.
 const defaultMaxEntries = 5_000
-
-// workloadKey is the (ns, kind, name) tuple used as the secondary-index key so
-// ByWorkload is O(containers) instead of O(N).
-type workloadKey struct {
-	Namespace string
-	OwnerKind string
-	OwnerName string
-}
-
-func workloadKeyOf(k Key) workloadKey {
-	return workloadKey{Namespace: k.Namespace, OwnerKind: k.OwnerKind, OwnerName: k.OwnerName}
-}
 
 // resolvedEventKey identifies one specific container termination on one
 // specific pod — pod UID + container + restart count + terminated-at —
@@ -52,9 +42,11 @@ type Cache struct {
 	ttl        time.Duration
 	maxEntries int
 
-	mu         sync.RWMutex
-	entries    map[Key]OOMRecord
-	byWorkload map[workloadKey]map[string]struct{}
+	mu      sync.RWMutex
+	entries map[Key]OOMRecord
+	// byWorkload indexes entries by identity so ByWorkload is O(containers)
+	// instead of O(N).
+	byWorkload map[promclient.WorkloadIdentity]map[string]struct{}
 	// resolved backs AlreadyResolved/MarkResolved: value is the mark time,
 	// aged out under the same ttl as entries and guarded by the same mu.
 	resolved map[resolvedEventKey]time.Time
@@ -93,7 +85,7 @@ func NewCacheWithLimit(ttl time.Duration, maxEntries int) *Cache {
 		ttl:        ttl,
 		maxEntries: maxEntries,
 		entries:    make(map[Key]OOMRecord),
-		byWorkload: make(map[workloadKey]map[string]struct{}),
+		byWorkload: make(map[promclient.WorkloadIdentity]map[string]struct{}),
 		resolved:   make(map[resolvedEventKey]time.Time),
 	}
 }
@@ -236,24 +228,23 @@ func (c *Cache) markResolvedAt(now time.Time, podUID types.UID, container string
 	c.resolved[key] = now
 }
 
-// ByWorkload returns the records the cache holds for the given workload
-// identity, by container. The map is always non-nil so callers can range over
-// it without a nil check. Whether a kill is still recent is the reader's call:
-// the cache only drops records older than its TTL.
+// ByWorkload returns the records the cache holds for id, by container. The
+// map is always non-nil so callers can range over it without a nil check.
+// Whether a kill is still recent is the reader's call: the cache only drops
+// records older than its TTL.
 //
 // Reads run under RLock with the help of a secondary index keyed by workload,
 // so the recommender does not serialize against concurrent Record calls. Any
 // stale entries discovered along the way are deleted via a brief write lock
 // after the read pass completes.
-func (c *Cache) ByWorkload(ns, kind, name string) map[string]*OOMRecord {
+func (c *Cache) ByWorkload(id promclient.WorkloadIdentity) map[string]*OOMRecord {
 	out := make(map[string]*OOMRecord)
 	now := time.Now()
-	wk := workloadKey{Namespace: ns, OwnerKind: kind, OwnerName: name}
 
 	var stale []Key
 	c.mu.RLock()
-	for container := range c.byWorkload[wk] {
-		key := Key{Namespace: ns, OwnerKind: kind, OwnerName: name, Container: container}
+	for container := range c.byWorkload[id] {
+		key := Key{WorkloadIdentity: id, Container: container}
 		entry, ok := c.entries[key]
 		if !ok {
 			continue
@@ -332,7 +323,7 @@ func (c *Cache) sweep(now time.Time) {
 }
 
 func (c *Cache) addIndexLocked(key Key) {
-	wk := workloadKeyOf(key)
+	wk := key.WorkloadIdentity
 	set, ok := c.byWorkload[wk]
 	if !ok {
 		set = make(map[string]struct{})
@@ -342,7 +333,7 @@ func (c *Cache) addIndexLocked(key Key) {
 }
 
 func (c *Cache) removeIndexLocked(key Key) {
-	wk := workloadKeyOf(key)
+	wk := key.WorkloadIdentity
 	set, ok := c.byWorkload[wk]
 	if !ok {
 		return

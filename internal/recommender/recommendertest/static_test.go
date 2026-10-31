@@ -19,7 +19,9 @@ func TestStaticInputs_AnswersEveryRequestAndRecordsIt(t *testing.T) {
 		Set(known, &recommender.WorkloadInputs{CPUPerPod: promclient.ContainerValues{"app": 1}}).
 		Fail(broken, boom)
 
-	got := s.FetchInputs(context.Background(), sustainv1alpha1.ResourcesConfigs{}, []recommender.InputsRequest{
+	cfg := sustainv1alpha1.ResourcesConfigs{CPU: sustainv1alpha1.ResourceConfig{Window: "24h"}}
+
+	got := s.FetchInputs(context.Background(), cfg, []recommender.InputsRequest{
 		{Identity: known, Containers: 1}, {Identity: broken}, {Identity: unknown},
 	})
 
@@ -32,8 +34,8 @@ func TestStaticInputs_AnswersEveryRequestAndRecordsIt(t *testing.T) {
 	if r := got[unknown]; r.Err != nil || r.Inputs == nil || len(r.Inputs.CPUPerPod) != 0 {
 		t.Errorf("unknown = %+v, want empty inputs", r)
 	}
-	if calls := s.Calls(); len(calls) != 1 || len(calls[0]) != 3 {
-		t.Errorf("calls = %v, want one call of three requests", calls)
+	if calls := s.Calls(); len(calls) != 1 || len(calls[0].Requests) != 3 || calls[0].Resources.CPU.Window != "24h" {
+		t.Errorf("calls = %+v, want one call of three requests under its settings", calls)
 	}
 	if !s.Requested(unknown) {
 		t.Error("Requested(unknown) = false after it was fetched")

@@ -39,7 +39,7 @@ var _ func(context.Context, context.Context, *runtime.Scheme) (client.Client, er
 // cachedKinds drives the pre-warm loop, and the pre-warm is the only reason
 // WaitForCacheSync means anything: cache.New registers no informers on its own,
 // so an empty list makes the wait a silent no-op and pushes a cluster-wide LIST
-// onto the first admission Get, inside that call's 2s timeout.
+// onto the first admission's reads, inside their share of its 4s budget.
 //
 // The exact contents are pinned: dropping a kind the webhook reads per
 // admission reintroduces the stall, and adding an owner-chain kind (see

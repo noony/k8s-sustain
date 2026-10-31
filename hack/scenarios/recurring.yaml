@@ -22,7 +22,7 @@
 #
 #   * workload.GroupBarePods does NOT filter on pod phase. A Succeeded pod
 #     left lying around still reports the identity in every target listing, so
-#     the identity NEVER departs, refreshDepartedRecommendation is never
+#     the identity NEVER departs, the departed path of the pass is never
 #     reached, and the behaviour this file exists to demonstrate is never
 #     exercised. An earlier version of this file created pods and never
 #     deleted them: 29 Succeeded pods piled up over one run and
@@ -116,7 +116,7 @@
 #     follows is INFERRED, not timestamped: the sweep's grace period runs off
 #     the frozen ObservedAt, so it lapses ~10 minutes later even though the
 #     launcher is still ticking. Expect it to FLAP rather than stick —
-#     wlrcache.EnsureExists clears Departed unconditionally on any cycle that
+#     wlrcache.Ensure clears Departed unconditionally on any cycle that
 #     catches a pod of the identity alive, and these pods do briefly exist
 #     before they are killed. A single `kubectl get wlrec` reading either
 #     value is consistent with this scenario.
@@ -165,7 +165,7 @@
 #          -o jsonpath='{.status.observedAt}{"\n"}'
 #
 #      The direct counter for this path is k8s_sustain_wlr_refresh_total,
-#      which is emitted ONLY from refreshDepartedRecommendation — every
+#      which is emitted ONLY for departed identities (emitDepartedRefresh) — every
 #      increment is a recompute of an identity with no live workload object:
 #        kubectl port-forward -n k8s-sustain deploy/k8s-sustain 8080:8080
 #        curl -s localhost:8080/metrics | grep wlr_refresh_total
@@ -208,7 +208,7 @@
 #      period (measured from ObservedAt) never lapses.
 #
 #      That is a property of these two constants, not a guarantee. A refresh
-#      does NOT rewrite ObservedAt every cycle: wlrcache.Upsert skips the write
+#      does NOT rewrite ObservedAt every cycle: wlrcache.Record skips the write
 #      entirely when the new status is equivalent to the stored one AND
 #      ObservedAt is younger than wlrcache.RefreshInterval — see (2) above,
 #      which states the same rule. So a recommendation that has gone perfectly

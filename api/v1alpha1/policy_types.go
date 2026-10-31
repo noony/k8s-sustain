@@ -14,9 +14,10 @@ const (
 
 	// OwnerNameAnnotation overrides the workload identity derived from the
 	// ownerReferences chain: a bare pod becomes kind "Pod" with this name, a
-	// pod with a real owner is grouped under this shared identity. The webhook
-	// mirrors it to a pod label, so the value must be a valid label value
-	// (RFC 1123, at most 63 chars).
+	// pod with a real owner is grouped under this shared identity. The
+	// recording rules read it from kube-state-metrics' kube_pod_annotations
+	// and carry it as the owner_name label, so the value must be a valid label
+	// value (RFC 1123, at most 63 chars); any other value is ignored.
 	//
 	// Example: k8s.sustain.io/owner-name: etl-daily
 	OwnerNameAnnotation = "k8s.sustain.io/owner-name"
@@ -243,8 +244,13 @@ type PolicySelector struct {
 	// Namespaces is a list of namespaces to target; an empty list targets all namespaces.
 	// +optional
 	Namespaces []string `json:"namespaces,omitempty"`
-	// LabelSelector restricts the set of workloads targeted by this policy; an empty selector matches all.
+	// LabelSelector restricts the set of workloads targeted by this policy to those whose pod template
+	// labels (a bare Pod's own labels) it matches; an empty selector matches all. It may not use a label
+	// a controller adds to a workload's pods or its pod template, which the controller and
+	// the webhook would see on different objects.
 	// +optional
+	// +kubebuilder:validation:XValidation:rule="!has(self.matchLabels) || !['pod-template-hash', 'rollouts-pod-template-hash', 'controller-revision-hash', 'pod-template-generation', 'statefulset.kubernetes.io/pod-name', 'apps.kubernetes.io/pod-index', 'controller-uid', 'job-name', 'batch.kubernetes.io/controller-uid', 'batch.kubernetes.io/job-name', 'batch.kubernetes.io/job-completion-index'].exists(k, k in self.matchLabels)",message="matchLabels may not use a label a controller adds to pods (pod-template-hash, rollouts-pod-template-hash, controller-revision-hash, pod-template-generation, statefulset.kubernetes.io/pod-name, apps.kubernetes.io/pod-index, controller-uid, job-name, batch.kubernetes.io/controller-uid, batch.kubernetes.io/job-name, batch.kubernetes.io/job-completion-index): the controller matches pod templates and the webhook pods, and they disagree on these labels"
+	// +kubebuilder:validation:XValidation:rule="!has(self.matchExpressions) || self.matchExpressions.all(e, !(e.key in ['pod-template-hash', 'rollouts-pod-template-hash', 'controller-revision-hash', 'pod-template-generation', 'statefulset.kubernetes.io/pod-name', 'apps.kubernetes.io/pod-index', 'controller-uid', 'job-name', 'batch.kubernetes.io/controller-uid', 'batch.kubernetes.io/job-name', 'batch.kubernetes.io/job-completion-index']))",message="matchExpressions may not use a label a controller adds to pods (pod-template-hash, rollouts-pod-template-hash, controller-revision-hash, pod-template-generation, statefulset.kubernetes.io/pod-name, apps.kubernetes.io/pod-index, controller-uid, job-name, batch.kubernetes.io/controller-uid, batch.kubernetes.io/job-name, batch.kubernetes.io/job-completion-index): the controller matches pod templates and the webhook pods, and they disagree on these labels"
 	LabelSelector *metav1.LabelSelector `json:"labelSelector,omitempty"`
 }
 

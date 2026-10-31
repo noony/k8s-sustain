@@ -69,9 +69,9 @@ spec:
 
 ## `spec.selector`
 
-Restricts which namespaces and workloads this policy applies to. The selector only **narrows**: a workload must also opt in with the `k8s.sustain.io/policy` annotation (see [Resolution order](annotation.md#resolution-order)). The controller, webhook and dashboard all honour the same selector.
+Restricts which namespaces and workloads this policy applies to. The selector only **narrows**: a workload must also opt in with the `k8s.sustain.io/policy` annotation (see [Resolution order](annotation.md#resolution-order)). The controller, webhook, dashboard and OOM watcher decide it in one place (`internal/governance`), so they all honour the same selector.
 
-The controller and webhook also honour their operator-level `--excluded-namespaces` flag (see [CLI reference](./cli.md)); a workload in an excluded namespace is never managed regardless of selector configuration. If `spec.selector.labelSelector` is malformed, the webhook fails open (admits the pod without mutation and logs a warning) rather than denying it.
+The controller, webhook and OOM watcher also honour their operator-level `--excluded-namespaces` flag (see [CLI reference](./cli.md)); a workload in an excluded namespace is never managed regardless of selector configuration. A malformed `spec.selector.labelSelector` (one the CRD admits but Kubernetes cannot parse, such as an unknown operator) matches no pod template, so the policy governs no workload, a Departed one included. The webhook fails open rather than denying a pod that opts into it: whichever level the pod opts in at, it is admitted without resources injected and the webhook logs a warning with reason `selector-invalid`.
 
 ### `spec.selector.namespaces`
 
@@ -89,7 +89,23 @@ spec:
 
 A standard Kubernetes [label selector](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors) that restricts which workloads are governed by this policy. An empty selector matches all workloads in the targeted namespaces.
 
-The controller matches against the workload object's `metadata.labels` (e.g. the `Deployment`'s own labels). The webhook matches against the *pod*'s labels (the pod template's `metadata.labels`, which become the labels of every replica).
+It matches the **pod template's** labels — `spec.template.metadata.labels` (a CronJob's `spec.jobTemplate.spec.template.metadata.labels`, a bare Pod's own `metadata.labels`), the labels every pod of the workload carries — never the workload object's own `metadata.labels`. Labels that only the `Deployment` carries select nothing; put them on its pod template.
+
+The Policy CRD rejects a selector that names a label a controller adds after the pod template is written, in `matchLabels` or as a `matchExpressions` key, whatever the operator:
+
+| Label | Added by |
+|-------|----------|
+| `pod-template-hash` | the Deployment controller, to its ReplicaSets' pods |
+| `rollouts-pod-template-hash` | Argo Rollouts, to its ReplicaSets' pods |
+| `controller-revision-hash` | the StatefulSet and DaemonSet controllers, to their pods |
+| `pod-template-generation` | the DaemonSet controller, to its pods |
+| `statefulset.kubernetes.io/pod-name`, `apps.kubernetes.io/pod-index` | the StatefulSet controller, to its pods |
+| `controller-uid`, `job-name`, `batch.kubernetes.io/controller-uid`, `batch.kubernetes.io/job-name` | the Job API, to a Job's own pod template |
+| `batch.kubernetes.io/job-completion-index` | the Job controller, to an Indexed Job's pods |
+
+Each is on some of the objects the controller, the webhook and the OOM watcher match and not on others: a Deployment's pod template has no `pod-template-hash` but its running pods do, and a standalone Job's pod template has `job-name` while a CronJob's job template does not. A selector on one would have the controller govern a workload whose pods the webhook refuses, or the other way round. k8s-sustain itself adds no label to pods: the [`k8s.sustain.io/owner-name`](annotation.md#annotations-and-labels) annotation is read where you set it, never copied to a label.
+
+A Policy whose `labelSelector` names one of these labels is rejected when it is created or its selector is changed. Select on labels you put on the pod template yourself.
 
 ```yaml
 spec:
@@ -189,17 +205,19 @@ Configures recommendations for CPU and memory independently.
 
 #### `cpu.limits` / `memory.limits`
 
-At most one of the following fields may be set (enforced by CRD validation). If none is set, the existing limit is kept unchanged.
+At most one of the following fields may be set (enforced by CRD validation). If none is set, the existing limit is kept, as with `keepLimit`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `keepLimit` | bool | Leave the existing limit unchanged |
-| `keepLimitRequestRatio` | bool | Preserve the current limit-to-request ratio (e.g. if limit was 2× request, it stays 2× the new request) |
+| `keepLimit` | bool | Keep the existing limit, unless it is below the new request: then it is raised to the request |
+| `keepLimitRequestRatio` | bool | Preserve the current limit-to-request ratio (e.g. if limit was 2× request, it stays 2× the new request). A container without a request or a limit has no ratio and keeps its limit, or keeps having none |
 | `equalsToRequest` | bool | Set the limit equal to the new request (Guaranteed QoS) |
 | `noLimit` | bool | Remove the limit entirely |
 | `requestsLimitsRatio` | float64 | Set limit = request × ratio (e.g. `1.5` sets limit to 150% of request). Must be `>= 1`. |
 
-#### `cpu.downsizeThreshold` / `memory.downsizeThreshold`
+Whatever the strategy, a limit never ends below the request: the API server rejects such a pod and such a resize, so a kept limit the new request outgrows (an OOM floor, headroom, `minAllowed` or autoscaler coordination can each push it there) is raised to the request. The request is never lowered to fit the limit. The `WorkloadRecommendation`'s trace records the raise as its `guard` stage. The webhook and the in-place resize hold the same line when they write a container: when the limit it would end up with is below its request — a limit kept from a pod whose running limit differs from its template, or a limit decrease applied while the [downsize threshold](#downsize-threshold) withholds the request's — they raise that limit to the request.
+
+#### `cpu.downsizeThreshold` / `memory.downsizeThreshold` {#downsize-threshold}
 
 Suppresses pod recycling for resource **decreases** that are too small to be
 worth the disruption. **Increases always apply immediately** (under-provisioning
@@ -234,32 +252,42 @@ status:
       lastTransitionTime: "2024-01-01T00:00:00Z"
 ```
 
-The count covers every workload object the policy processed, plus each
-retained recommendation whose workload object no longer exists. Workloads
-grouped under a shared `k8s.sustain.io/owner-name` are counted individually,
-because each one's pods are applied to separately even though they share a
-single recommendation.
+Every count in the message is a count of workload identities: workloads
+grouped under a shared `k8s.sustain.io/owner-name` count once, together, and
+so does each departed identity whose retained recommendation the cycle
+recomputed. An identity counts as processed when the cycle worked on at
+least one of its workloads, and as failed when at least one of them failed.
 
 These three reasons are the complete set the controller writes to
 `Policy.status.conditions`:
 
 | Reason | Status | Meaning |
 |--------|--------|---------|
-| `ReconciliationSucceeded` | True | Every matching workload was processed, and every workload identity was registered for computation |
-| `PartialFailure` | False | Some workloads failed, and/or some workload identities could not be registered for computation; see `message`, which names only whichever of the two actually happened |
-| `ListFailed` | False | The cycle could not even build its work list — listing the matching workloads failed, or listing the policy's `WorkloadRecommendation` objects did. No workload was processed |
+| `ReconciliationSucceeded` | True | Every matching workload was processed, and no workload identity is Blocked |
+| `PartialFailure` | False | Some workloads failed this cycle and/or some workload identities are Blocked (including those whose workloads this cycle skipped in retry backoff); see `message`, which names only what actually happened |
+| `ListFailed` | False | The cycle could not even build its work list — listing the matching workloads failed, or listing the policy's `WorkloadRecommendation` objects did. No workload was processed. The next cycle runs at the earliest retry an earlier cycle scheduled, but no sooner than 30s: a retry already due cannot run until a cycle lists again. It never waits longer than `--reconcile-interval` |
 
-`ReconciliationFailed` is **not** a condition reason. It is an Event reason,
-recorded as a `Warning` on the *workload object* (not on the `Policy`) when
-that individual workload hits a permanent, non-retried error. A permanent
-error is dropped from the retry tracker and does not count toward the
-cycle's failure total, so a cycle in which every emitted event is
-`ReconciliationFailed` still leaves the policy at `ReconciliationSucceeded`.
-`PartialFailure` is driven instead by transient errors — which emit
-`ReconciliationRetryScheduled`, not `ReconciliationFailed` — and by
-workload identities that could not be registered for computation. That
-second count is per **identity**, not per workload object: workloads grouped
-under a shared `k8s.sustain.io/owner-name` register once, together.
+A workload fails when its Prometheus inputs cannot be read, when evicting or
+resizing its pods fails, or when it is left alone because its identity's
+recommendation could not be stored for the webhook (its
+`WorkloadRecommendation` could not be claimed, or the write was rejected).
+Every such failure counts once toward `PartialFailure` and leaves the identity
+[Blocked](../reference/metrics.md#drift-retry-autoscaler) until a later
+cycle succeeds, whether the error is transient or permanent:
+
+- A **transient** error (Prometheus errors and timeouts, API 5xx, 404 Not
+  Found, 409 Conflict and 429) is retried with exponential backoff, 30s
+  doubling with each consecutive transient failure up to 5 minutes (a
+  permanent error in between starts it over). Each attempt records a
+  `ReconciliationRetryScheduled` Warning event on the workload object naming
+  when the next one runs, and the policy's next cycle is scheduled for that
+  time when it comes before `--reconcile-interval`.
+- A **permanent** error (an API rejection such as 403, 401 or Invalid, e.g.
+  missing RBAC on `pods/eviction`, or a workload the controller refuses to
+  apply to: one without a UID or a valid selector) records one `ReconciliationFailed`
+  Warning event on the workload object when the workload enters the failure,
+  and is retried on every cycle without backoff, so fixing its cause takes
+  effect at the next cycle.
 
 ---
 

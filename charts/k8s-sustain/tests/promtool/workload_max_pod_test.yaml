@@ -1,0 +1,57 @@
+# Unit test for k8s_sustain:workload_max_pod_cpu:cores and
+# k8s_sustain:workload_max_pod_memory:bytes, the usage signals' input.
+#
+# The recommender reads one series per (namespace, owner_kind, owner_name,
+# container) and keeps the last it gets: each rule must record the busiest
+# replica of every container, under exactly those labels, from raw cAdvisor
+# series resolved Pod -> ReplicaSet -> Deployment.
+rule_files:
+  - rules-only.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 10s samples line up with the CPU rate's [1m:10s] subquery, so a counter
+  # rising at a constant rate reads back exactly that rate.
+  - interval: 10s
+    input_series:
+      - series: 'kube_pod_owner{namespace="shop",pod="web-7d4-a",owner_kind="ReplicaSet",owner_name="web-7d4",owner_is_controller="true"}'
+        values: '1x60'
+      - series: 'kube_pod_owner{namespace="shop",pod="web-7d4-b",owner_kind="ReplicaSet",owner_name="web-7d4",owner_is_controller="true"}'
+        values: '1x60'
+      - series: 'kube_replicaset_owner{namespace="shop",replicaset="web-7d4",owner_kind="Deployment",owner_name="web",owner_is_controller="true"}'
+        values: '1x60'
+      # app: replica a is the busier on CPU, replica b on memory.
+      - series: 'container_cpu_usage_seconds_total{namespace="shop",pod="web-7d4-a",container="app",image="app:v1",node="node-1"}'
+        values: '0+5x60'
+      - series: 'container_cpu_usage_seconds_total{namespace="shop",pod="web-7d4-b",container="app",image="app:v1",node="node-2"}'
+        values: '0+2.5x60'
+      - series: 'container_memory_working_set_bytes{namespace="shop",pod="web-7d4-a",container="app",image="app:v1",node="node-1"}'
+        values: '209715200x60'
+      - series: 'container_memory_working_set_bytes{namespace="shop",pod="web-7d4-b",container="app",image="app:v1",node="node-2"}'
+        values: '314572800x60'
+      # proxy: replica b is the busier on both.
+      - series: 'container_cpu_usage_seconds_total{namespace="shop",pod="web-7d4-a",container="proxy",image="proxy:v1",node="node-1"}'
+        values: '0+1x60'
+      - series: 'container_cpu_usage_seconds_total{namespace="shop",pod="web-7d4-b",container="proxy",image="proxy:v1",node="node-2"}'
+        values: '0+2x60'
+      - series: 'container_memory_working_set_bytes{namespace="shop",pod="web-7d4-a",container="proxy",image="proxy:v1",node="node-1"}'
+        values: '10485760x60'
+      - series: 'container_memory_working_set_bytes{namespace="shop",pod="web-7d4-b",container="proxy",image="proxy:v1",node="node-2"}'
+        values: '20971520x60'
+
+    promql_expr_test:
+      - expr: k8s_sustain:workload_max_pod_cpu:cores
+        eval_time: 5m
+        exp_samples:
+          - labels: 'k8s_sustain:workload_max_pod_cpu:cores{container="app",namespace="shop",owner_kind="Deployment",owner_name="web"}'
+            value: 0.5
+          - labels: 'k8s_sustain:workload_max_pod_cpu:cores{container="proxy",namespace="shop",owner_kind="Deployment",owner_name="web"}'
+            value: 0.2
+      - expr: k8s_sustain:workload_max_pod_memory:bytes
+        eval_time: 5m
+        exp_samples:
+          - labels: 'k8s_sustain:workload_max_pod_memory:bytes{container="app",namespace="shop",owner_kind="Deployment",owner_name="web"}'
+            value: 314572800
+          - labels: 'k8s_sustain:workload_max_pod_memory:bytes{container="proxy",namespace="shop",owner_kind="Deployment",owner_name="web"}'
+            value: 20971520

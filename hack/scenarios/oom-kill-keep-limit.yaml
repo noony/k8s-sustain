@@ -1,0 +1,117 @@
+# scenario: oom-kill-keep-limit
+# expected: the oom-kill workload under a Policy that keeps the memory limit.
+# The OOM floor lifts the memory request to ~116Mi + headroom, above the 96Mi
+# limit the container keeps. The guard raises that limit to the request
+# (docs/adr/0005), so the resize or the replacement pod is admitted instead of
+# being rejected for a request above its limit, and the kills stop.
+# Verification:
+#   kubectl get wlrec -n scenario-oom-kill-keep-limit deployment-stress -o yaml
+#   # → containers.stress.memoryLimit == memoryRequest, and
+#   #   trace.stress.memory.limit ends with a `guard` stage
+#   kubectl get pods -n scenario-oom-kill-keep-limit -o yaml | grep -A4 'resources:'
+#   # → the running pod's memory limit equals its request (> 96Mi)
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: scenario-oom-kill-keep-limit
+  labels:
+    k8s-sustain.io/scenario: oom-kill-keep-limit
+---
+apiVersion: k8s.sustain.io/v1alpha1
+kind: Policy
+metadata:
+  name: scenario-oom-kill-keep-limit
+spec:
+  selector:
+    namespaces: [scenario-oom-kill-keep-limit]
+  rightSizing:
+    update:
+      types:
+        deployment: Ongoing
+    resourcesConfigs:
+      cpu:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 10
+        limits:
+          noLimit: true
+      memory:
+        window: __WINDOW__
+        requests:
+          percentile: 95
+          headroom: 15
+        limits:
+          keepLimit: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen
+  namespace: scenario-oom-kill-keep-limit
+data:
+  # Same quiet/burst loadgen as oom-kill: a burst above the 96Mi limit every
+  # cycle forces an OOMKill until the limit is raised.
+  loadgen.py: |
+    import os, time
+    quiet_mb = int(os.environ.get('LOAD_QUIET_MB', '30'))
+    burst_mb = int(os.environ.get('LOAD_BURST_MB', '80'))
+    quiet_s = float(os.environ.get('LOAD_QUIET_S', '60'))
+    quiet = bytearray(quiet_mb * 1024 * 1024)
+    for i in range(0, len(quiet), 4096):
+        quiet[i] = 1
+    print(f"quiet baseline {quiet_mb}MiB, sleeping {quiet_s}s before burst", flush=True)
+    time.sleep(quiet_s)
+    print(f"burst allocate {burst_mb}MiB", flush=True)
+    burst = bytearray(burst_mb * 1024 * 1024)
+    for i in range(0, len(burst), 4096):
+        burst[i] = 1
+    while True:
+        time.sleep(60)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stress
+  namespace: scenario-oom-kill-keep-limit
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stress
+  template:
+    metadata:
+      labels:
+        app: stress
+      annotations:
+        k8s.sustain.io/policy: scenario-oom-kill-keep-limit
+    spec:
+      restartPolicy: Always
+      containers:
+      - name: stress
+        image: python:3.12-alpine
+        command: ["python3", "-u", "/loadgen/loadgen.py"]
+        env:
+          - name: LOAD_QUIET_MB
+            value: "30"
+          - name: LOAD_BURST_MB
+            # With the quiet baseline and the interpreter, above the 96Mi
+            # limit and below the raised one (96Mi x 1.2 + 15% ≈ 133Mi), so
+            # the kills stop once the guarded limit is applied.
+            value: "80"
+          - name: LOAD_QUIET_S
+            value: "60"
+        volumeMounts:
+          - name: loadgen
+            mountPath: /loadgen
+        resources:
+          requests:
+            cpu: 50m
+            memory: 96Mi
+          limits:
+            memory: 96Mi
+      volumes:
+        - name: loadgen
+          configMap:
+            name: loadgen

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"slices"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -14,7 +14,6 @@ import (
 	"github.com/noony/k8s-sustain/internal/autoscaler"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/recommender"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 type batchSimulateResponse struct {
@@ -29,7 +28,10 @@ type workloadBatchResult struct {
 	Kind       string                          `json:"kind"`
 	Name       string                          `json:"name"`
 	Containers map[string]batchContainerResult `json:"containers"`
-	Error      string                          `json:"error,omitempty"`
+	// Outcome is what the identity's computation decided; only a Computed
+	// identity counts toward the savings.
+	Outcome sustainv1alpha1.RecommendationOutcome `json:"outcome,omitempty"`
+	Error   string                                `json:"error,omitempty"`
 }
 
 type batchContainerResult struct {
@@ -79,7 +81,7 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	results := s.computeRecommendations(ctx, policy, workloads)
 
 	resp := batchSimulateResponse{PolicyName: policyName}
-	var totalCPUCurr, totalCPURec, totalMemCurr, totalMemRec int64
+	var cpu, mem savings
 
 	for i, r := range results {
 		wl := workloads[i]
@@ -96,60 +98,29 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 			continue
 		}
 
-		for _, c := range wl.Containers {
-			bcr := batchContainerResult{}
-			var cpuCurr, memCurr int64
-
-			if rec, ok := r.recs[c.Name]; ok {
-				// Use actual Prometheus usage for "current" instead of k8s resource requests
-				if rec.CPUUsageCores > 0 {
-					cpuCurr = int64(rec.CPUUsageCores * 1000)
-					cpuQty := resource.NewMilliQuantity(cpuCurr, resource.DecimalSI)
-					bcr.CurrentCPU = cpuQty.String()
-				}
-				if rec.MemoryUsageBytes > 0 {
-					memCurr = int64(rec.MemoryUsageBytes) * 1000
-					memQty := resource.NewQuantity(int64(rec.MemoryUsageBytes), resource.BinarySI)
-					bcr.CurrentMemory = memQty.String()
-				}
-
-				bcr.RecommendedCPU = rec.CPURequest
-				bcr.RecommendedMemory = rec.MemoryRequest
-
-				// Only fold a recommendation into the aggregate when its
-				// current usage was counted too — otherwise the totals compare
-				// different container sets and the savings percent is deflated
-				// (or flips negative).
-				if rec.CPURequest != "" {
-					if q, err := resource.ParseQuantity(rec.CPURequest); err == nil {
-						cpuRec := q.MilliValue()
-						if cpuCurr > 0 {
-							totalCPURec += cpuRec
-							bcr.CPUDeltaPercent = deltaPercent(cpuCurr, cpuRec)
-						}
-					}
-				}
-				if rec.MemoryRequest != "" {
-					if q, err := resource.ParseQuantity(rec.MemoryRequest); err == nil {
-						memRec := q.MilliValue()
-						if memCurr > 0 {
-							totalMemRec += memRec
-							bcr.MemDeltaPercent = deltaPercent(memCurr, memRec)
-						}
-					}
-				}
+		wbr.Outcome = r.res.Outcome.Recorded()
+		cpuTally, memTally := &cpu, &mem
+		if r.res.Outcome != recommender.Recommended {
+			// A Too young identity's numbers are shown but would not be
+			// applied, so they save nothing.
+			cpuTally, memTally = &savings{}, &savings{}
+		}
+		for j, c := range slices.Concat(wl.Containers, wl.InitContainers) {
+			rec, ok := r.res.Recs[c.Name]
+			if !ok && j >= len(wl.Containers) {
+				continue
 			}
-
-			totalCPUCurr += cpuCurr
-			totalMemCurr += memCurr
+			var bcr batchContainerResult
+			bcr.CurrentCPU, bcr.RecommendedCPU, bcr.CPUDeltaPercent = cpuTally.add(c.Resources.Requests.Cpu(), rec.CPURequest)
+			bcr.CurrentMemory, bcr.RecommendedMemory, bcr.MemDeltaPercent = memTally.add(c.Resources.Requests.Memory(), rec.MemoryRequest)
 			wbr.Containers[c.Name] = bcr
 		}
 
 		resp.Workloads = append(resp.Workloads, wbr)
 	}
 
-	resp.CPU = buildSavingsAggregate(totalCPUCurr, totalCPURec, "cpu")
-	resp.Memory = buildSavingsAggregate(totalMemCurr, totalMemRec, "memory")
+	resp.CPU = buildSavingsAggregate(cpu.current, cpu.recommended, "cpu")
+	resp.Memory = buildSavingsAggregate(mem.current, mem.recommended, "memory")
 
 	if resp.Workloads == nil {
 		resp.Workloads = []workloadBatchResult{}
@@ -159,36 +130,48 @@ func (s *Server) handlePolicyBatchSimulate(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, resp)
 }
 
-type recResult struct {
-	recs map[string]simulationContainerResult
-	err  error
+// savings totals one resource's requests, in millivalues, as containers run
+// with them and as recommended.
+type savings struct {
+	current, recommended int64
 }
 
-// computeRecommendations fetches every identity's inputs in one batch and
-// runs the shared algorithm on each under the policy's own configuration,
-// exactly as the controller would.
-func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1alpha1.Policy, workloads []*inventory.Identity) []recResult {
-	specs := make([]simulationSpec, len(workloads))
-	containers := make([][]corev1.Container, len(workloads))
-	reqs := make([]recommender.InputsRequest, len(workloads))
-	for i, wl := range workloads {
-		specs[i] = policySpec(policy, wl.Key.Namespace, wl.Key.OwnerKind, wl.Key.OwnerName)
-		containers[i], _ = workload.MergeContainersForRecommendation(wl.Containers, wl.InitContainers, specs[i].excludeInit)
-		reqs[i] = recommender.InputsRequest{Identity: specs[i].identity(), Containers: len(containers[i])}
+// add renders a container's current and recommended request and the change
+// between them. Only a container with both counts toward the totals:
+// otherwise they compare different container sets, and the savings percent
+// is deflated or flips negative.
+func (s *savings) add(current, recommended *resource.Quantity) (cur, rec string, delta float64) {
+	if !current.IsZero() {
+		cur = current.String()
 	}
-	fetched := s.Inputs.FetchInputs(ctx, policy.Spec.RightSizing.ResourcesConfigs, reqs)
+	if recommended != nil {
+		rec = recommended.String()
+	}
+	if cur == "" || rec == "" {
+		return cur, rec, 0
+	}
+	s.current += current.MilliValue()
+	s.recommended += recommended.MilliValue()
+	return cur, rec, deltaPercent(current.MilliValue(), recommended.MilliValue())
+}
 
+type recResult struct {
+	res recommender.Result
+	err error
+}
+
+// computeRecommendations assembles every identity under the policy's own
+// right-sizing spec and computes each, exactly as the controller would.
+func (s *Server) computeRecommendations(ctx context.Context, policy *sustainv1alpha1.Policy, workloads []*inventory.Identity) []recResult {
 	// One snapshot per request: it lists each namespace's autoscalers once.
-	autoSnap := autoscaler.NewNamespacedSnapshot(s.K8sClient)
+	assembled := recommender.Assemble(ctx, s.Inputs, autoscaler.NewNamespacedSnapshot(s.K8sClient), s.now, policy.Spec.RightSizing, workloads)
 	out := make([]recResult, len(workloads))
-	for i, spec := range specs {
-		f := fetched[spec.identity()]
-		if f.Err != nil {
-			out[i].err = f.Err
+	for i, a := range assembled {
+		if a.Err != nil {
+			out[i].err = a.Err
 			continue
 		}
-		res := computeWorkloadRecs(spec, containers[i], workloads[i].Since, s.autoscalerInfo(ctx, autoSnap, spec), f.Inputs)
-		out[i].recs = simulationContainers(res, f.Inputs)
+		out[i].res = recommender.Compute(a.Request)
 	}
 	return out
 }

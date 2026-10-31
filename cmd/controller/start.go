@@ -7,16 +7,15 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/spf13/cobra"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/controller"
 	"github.com/noony/k8s-sustain/internal/logging"
@@ -92,9 +91,9 @@ func runStart(_ *cobra.Command, _ []string) error {
 	// recent: a shorter TTL would sweep kills the floor still needs.
 	oomCache := oomwatch.NewCache(recommender.LiveOOMWindow)
 	oomCache.SizeObserver = controller.SetOOMCacheEntries
-	// Big enough to absorb a rolling-restart burst across a few hundred pods;
-	// small enough that a stuck reconciler does not pile up unbounded events.
-	// Drops on overflow are safe — the next ReconcileInterval tick catches up.
+	// Big enough to absorb a rolling-restart burst across a few hundred pods
+	// before the Policy controller starts draining it: ObserveOOM waits for
+	// room rather than drop a trigger.
 	const oomTriggerBuffer = 256
 	triggerCh := make(chan event.GenericEvent, oomTriggerBuffer)
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
@@ -102,25 +101,6 @@ func runStart(_ *cobra.Command, _ []string) error {
 		return nil
 	})); err != nil {
 		log.Error(err, "Unable to start OOM cache sweeper")
-		return err
-	}
-	oomHandler := oomwatch.EventHandlerFunc(func(ctx context.Context, key oomwatch.Key, rec oomwatch.OOMRecord) {
-		if rec.PolicyName == "" {
-			return
-		}
-		controller.EmitOOMObserved(key.Namespace, key.OwnerKind, key.OwnerName, key.Container)
-		select {
-		case triggerCh <- event.GenericEvent{Object: &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: rec.PolicyName}}}:
-		default:
-		}
-	})
-	watcher := &oomwatch.Watcher{
-		Client:  mgr.GetClient(),
-		Sink:    oomCache,
-		Handler: oomHandler,
-	}
-	if err := watcher.SetupWithManager(mgr); err != nil {
-		log.Error(err, "Unable to create OOM watcher")
 		return err
 	}
 
@@ -131,10 +111,12 @@ func runStart(_ *cobra.Command, _ []string) error {
 		shardMaxSamples = config.DefaultQueryShardMaxSamples
 	}
 
-	if err := (&controller.PolicyReconciler{
+	clk := clock.RealClock{}
+	reconciler := &controller.PolicyReconciler{
 		Client:                    mgr.GetClient(),
 		Scheme:                    mgr.GetScheme(),
-		Inputs:                    recommender.NewPromInputs(promClient, shardMaxSamples),
+		Inputs:                    recommender.WithLiveOOMs(recommender.NewPromInputs(promClient, shardMaxSamples), oomCache, clk.Now),
+		Clock:                     clk,
 		ReconcileInterval:         cfg.ReconcileInterval,
 		InPlaceUpdates:            inPlaceUpdates,
 		ExcludedNamespaces:        cfg.ExcludedNamespaces,
@@ -143,11 +125,22 @@ func runStart(_ *cobra.Command, _ []string) error {
 		PolicyConcurrencyLimit:    cfg.PolicyConcurrencyLimit,
 		RecycleReplacementTimeout: cfg.RecycleReplacementTimeout,
 		RecommendationRetention:   cfg.RecommendationRetention,
-		LiveOOM: controller.LiveOOMConfig{
-			Source:    oomCache,
-			TriggerCh: triggerCh,
-		},
-	}).SetupWithManager(mgr); err != nil {
+		OOMTriggers:               triggerCh,
+	}
+	oomHandler := oomwatch.EventHandlerFunc(func(ctx context.Context, key oomwatch.Key, rec oomwatch.OOMRecord) {
+		reconciler.ObserveOOM(ctx, rec.PolicyName, key.WorkloadIdentity, key.Container)
+	})
+	watcher := &oomwatch.Watcher{
+		Client:             mgr.GetClient(),
+		Sink:               oomCache,
+		Handler:            oomHandler,
+		ExcludedNamespaces: cfg.ExcludedNamespaces,
+	}
+	if err := watcher.SetupWithManager(mgr); err != nil {
+		log.Error(err, "Unable to create OOM watcher")
+		return err
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		log.Error(err, "Unable to create Policy controller")
 		return err
 	}

@@ -9,212 +9,148 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
-	"github.com/noony/k8s-sustain/internal/oomwatch"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
+	"github.com/noony/k8s-sustain/internal/inventory"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
-// outcome is what the recommendation pass decided for one identity.
-type outcome int
-
-const (
-	// outcomeRecommended: the identity has a Recommendation.
-	outcomeRecommended outcome = iota
-	// outcomeTooYoung: the identity is Too young to be recommended.
-	outcomeTooYoung
-	// outcomeNoData: Prometheus answered but had nothing to recommend from.
-	outcomeNoData
-	// outcomeFetchFailed: the identity's inputs could not be read.
-	outcomeFetchFailed
-	// outcomeNotFetched: every live member is in retry backoff, so the
-	// identity was left out of the fetch.
-	outcomeNotFetched
-)
-
-// identityResult is the recommendation pass's verdict on one identity.
-type identityResult struct {
-	item    computeItem
-	outcome outcome
+// recommendation is the recommendation pass's verdict on one identity, the
+// zero value for one the pass left out of the fetch.
+type recommendation struct {
+	// outcome is what the pass records for the identity.
+	outcome sustainv1alpha1.RecommendationOutcome
 	// recs is the identity's Recommendation and traces how it was derived,
-	// both set only for outcomeRecommended.
+	// both set only for a Computed outcome.
 	recs   map[string]workload.ContainerRecommendation
 	traces map[string]sustainv1alpha1.ContainerTrace
 	// inputs is what the identity was computed from, nil unless fetched.
 	inputs *recommender.WorkloadInputs
-	// err is why the inputs are unavailable, set only for outcomeFetchFailed.
+	// autoscalers is what targets each of the identity's members, read for
+	// every identity the pass fetched.
+	autoscalers autoscaler.Group
+	// err is why the inputs are unavailable, set only for a FetchFailed
+	// outcome.
 	err error
-	// apply holds the live members to apply to and backedOff those skipped for
-	// retry backoff. The split is decided once, before the fetch: backoff is
-	// time-based and the fetch can take minutes, so asking again at apply time
-	// would act on members the fetch left out.
-	apply     []*workloadTarget
-	backedOff []*workloadTarget
-	// recordErr is why persist could not store a live identity's decision.
-	// Its members are then not applied this cycle.
-	recordErr error
+	computed
 }
 
-// decision is what the result records in the identity's
-// WorkloadRecommendation; false for an identity that was not fetched, which
-// records nothing.
-func (res *identityResult) decision(departed bool) (wlrcache.Decision, bool) {
-	d := wlrcache.Decision{Departed: departed}
-	switch res.outcome {
-	case outcomeRecommended:
-		d.Outcome, d.Recs, d.Traces = sustainv1alpha1.OutcomeComputed, res.recs, res.traces
-	case outcomeTooYoung:
-		d.Outcome = sustainv1alpha1.OutcomeTooYoung
-	case outcomeNoData:
-		d.Outcome = sustainv1alpha1.OutcomeNoData
-	case outcomeFetchFailed:
-		d.Outcome = sustainv1alpha1.OutcomeFetchFailed
-	default:
-		return d, false
-	}
-	return d, true
+// computed is what computing an identity found besides its Recommendation.
+type computed struct {
+	// autoscaler is the one the Recommendation was shaped against, nil
+	// unless the identity was computed; mismatch is whether its members
+	// disagree on theirs.
+	autoscaler *autoscaler.Info
+	mismatch   bool
+	oomFloors  []oomFloor
 }
 
-// recommend is the recommendation pass: one result per identity, in item
-// order. An identity whose live members are all in retry backoff is not
-// fetched; every other identity is fetched in one batch call and then
-// computed, in parallel, before anything is written or applied.
-func (r *PolicyReconciler) recommend(
-	ctx context.Context,
-	policy *sustainv1alpha1.Policy,
-	items []computeItem,
-	autoSnap *autoscaler.NamespacedSnapshot,
-) []identityResult {
-	excludeInit := policy.Spec.RightSizing.ExcludeInitContainers
-	results := make([]identityResult, len(items))
-	reqs := make([]recommender.InputsRequest, 0, len(items))
-	for i, it := range items {
-		res := &results[i]
-		res.item = it
-		for _, t := range it.Targets {
-			if r.retries.shouldSkip(t.key()) {
-				res.backedOff = append(res.backedOff, t)
-			} else {
-				res.apply = append(res.apply, t)
-			}
-		}
-		if len(res.backedOff) > 0 && len(res.apply) == 0 {
-			res.outcome = outcomeNotFetched
+// oomFloor is a container whose memory request the OOM floor determined.
+type oomFloor struct {
+	container string
+	// reaction is how long after the live kill that drove the floor it
+	// responded; live is false when no live kill did.
+	reaction time.Duration
+	live     bool
+}
+
+// decision is what the verdict records in the identity's
+// WorkloadRecommendation.
+func (rec recommendation) decision(departed bool) wlrcache.Decision {
+	return wlrcache.Decision{Departed: departed, Outcome: rec.outcome, Recs: rec.recs, Traces: rec.traces}
+}
+
+// recommend is the recommendation pass: one verdict per identity on the
+// work-list, in its order. An identity whose live members are all in retry
+// backoff is not fetched; every other identity is assembled in one batch
+// (recommender.Assemble) and then computed, in parallel, before anything is
+// written or applied.
+func (r *PolicyReconciler) recommend(ctx context.Context, policy *sustainv1alpha1.Policy, work []passIdentity) []recommendation {
+	out := make([]recommendation, len(work))
+	var ids []*inventory.Identity
+	var at []int
+	for i, w := range work {
+		if !w.fetched() {
 			continue
 		}
-		reqs = append(reqs, recommender.InputsRequest{
-			Identity:   it.Identity,
-			Containers: len(containersFromObserved(it.Observed, excludeInit)),
-		})
+		ids = append(ids, w.id)
+		at = append(at, i)
 	}
 
-	fetched := r.Inputs.FetchInputs(ctx, policy.Spec.RightSizing.ResourcesConfigs, reqs)
+	// One autoscaler snapshot per pass; it lists each namespace once, lazily.
+	assembled := recommender.Assemble(ctx, r.Inputs, autoscaler.NewNamespacedSnapshot(r.Client), r.now, policy.Spec.RightSizing, ids)
 
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
-	for i := range results {
-		res := &results[i]
-		if res.outcome == outcomeNotFetched {
+	for k, a := range assembled {
+		i := at[k]
+		if a.Err != nil {
+			out[i] = recommendation{outcome: sustainv1alpha1.OutcomeFetchFailed, autoscalers: a.Autoscaler, err: a.Err}
 			continue
 		}
-		f := fetched[res.item.Identity]
-		if f.Err != nil {
-			res.outcome = outcomeFetchFailed
-			res.err = f.Err
-			continue
-		}
-		res.inputs = f.Inputs
 		g.Go(func() error {
-			r.computeIdentity(ctx, policy, res, autoSnap)
+			out[i] = computeIdentity(ctx, ids[k], a)
 			return nil
 		})
 	}
 	_ = g.Wait()
-	return results
+	return out
 }
 
-// computeIdentity computes one fetched identity's outcome. It runs once per
+func (r *PolicyReconciler) now() time.Time {
+	if r.Clock == nil {
+		return time.Now()
+	}
+	return r.Clock.Now()
+}
+
+// computeIdentity computes one assembled identity's verdict. It runs once per
 // identity, never per member: members share one Prometheus series and one
 // WorkloadRecommendation, so per-member computation produced competing
 // answers.
-func (r *PolicyReconciler) computeIdentity(
-	ctx context.Context,
-	policy *sustainv1alpha1.Policy,
-	res *identityResult,
-	autoSnap *autoscaler.NamespacedSnapshot,
-) {
-	it := res.item
-	id := it.Identity
-	rs := policy.Spec.RightSizing
-
-	// A departed identity has nothing for an autoscaler to scale.
-	autoInfo := autoscaler.Info{Kind: autoscaler.KindNone}
-	if len(it.Targets) > 0 {
-		autoInfo = r.groupAutoscalerInfo(ctx, id, it.Targets, autoSnap)
-		EmitAutoscalerPresent(id, string(autoInfo.Kind))
-		EmitAutoscalerTargetsConfigured(id, string(autoInfo.Kind), autoInfo.ConfiguredTargets)
+func computeIdentity(ctx context.Context, id *inventory.Identity, a recommender.Assembled) recommendation {
+	key := id.Key
+	info := a.Autoscaler.Info
+	res := recommendation{
+		inputs:      a.Request.Inputs(),
+		autoscalers: a.Autoscaler,
+		computed:    computed{autoscaler: &info, mismatch: len(a.Autoscaler.Disagreeing) > 0},
 	}
-	var liveOOMs map[string]*oomwatch.OOMRecord
-	if r.LiveOOM.Enabled() {
-		liveOOMs = r.LiveOOM.Source.ByWorkload(id.Namespace, id.OwnerKind, id.OwnerName)
+	if res.mismatch {
+		log.FromContext(ctx).V(1).Info("owner-name group members disagree on autoscaler state; "+
+			"the shared recommendation is shaped by the first member by name that HAS an autoscaler",
+			"namespace", key.Namespace, "ownerKind", key.OwnerKind, "ownerName", key.OwnerName,
+			"governingAutoscaler", info.Kind, "disagreeing", a.Autoscaler.Disagreeing)
 	}
-	out := recommender.Compute(recommender.Request{
-		Containers:   containersFromObserved(it.Observed, rs.ExcludeInitContainers),
-		Resources:    rs.ResourcesConfigs,
-		Coordination: rs.AutoscalerCoordination,
-		AutoInfo:     autoInfo,
-		Inputs:       res.inputs,
-		LiveOOMs:     liveOOMs,
-		Since:        it.Since,
-	})
+	out := recommender.Compute(a.Request)
+	res.outcome = out.Outcome.Recorded()
 	switch out.Outcome {
 	case recommender.TooYoung:
-		res.outcome = outcomeTooYoung
-		recommendationSkipped.WithLabelValues(id.Namespace, id.OwnerKind, id.OwnerName, "workload_too_young").Inc()
 		log.FromContext(ctx).Info("skipping recommendation: workload too young",
-			"kind", id.OwnerKind, "name", id.OwnerName, "namespace", id.Namespace,
-			"age", recommender.AgeForLog(it.Since), "minAge", recommender.MinWorkloadAge)
-	case recommender.NoData:
-		res.outcome = outcomeNoData
-	default:
-		res.outcome = outcomeRecommended
+			"kind", key.OwnerKind, "name", key.OwnerName, "namespace", key.Namespace,
+			"age", recommender.AgeForLog(id.Since, a.Request.Now()), "minAge", recommender.MinWorkloadAge)
+	case recommender.Recommended:
 		res.recs = out.Recs
-		res.traces = out.Traces()
-		emitContainerComputation(id, out.Containers)
+		res.traces = out.Traces
+		res.oomFloors = oomFloorsOf(out.Traces, a.Request.Now())
 	}
+	return res
 }
 
-// emitContainerComputation counts the containers whose memory request the OOM
-// floor determined, and how long after a live kill each responded.
-func emitContainerComputation(id promclient.WorkloadIdentity, containers map[string]recommender.ContainerRecResult) {
-	ns, kind, name := id.Namespace, id.OwnerKind, id.OwnerName
-	for container, res := range containers {
-		if mem := res.Trace.Memory; mem == nil || mem.OOMFloor == nil || !mem.OOMFloor.Determined {
+// oomFloorsOf reads, from the OOM floor stage of each container's trace,
+// the containers whose memory request the floor determined as of now.
+func oomFloorsOf(traces map[string]sustainv1alpha1.ContainerTrace, now time.Time) []oomFloor {
+	var out []oomFloor
+	for container, tr := range traces {
+		floor, ok := recommender.TracedOOMFloor(tr)
+		if !ok || !floor.Determined {
 			continue
 		}
-		oomFloorApplied.WithLabelValues(ns, kind, name, container).Inc()
-		if !res.OOM.LiveAt.IsZero() {
-			EmitOOMReactionLatency(ns, kind, name, time.Since(res.OOM.LiveAt).Seconds())
+		f := oomFloor{container: container}
+		if !floor.LiveKillAt.IsZero() {
+			f.reaction, f.live = now.Sub(floor.LiveKillAt), true
 		}
+		out = append(out, f)
 	}
-}
-
-// passCoverage summarises the pass for the batch metrics: identities fetched,
-// those that came back with at least one CPU or memory sample, and those whose
-// fetch failed. A young workload on a healthy Prometheus resolves to nothing
-// too, so only the failure count tells an outage apart.
-func passCoverage(results []identityResult) (requested, resolved, failed int) {
-	for _, res := range results {
-		switch {
-		case res.outcome == outcomeNotFetched:
-			continue
-		case res.outcome == outcomeFetchFailed:
-			failed++
-		case len(res.inputs.CPUPerPod) > 0 || len(res.inputs.MemPerPod) > 0:
-			resolved++
-		}
-		requested++
-	}
-	return requested, resolved, failed
+	return out
 }
