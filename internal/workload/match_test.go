@@ -265,7 +265,7 @@ func TestClampRecsToTolerance(t *testing.T) {
 
 // containerChange only ever sees a container that exists: planFor skips a
 // recommendation for a container the pod does not run.
-func TestContainerMatches_MissingResourceMapEntries(t *testing.T) {
+func TestContainerChange_MissingResourceMaps(t *testing.T) {
 	// Current has neither requests nor limits set at all (nil maps).
 	current := corev1.ResourceRequirements{}
 	// A rec that wants concrete values must report a mismatch.
