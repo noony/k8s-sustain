@@ -344,6 +344,7 @@ func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 func TestHandleSimulate_AnAbsoluteRangesHistoryEndsAtItsEnd(t *testing.T) {
 	inputs := recommendertest.NewStaticInputs()
 	srv := &Server{
+		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Inputs:     inputs,
