@@ -51,14 +51,12 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 	out := make([]Assembled, len(ids))
 	reqs := make([]InputsRequest, len(ids))
 	for i, id := range ids {
-		containers := ContainersOf(spec, id)
 		out[i].Request = Request{
-			containers:   containers,
 			resources:    resources,
 			coordination: spec.AutoscalerCoordination,
 			since:        id.Since,
 		}
-		reqs[i] = InputsRequest{Identity: id.Key, Containers: len(containers)}
+		reqs[i] = InputsRequest{Identity: id.Key, Containers: len(ContainersOf(spec, id))}
 	}
 
 	at := now()
@@ -75,9 +73,7 @@ func Assemble(ctx context.Context, inputs InputsFetcher, autoscalers Autoscalers
 		out[i].Autoscaler = group
 		req := &out[i].Request
 		req.autoInfo, req.inputs, req.now = group.Info, f.Inputs, at
-		if len(id.Containers) == 0 && len(id.InitContainers) == 0 {
-			req.containers = observedContainers(f.Inputs)
-		}
+		req.containers = sizedContainers(spec, id, f.Inputs)
 		req.fetch = InputsRequest{Identity: id.Key, Containers: len(req.containers)}
 	}
 	return out
@@ -148,6 +144,17 @@ func ContainersOf(spec sustainv1alpha1.RightSizingSpec, id *inventory.Identity) 
 		return id.Containers
 	}
 	return slices.Concat(id.Containers, id.InitContainers)
+}
+
+// sizedContainers is what spec sizes of id, given the inputs in: the
+// containers ContainersOf recommends, or, for an identity with no containers
+// at all (one the inventory has not seen), every container in gives
+// something to recommend from.
+func sizedContainers(spec sustainv1alpha1.RightSizingSpec, id *inventory.Identity, in *WorkloadInputs) []corev1.Container {
+	if len(id.Containers) == 0 && len(id.InitContainers) == 0 {
+		return observedContainers(in)
+	}
+	return ContainersOf(spec, id)
 }
 
 // autoscalerOf reads the autoscaler of each member the identity's containers

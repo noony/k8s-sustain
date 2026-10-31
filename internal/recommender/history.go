@@ -142,34 +142,27 @@ type UsageSeries struct {
 // a Recommendation.
 func UsageRange(ctx context.Context, inputs InputsFetcher, spec sustainv1alpha1.RightSizingSpec, id *inventory.Identity, span Span) (map[string]UsageSeries, error) {
 	resources := WithDefaults(spec.ResourcesConfigs)
-	recommended := ContainersOf(spec, id)
-	req := InputsRequest{Identity: id.Key, Containers: len(recommended)}
+	req := InputsRequest{Identity: id.Key, Containers: len(ContainersOf(spec, id))}
 	h := inputs.FetchHistory(ctx, span, resources, []InputsRequest{req})[id.Key]
 	if h.Err != nil {
 		return nil, h.Err
 	}
-	sizes := func(name string) bool {
-		return len(id.Containers) == 0 && len(id.InitContainers) == 0 ||
-			slices.ContainsFunc(recommended, func(c corev1.Container) bool { return c.Name == name })
-	}
 	out := map[string]UsageSeries{}
 	for _, p := range h.History.points {
-		for _, u := range []usage{cpuUsage, memoryUsage} {
-			if u.resource.config(resources).Requests.KeepRequest {
-				continue
-			}
-			for name, v := range valuesOf[usageValues](p.Inputs, u) {
-				if !sizes(name) {
+		for _, c := range sizedContainers(spec, id, p.Inputs) {
+			for _, u := range []usage{cpuUsage, memoryUsage} {
+				v, ok := valuesOf[usageValues](p.Inputs, u)[c.Name]
+				if !ok || u.resource.config(resources).Requests.KeepRequest {
 					continue
 				}
-				s := out[name]
+				s := out[c.Name]
 				point := promclient.TimeValue{Timestamp: p.At, Value: v}
 				if u.resource == cpuResource {
 					s.CPU = append(s.CPU, point)
 				} else {
 					s.Memory = append(s.Memory, point)
 				}
-				out[name] = s
+				out[c.Name] = s
 			}
 		}
 	}
