@@ -273,6 +273,13 @@ func (b *podBuilder) build() *corev1.Pod { return b.pod }
 
 func reconcile(t *testing.T, c client.Client, sink Sink, handler EventHandler, pod *corev1.Pod, now time.Time) {
 	t.Helper()
+	if res := reconcileResult(t, c, sink, handler, pod, now); res != (ctrl.Result{}) {
+		t.Fatalf("Reconcile result = %#v, want zero", res)
+	}
+}
+
+func reconcileResult(t *testing.T, c client.Client, sink Sink, handler EventHandler, pod *corev1.Pod, now time.Time) ctrl.Result {
+	t.Helper()
 	w := &Watcher{
 		Client:  c,
 		Sink:    sink,
@@ -285,9 +292,7 @@ func reconcile(t *testing.T, c client.Client, sink Sink, handler EventHandler, p
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if res != (ctrl.Result{}) {
-		t.Fatalf("Reconcile result = %#v, want zero", res)
-	}
+	return res
 }
 
 func TestReconcile_OOMKilledRecorded(t *testing.T) {
@@ -532,15 +537,17 @@ func TestReconcile_ReplicaSetToDeployment(t *testing.T) {
 }
 
 // A CronJob run's Job that cannot be read leaves the kill unresolved rather
-// than recorded under Job/<run>, an identity the inventory never holds: the
-// pod's next status event retries, and records it under the CronJob once the
-// Job reads.
-func TestReconcile_UnreadableJobLeavesTheKillUnresolved(t *testing.T) {
+// than recorded under Job/<run>, an identity the inventory never holds. The
+// run's terminated restartPolicy Never pod gets no further status event, so
+// the walk is requeued, later on each failure, and the kill is recorded under
+// the CronJob once the Job reads, and only then.
+func TestReconcile_UnreadableJobIsRetriedWithoutAStatusEvent(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	pod := newPod("cron-xyz").
 		owner("Job", "cron-123").
+		restartPolicy(corev1.RestartPolicyNever).
 		container("main", "64Mi").
-		statusOOM("main", now.Add(-time.Minute), 0).
+		statusCurrentOOM("main", now.Add(-time.Minute)).
 		build()
 	controller := true
 	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
@@ -562,24 +569,68 @@ func TestReconcile_UnreadableJobLeavesTheKillUnresolved(t *testing.T) {
 	sinkCache := NewCache(time.Hour)
 	handler := &stubHandler{}
 
-	reconcile(t, c, sinkCache, handler, pod, now)
-
+	first := reconcileResult(t, c, sinkCache, handler, pod, now)
+	if first.RequeueAfter != time.Minute {
+		t.Fatalf("RequeueAfter = %v after a failed Job read a minute after the kill, want 1m", first.RequeueAfter)
+	}
+	retryAt := now.Add(first.RequeueAfter)
+	second := reconcileResult(t, c, sinkCache, handler, pod, retryAt)
+	if second.RequeueAfter != 2*time.Minute {
+		t.Fatalf("RequeueAfter = %v after a second failed Job read, want 2m", second.RequeueAfter)
+	}
 	if got := sinkCache.Size(); got != 0 {
-		t.Fatalf("cache size = %d after a failed Job read, want 0", got)
+		t.Fatalf("cache size = %d after failed Job reads, want 0", got)
 	}
 	if got := len(handler.snapshot()); got != 0 {
-		t.Fatalf("handler calls = %d after a failed Job read, want 0", got)
+		t.Fatalf("handler calls = %d after failed Job reads, want 0", got)
 	}
 
 	jobReadable = true
-	reconcile(t, c, sinkCache, handler, pod, now.Add(time.Second))
+	retryAt = retryAt.Add(second.RequeueAfter)
+	reconcile(t, c, sinkCache, handler, pod, retryAt)
+	reconcile(t, c, sinkCache, handler, pod, retryAt.Add(time.Second))
 
 	calls := handler.snapshot()
 	if len(calls) != 1 {
-		t.Fatalf("handler calls = %d after the retry, want 1", len(calls))
+		t.Fatalf("handler calls = %d after the retry and a repeat, want 1", len(calls))
 	}
 	if calls[0].Key.OwnerKind != "CronJob" || calls[0].Key.OwnerName != "cron" {
 		t.Errorf("owner = %s/%s, want CronJob/cron", calls[0].Key.OwnerKind, calls[0].Key.OwnerName)
+	}
+}
+
+// An owner chain is retried soon after the kill and no longer once the kill is
+// older than the window, the last retry landing at its end.
+func TestReconcile_UnreadableOwnerRetryIsBoundedByTheWindow(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		killedAgo time.Duration
+		want      time.Duration
+	}{
+		{time.Second, minOwnerRetry},
+		{20 * time.Minute, 10 * time.Minute},
+		{30 * time.Minute, 0},
+	}
+	for _, tc := range cases {
+		pod := newPod("app-xyz").
+			owner("ReplicaSet", "app-rs").
+			container("main", "128Mi").
+			statusOOM("main", now.Add(-tc.killedAgo), 0).
+			build()
+		w := &Watcher{
+			Client: clientWith(newScheme(t), pod).Build(),
+			Sink:   NewCache(time.Hour),
+			Now:    func() time.Time { return now },
+			Window: 30 * time.Minute,
+		}
+
+		res, err := w.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(pod)})
+		if err != nil {
+			t.Fatalf("killed %v ago: Reconcile: %v", tc.killedAgo, err)
+		}
+		if res.RequeueAfter != tc.want {
+			t.Errorf("killed %v ago: RequeueAfter = %v, want %v", tc.killedAgo, res.RequeueAfter, tc.want)
+		}
 	}
 }
 
@@ -1233,7 +1284,7 @@ func TestReconcile_UnresolvedOwner_DoesNotMarkResolved(t *testing.T) {
 
 	sinkCache := NewCache(time.Hour)
 
-	reconcile(t, c, sinkCache, nil, pod, now)
+	reconcileResult(t, c, sinkCache, nil, pod, now)
 	if rsGets != 1 {
 		t.Fatalf("rsGets after first reconcile = %d, want 1", rsGets)
 	}
@@ -1244,7 +1295,7 @@ func TestReconcile_UnresolvedOwner_DoesNotMarkResolved(t *testing.T) {
 	// Same RestartCount and TerminatedAt as the first pass — simulating an
 	// unrelated status write (readiness flip, IP change) that re-triggers
 	// Reconcile without a new OOM kill.
-	reconcile(t, c, sinkCache, nil, pod, now.Add(time.Second))
+	reconcileResult(t, c, sinkCache, nil, pod, now.Add(time.Second))
 
 	if rsGets != 2 {
 		t.Errorf("rsGets after second reconcile = %d, want 2 — an unresolved owner must not be marked resolved, so the owner walk must retry", rsGets)

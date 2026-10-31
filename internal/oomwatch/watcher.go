@@ -1,6 +1,7 @@
 package oomwatch
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,10 @@ const oomKilledReason = "OOMKilled"
 // the "as it happens" SLO.
 const maxConcurrentReconciles = 4
 
+// minOwnerRetry is the soonest an owner chain that could not be read is read
+// again.
+const minOwnerRetry = 5 * time.Second
+
 // Watcher reacts to Pod status changes and, on an OOM kill of a pod a Policy
 // governs (governance.Decide), persists it into the Sink and optionally
 // notifies an EventHandler so the governing Policy's reconciler re-triggers
@@ -45,6 +50,11 @@ type Watcher struct {
 	// Now is injectable so tests get stable ObservedAt values. Defaults to
 	// time.Now when nil.
 	Now func() time.Time
+	// Window is how long after a kill an owner chain that could not be read
+	// is still retried: the recommender's LiveOOMWindow, past which a kill
+	// adds nothing to what the recording rules counted. Zero means the
+	// cache's default TTL.
+	Window time.Duration
 
 	policies governance.PolicyLister
 }
@@ -95,9 +105,9 @@ func admitPodEventPredicate() predicate.Predicate {
 // Reconcile fetches the pod, skips it fast if it shows no OOM kill, otherwise
 // decides which Policy governs it and records its kills.
 //
-// We always return a zero Result: nothing here benefits from requeue, because
-// the Pod informer will fire again on the next status change (e.g. the next
-// restart) and the Sink's dedup keeps replays cheap.
+// Only an owner chain it could not read is requeued: otherwise the Pod
+// informer fires again on the next status change (e.g. the next restart) and
+// the Sink's dedup keeps replays cheap.
 func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("pod", req.NamespacedName)
 
@@ -119,28 +129,29 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 	// already resolved on an earlier pass, the owner/Namespace walk has
 	// nothing new to learn. This cannot reuse Sink.Record's dedup — that key
 	// needs the resolved workload this walk would first have to produce.
-	allResolved := true
+	var unresolved []oomKill
 	for _, k := range kills {
 		if !w.Sink.AlreadyResolved(pod.UID, k.Container, k.RestartCount, k.TerminatedAt) {
-			allResolved = false
-			break
+			unresolved = append(unresolved, k)
 		}
 	}
-	if allResolved {
+	if len(unresolved) == 0 {
 		return ctrl.Result{}, nil
 	}
 
 	reader := &podReader{client: w.Client, policies: &w.policies, excluded: w.ExcludedNamespaces}
 	decision, err := governance.Decide(ctx, governance.Pod(pod), reader)
 	if errors.Is(err, errOwnerUnresolved) {
-		// Nothing is recorded and nothing marked resolved, so the pod's next
-		// status event retries the walk. The pod's immediate controller is no
-		// substitute: a CronJob's Job or a Deployment's ReplicaSet is an
-		// identity the inventory never holds, so the kill would reach no
-		// recommendation and give k8s_sustain_oom_observed_total a series per
-		// run.
-		logger.V(1).Info("owner resolution failed; leaving the OOM kill unresolved", "err", err)
-		return ctrl.Result{}, nil
+		// Nothing is recorded and nothing marked resolved, so the walk is
+		// retried, on the requeue or on the pod's next status event, whichever
+		// comes first: a terminated Never pod may get no further event. The
+		// pod's immediate controller is no substitute: a CronJob's Job or a
+		// Deployment's ReplicaSet is an identity the inventory never holds,
+		// so the kill would reach no recommendation and give
+		// k8s_sustain_oom_observed_total a series per run.
+		retry := w.ownerRetryAfter(unresolved)
+		logger.V(1).Info("owner resolution failed; leaving the OOM kill unresolved", "err", err, "retryAfter", retry)
+		return ctrl.Result{RequeueAfter: retry}, nil
 	}
 	if err != nil {
 		// A failure reading the Policies or an annotation level is returned
@@ -204,6 +215,25 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// ownerRetryAfter is when to read again the owner chain of a pod showing
+// kills: after as long as the newest of them has waited so far, so retries
+// back off geometrically without counting attempts, and never once it is
+// older than the window.
+func (w *Watcher) ownerRetryAfter(kills []oomKill) time.Duration {
+	var newest time.Time
+	for _, k := range kills {
+		if k.TerminatedAt.After(newest) {
+			newest = k.TerminatedAt
+		}
+	}
+	window := cmp.Or(w.Window, defaultTTL)
+	age := w.now().Sub(newest)
+	if age >= window {
+		return 0
+	}
+	return min(max(age, minOwnerRetry), window-age)
 }
 
 // podReader is the governance.Reader of one Reconcile, reading straight
