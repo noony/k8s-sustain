@@ -18,6 +18,7 @@ import (
 
 	"github.com/noony/k8s-sustain/cmd/controller"
 	"github.com/noony/k8s-sustain/internal/config"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
 	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
 	"github.com/noony/k8s-sustain/internal/logging"
@@ -96,9 +97,9 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 	}
 
 	handler := &whhandler.Handler{
-		Client:             k8sClient,
-		RecommendOnly:      cfg.RecommendOnly,
-		ExcludedNamespaces: cfg.ExcludedNamespaces,
+		Client:        k8sClient,
+		RecommendOnly: cfg.RecommendOnly,
+		Policies:      governance.NewPolicyLister(cfg.ExcludedNamespaces),
 	}
 
 	registry := prometheus.NewRegistry()

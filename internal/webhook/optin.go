@@ -20,7 +20,7 @@ import (
 type admissionReader struct{ h *Handler }
 
 func (r admissionReader) Policies(ctx context.Context) (*governance.Policies, error) {
-	return r.h.policies.List(ctx, r.h.Client, r.h.ExcludedNamespaces)
+	return r.h.Policies.List(ctx, r.h.Client)
 }
 
 func (r admissionReader) PodOwner(ctx context.Context, pod *corev1.Pod) (string, string, error) {

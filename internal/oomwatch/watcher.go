@@ -44,9 +44,10 @@ type Watcher struct {
 	Client  client.Client
 	Sink    Sink
 	Handler EventHandler // optional; may be nil
-	// ExcludedNamespaces mirrors the controller's --excluded-namespaces: no
-	// Policy governs a pod there.
-	ExcludedNamespaces []string
+	// Policies lists the Policies every kill is decided with and holds the
+	// namespaces no Policy governs. Keep one for the process: it spares a
+	// kill recompiling the Policies it lists.
+	Policies *governance.PolicyLister
 	// Now is injectable so tests get stable ObservedAt values. Defaults to
 	// time.Now when nil.
 	Now func() time.Time
@@ -55,8 +56,6 @@ type Watcher struct {
 	// adds nothing to what the recording rules counted. Zero means the
 	// cache's default TTL.
 	Window time.Duration
-
-	policies governance.PolicyLister
 }
 
 // SetupWithManager registers the Watcher as a Pod controller. The predicate is
@@ -139,7 +138,7 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 		return ctrl.Result{}, nil
 	}
 
-	reader := &podReader{client: w.Client, policies: &w.policies, excluded: w.ExcludedNamespaces}
+	reader := &podReader{client: w.Client, policies: w.Policies}
 	decision, err := governance.Decide(ctx, governance.Pod(pod), reader)
 	if errors.Is(err, errOwnerUnresolved) {
 		// Nothing is recorded and nothing marked resolved, so the walk is
@@ -241,7 +240,6 @@ func (w *Watcher) ownerRetryAfter(kills []oomKill) time.Duration {
 type podReader struct {
 	client   client.Client
 	policies *governance.PolicyLister
-	excluded []string
 }
 
 // errOwnerUnresolved wraps a failed read of a pod's controller chain (its
@@ -249,7 +247,7 @@ type podReader struct {
 var errOwnerUnresolved = errors.New("pod owner unresolved")
 
 func (r *podReader) Policies(ctx context.Context) (*governance.Policies, error) {
-	return r.policies.List(ctx, r.client, r.excluded)
+	return r.policies.List(ctx, r.client)
 }
 
 func (r *podReader) PodOwner(ctx context.Context, pod *corev1.Pod) (string, string, error) {

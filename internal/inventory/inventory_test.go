@@ -332,7 +332,7 @@ func TestMembersAreGovernedThroughTheirPodTemplate(t *testing.T) {
 	workloadLevel.Annotations = optIn("p")
 	team := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team", Annotations: optIn("p")}}
 
-	snap := take(t, inventory.Options{Basis: inventory.Basis{ExcludedNamespaces: []string{"kube-system"}}},
+	snap := take(t, inventory.Options{Basis: inventory.Basis{Policies: governance.NewPolicyLister([]string{"kube-system"})}},
 		everyKind("p"), selective, team, templateLabelled, objectLabelled, workloadLevel,
 		deployment("team", "namespace-level", base, nil),
 		deployment("kube-system", "excluded", base, optIn("p")),
@@ -405,7 +405,7 @@ func TestTakeDecidesWithTheListerItIsHanded(t *testing.T) {
 		t.Errorf("with the lister that compiled this version: policy = %q, want p", got)
 	}
 	if got := policyOfWeb(inventory.Options{}, "api"); got != "" {
-		t.Errorf("with a lister of its own: policy = %q, want none", got)
+		t.Errorf("without a lister: policy = %q, want none", got)
 	}
 }
 
@@ -427,7 +427,7 @@ func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
 	).Build()
 
 	takenAt := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
-	b := inventory.Basis{ExcludedNamespaces: []string{"excluded"}, Clock: clocktesting.NewFakePassiveClock(takenAt)}
+	b := inventory.Basis{Policies: governance.NewPolicyLister([]string{"excluded"}), Clock: clocktesting.NewFakePassiveClock(takenAt)}
 	snap, err := inventory.TakeForPolicy(context.Background(), c, p, b)
 	if err != nil {
 		t.Fatalf("TakeForPolicy: %v", err)

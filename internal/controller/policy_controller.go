@@ -53,11 +53,13 @@ import (
 // PolicyReconciler reconciles a Policy object.
 type PolicyReconciler struct {
 	client.Client
-	Scheme             *runtime.Scheme
-	ReconcileInterval  time.Duration
-	InPlaceUpdates     bool
-	ExcludedNamespaces []string
-	RecommendOnly      bool
+	Scheme            *runtime.Scheme
+	ReconcileInterval time.Duration
+	InPlaceUpdates    bool
+	RecommendOnly     bool
+	// Policies is shared by every pass, so a Policy's selector is compiled
+	// once per version of it. It holds the namespaces no Policy governs.
+	Policies *governance.PolicyLister
 	// WorkloadConcurrencyLimit caps how many workloads one Reconcile processes
 	// in parallel.
 	WorkloadConcurrencyLimit int
@@ -93,9 +95,6 @@ type PolicyReconciler struct {
 	recorder events.EventRecorder
 	patcher  *workload.Patcher
 	ledger   *ledger
-	// policies is shared by every pass, so a Policy's selector is compiled
-	// once per version of it.
-	policies governance.PolicyLister
 
 	health healthTracker
 	series publisher
@@ -222,11 +221,7 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	start := time.Now()
 	logger.Info("starting reconcile cycle")
 
-	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, inventory.Basis{
-		ExcludedNamespaces: r.ExcludedNamespaces,
-		Policies:           &r.policies,
-		Clock:              r.Clock,
-	})
+	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, inventory.Basis{Policies: r.Policies, Clock: r.Clock})
 	if listErr != nil {
 		logger.Error(listErr, "failed to list workloads")
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)

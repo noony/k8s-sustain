@@ -45,7 +45,7 @@ func (s *Server) identities(ctx context.Context, opts inventory.Options) (*inven
 }
 
 func (s *Server) basis() inventory.Basis {
-	return inventory.Basis{ExcludedNamespaces: s.ExcludedNamespaces, Policies: &s.policies, Clock: s.Clock}
+	return inventory.Basis{Policies: s.Policies, Clock: s.Clock}
 }
 
 // identity reads one identity, narrowing the snapshot to its namespace and

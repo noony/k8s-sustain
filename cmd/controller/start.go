@@ -18,6 +18,7 @@ import (
 
 	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/controller"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/logging"
 	"github.com/noony/k8s-sustain/internal/oomwatch"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -119,7 +120,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		Clock:                     clk,
 		ReconcileInterval:         cfg.ReconcileInterval,
 		InPlaceUpdates:            inPlaceUpdates,
-		ExcludedNamespaces:        cfg.ExcludedNamespaces,
+		Policies:                  governance.NewPolicyLister(cfg.ExcludedNamespaces),
 		RecommendOnly:             cfg.RecommendOnly,
 		WorkloadConcurrencyLimit:  cfg.WorkloadConcurrencyLimit,
 		PolicyConcurrencyLimit:    cfg.PolicyConcurrencyLimit,
@@ -131,11 +132,11 @@ func runStart(_ *cobra.Command, _ []string) error {
 		reconciler.ObserveOOM(ctx, rec.PolicyName, key.WorkloadIdentity, key.Container)
 	})
 	watcher := &oomwatch.Watcher{
-		Client:             mgr.GetClient(),
-		Sink:               oomCache,
-		Handler:            oomHandler,
-		ExcludedNamespaces: cfg.ExcludedNamespaces,
-		Window:             recommender.LiveOOMWindow,
+		Client:   mgr.GetClient(),
+		Sink:     oomCache,
+		Handler:  oomHandler,
+		Policies: governance.NewPolicyLister(cfg.ExcludedNamespaces),
+		Window:   recommender.LiveOOMWindow,
 	}
 	if err := watcher.SetupWithManager(mgr); err != nil {
 		log.Error(err, "Unable to create OOM watcher")

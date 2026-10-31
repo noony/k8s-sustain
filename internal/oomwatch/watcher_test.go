@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -674,7 +675,7 @@ func TestReconcile_ExcludedNamespaceRecordsNothing(t *testing.T) {
 		build()
 	sink := &stubSink{}
 
-	w := &Watcher{Client: clientWith(newScheme(t), pod).Build(), Sink: sink, ExcludedNamespaces: []string{"default"}, Now: time.Now}
+	w := &Watcher{Client: clientWith(newScheme(t), pod).Build(), Sink: sink, Policies: governance.NewPolicyLister([]string{"default"}), Now: time.Now}
 	if _, err := w.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name},
 	}); err != nil {

@@ -30,25 +30,38 @@ type compiled struct {
 
 // PolicyLister lists every Policy for a reader, compiling a Policy's label
 // selector once per stored version of it, so a reader that lists on every
-// admission or event recompiles only what changed. The zero value is ready
-// and safe for concurrent use.
+// admission or event recompiles only what changed. It holds the namespaces no
+// Policy may govern, so every reader of a process excludes the same ones. The
+// zero value excludes none; both are safe for concurrent use. A nil
+// PolicyLister excludes none either and compiles every Policy on every List.
 type PolicyLister struct {
+	excluded []string
+
 	mu   sync.Mutex
 	last map[string]*compiled
+}
+
+// NewPolicyLister returns a PolicyLister under which no Policy governs a
+// namespace of excludedNamespaces, whatever it opts into.
+func NewPolicyLister(excludedNamespaces []string) *PolicyLister {
+	return &PolicyLister{excluded: slices.Clone(excludedNamespaces)}
 }
 
 // List lists every Policy through r. It lists without deep copies, since the
 // webhook lists on every admission: from an informer cache, a Policy it
 // returns shares its fields with the cache's own object, and with every other
 // call that saw the same version of it. Never modify it.
-func (l *PolicyLister) List(ctx context.Context, r client.Reader, excludedNamespaces []string) (*Policies, error) {
+func (l *PolicyLister) List(ctx context.Context, r client.Reader) (*Policies, error) {
 	var list sustainv1alpha1.PolicyList
 	if err := r.List(ctx, &list, client.UnsafeDisableDeepCopy); err != nil {
 		return nil, fmt.Errorf("listing policies: %w", err)
 	}
+	if l == nil {
+		return index(list.Items, nil, nil), nil
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	ps := index(list.Items, excludedNamespaces, l.last)
+	ps := index(list.Items, l.excluded, l.last)
 	l.last = ps.byName
 	return ps, nil
 }
