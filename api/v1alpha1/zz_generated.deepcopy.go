@@ -615,6 +615,7 @@ func (in *WorkloadRecommendationSpec) DeepCopy() *WorkloadRecommendationSpec {
 func (in *WorkloadRecommendationStatus) DeepCopyInto(out *WorkloadRecommendationStatus) {
 	*out = *in
 	in.ObservedAt.DeepCopyInto(&out.ObservedAt)
+	in.ServableUntil.DeepCopyInto(&out.ServableUntil)
 	if in.Containers != nil {
 		in, out := &in.Containers, &out.Containers
 		*out = make(map[string]ContainerRecommendation, len(*in))
