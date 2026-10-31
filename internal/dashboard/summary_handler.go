@@ -73,7 +73,6 @@ type summaryResponseV2 struct {
 // may be when fresh queries partially fail; 10x the 60s cache TTL.
 const maxSummaryLastGoodAge = 10 * time.Minute
 
-// summaryCacheKey is the single cache key for /api/summary.
 const summaryCacheKey = "summary"
 
 // summaryComputeTimeout bounds one shared recompute; it matches
@@ -99,34 +98,34 @@ func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	resp, err := s.summary.Get(r.Context(), summaryCacheKey)
-	var partial *partialSummary
-	var panicked *cache.PanicError
-	switch {
-	case err == nil:
+	if err == nil {
 		writeJSON(w, http.StatusOK, resp)
-	case errors.As(err, &partial):
-		// Prefer a recent last-good snapshot over the fresh-but-partial result.
-		s.Logger.V(1).Info("summary: reads failed", "count", partial.failedReads)
-		if lastGood, ok := s.summarySnapshot.LastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
-			writeJSON(w, http.StatusOK, lastGood)
-			return
-		}
-		writeJSON(w, http.StatusOK, partial.resp)
-	case errors.As(err, &panicked):
-		// Re-panic on the request goroutine so the recovery middleware handles
-		// it, and drop max-age first.
+		return
+	}
+	var panicked *cache.PanicError
+	if errors.As(err, &panicked) {
+		// Only the request goroutine's recovery middleware answers a panic, and
+		// its 500 must not carry the payload's max-age.
 		w.Header().Del("Cache-Control")
 		panic(fmt.Errorf("panic recomputing summary: %v\n%s", panicked.Value, panicked.Stack))
-	default:
-		// The request gave up before the recompute finished.
-		if lastGood, ok := s.summarySnapshot.LastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
-			writeJSON(w, http.StatusOK, lastGood)
-			return
-		}
-		// Drop the payload's max-age so the 503 is not cached for a minute.
-		w.Header().Del("Cache-Control")
-		writeError(w, http.StatusServiceUnavailable, "summary recomputation did not complete before the request was cancelled")
 	}
+	var partial *partialSummary
+	if errors.As(err, &partial) {
+		s.Logger.V(1).Info("summary: reads failed", "count", partial.failedReads)
+	}
+	// A partial result shows its failed reads as zeros, so a recent complete
+	// snapshot is the truer answer.
+	if lastGood, ok := s.summarySnapshot.LastGoodWithin(summaryCacheKey, maxSummaryLastGoodAge); ok {
+		writeJSON(w, http.StatusOK, lastGood)
+		return
+	}
+	if partial != nil {
+		writeJSON(w, http.StatusOK, partial.resp)
+		return
+	}
+	// Drop the payload's max-age so the 503 is not cached for a minute.
+	w.Header().Del("Cache-Control")
+	writeError(w, http.StatusServiceUnavailable, "summary recomputation did not complete before the request was cancelled")
 }
 
 func (s *Server) fetchSummary(ctx context.Context, _ string) (summaryResponseV2, error) {
