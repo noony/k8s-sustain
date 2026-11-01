@@ -10,6 +10,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/inventory"
+	"github.com/noony/k8s-sustain/internal/ledger"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
@@ -29,9 +30,9 @@ type identityReport struct {
 	outcome  sustainv1alpha1.RecommendationOutcome
 	resolved bool
 	// failed is whether a departed identity failed: its inputs could not be
-	// read or its decision stored. settle counts it, and wlr_refresh_total
-	// counts its error, from this one field. A live identity fails through
-	// its members.
+	// read or its decision stored. passReport.failed counts it, and
+	// wlr_refresh_total counts its error, from this one field. A live
+	// identity fails through its members.
 	failed bool
 	// members is one result per live member, backed-off ones included.
 	members []applyResult
@@ -119,7 +120,7 @@ func (r *PolicyReconciler) workList(policyName string, governed []*inventory.Ide
 		w := passIdentity{id: id}
 		if !id.Departed() {
 			for _, t := range targetsOf(id, policyName) {
-				if r.ledger.mayRun(t.key()) {
+				if r.ledger.MayRun(t.key()) {
 					w.run = append(w.run, t)
 				} else {
 					w.backedOff = append(w.backedOff, t)
@@ -196,8 +197,8 @@ func (r *PolicyReconciler) record(ctx context.Context, work []passIdentity, clai
 // keep their state.
 func leftAlone(results []applyResult) []applyResult {
 	for i, res := range results {
-		if res.kind == applyFailed {
-			results[i] = applyResult{member: res.member, kind: applySkipped}
+		if res.Kind == ledger.Failed {
+			results[i] = applied(res.member, ledger.Result{Kind: ledger.Skipped})
 		}
 	}
 	return results
@@ -232,26 +233,41 @@ func (p passReport) processed() int {
 	n := 0
 	for _, rep := range p {
 		if rep.departed && rep.fetched ||
-			slices.ContainsFunc(rep.members, func(res applyResult) bool { return res.kind != applySkipped }) {
+			slices.ContainsFunc(rep.members, func(res applyResult) bool { return res.Kind != ledger.Skipped }) {
 			n++
 		}
 	}
 	return n
 }
 
-func (p passReport) liveMembers() map[promclient.WorkloadIdentity][]string {
-	out := make(map[promclient.WorkloadIdentity][]string, len(p))
+// results is what the ledger settles: the member results of every live
+// identity. A departed identity has no members and never reaches it.
+func (p passReport) results() map[promclient.WorkloadIdentity][]ledger.Result {
+	out := make(map[promclient.WorkloadIdentity][]ledger.Result, len(p))
 	for _, rep := range p {
 		if rep.departed {
 			continue
 		}
-		keys := make([]string, len(rep.members))
+		results := make([]ledger.Result, len(rep.members))
 		for i, res := range rep.members {
-			keys[i] = res.member.key()
+			results[i] = res.Result
 		}
-		out[rep.key] = keys
+		out[rep.key] = results
 	}
 	return out
+}
+
+// failed counts the identities that failed this pass: a departed one whose
+// decision could not be made or stored, or a live one with a member the
+// ledger counts as failed.
+func (p passReport) failed(v ledger.Verdict) int {
+	n := 0
+	for _, rep := range p {
+		if rep.failed || v.Identities[rep.key].Failed() {
+			n++
+		}
+	}
+	return n
 }
 
 // coverage counts the fetch failures apart from what resolved: a young
@@ -272,15 +288,14 @@ func (p passReport) coverage() (requested, resolved, failed int) {
 	return requested, resolved, failed
 }
 
-func (p passReport) publication(health healthReport, attempts map[promclient.WorkloadIdentity]int) publication {
-	pub := publication{blocked: health.blocked(), identities: make([]identitySeries, len(p))}
+func (p passReport) publication(v ledger.Verdict) publication {
+	pub := publication{blocked: v.Blocked(), identities: make([]identitySeries, len(p))}
 	pub.requested, pub.resolved, pub.fetchFailed = p.coverage()
 	for i, rep := range p {
 		s := identitySeries{
 			key:      rep.key,
-			health:   health[rep.key],
+			health:   v.Identities[rep.key],
 			computed: rep.computed,
-			attempts: attempts[rep.key],
 			tooYoung: rep.outcome == sustainv1alpha1.OutcomeTooYoung,
 		}
 		if !rep.departed {

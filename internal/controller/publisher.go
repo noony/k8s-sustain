@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/ledger"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
@@ -27,14 +28,14 @@ type publication struct {
 }
 
 type identitySeries struct {
-	key    promclient.WorkloadIdentity
-	health healthState
+	key promclient.WorkloadIdentity
+	// health is the ledger's, its attempts how many of its members failed
+	// this pass.
+	health ledger.Health
 	// computed is what computing the identity found. Its autoscaler is nil
 	// when the pass did not compute it, which leaves the one last published
 	// in place.
 	computed
-	// attempts is how many of its members failed this pass.
-	attempts int
 	tooYoung bool
 	members  []memberSeries
 }
@@ -138,12 +139,12 @@ func (p *publisher) publish(policy string, pub publication) {
 func (id *published) publishIdentity(s identitySeries) {
 	ns, kind, name := s.key.Namespace, s.key.OwnerKind, s.key.OwnerName
 	gauges := seriesSet{}
-	if s.health.measured {
-		gauges.set(workloadPods, float64(s.health.pods.Total), ns, kind, name)
-		gauges.set(workloadStalePods, float64(s.health.pods.Stale), ns, kind, name)
+	if s.health.Measured {
+		gauges.set(workloadPods, float64(s.health.Pods.Total), ns, kind, name)
+		gauges.set(workloadStalePods, float64(s.health.Pods.Stale), ns, kind, name)
 	}
-	if s.health.blockedOn != "" {
-		gauges.set(workloadRetryState, 1, ns, kind, name, string(s.health.blockedOn))
+	if s.health.Blocked() {
+		gauges.set(workloadRetryState, 1, ns, kind, name, string(s.health.BlockedOn))
 	}
 	switch a := s.autoscaler; {
 	case a == nil:
@@ -160,8 +161,8 @@ func (id *published) publishIdentity(s identitySeries) {
 	}
 	gauges.replace(&id.gauges)
 
-	if s.attempts > 0 {
-		id.counters.add(workloadRetryAttempts, float64(s.attempts), ns, kind, name)
+	if s.health.Failed() {
+		id.counters.add(workloadRetryAttempts, float64(s.health.Attempts), ns, kind, name)
 	}
 	for _, m := range s.members {
 		for res, n := range m.suppressed {

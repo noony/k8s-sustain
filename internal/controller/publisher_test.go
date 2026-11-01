@@ -21,10 +21,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/ledger"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // seriesMatching returns every series of the named family whose labels
@@ -628,7 +630,7 @@ func TestSeries_FollowTheLastComputation(t *testing.T) {
 	inputs := usageFor(ns, "Deployment", "web")
 	r := reconcilerWithInputs(t, inputs, true, ongoingDeployments("p"), establishedDeployment(ns, "web", "p"), hpa)
 	clk := clocktesting.NewFakePassiveClock(time.Now())
-	r.ledger = newLedger(clk)
+	r.ledger = ledger.New(clk)
 	autoscalerSeries := func() int {
 		return len(seriesForWorkload(t, "k8s_sustain_autoscaler_present", ns, "Deployment", "web")) +
 			len(seriesForWorkload(t, "k8s_sustain_autoscaler_target_configured", ns, "Deployment", "web"))
@@ -652,7 +654,7 @@ func TestSeries_FollowTheLastComputation(t *testing.T) {
 
 	remove(t, r, hpa)
 	inputs.Set(web, appUsage()...)
-	clk.SetTime(clk.Now().Add(maxRetryDelay))
+	clk.SetTime(clk.Now().Add(ledger.MaxRetryDelay))
 	reconcileOnce(t, r, "p")
 	if got := autoscalerSeries(); got != 0 {
 		t.Errorf("an identity computed without an autoscaler keeps %d autoscaler series", got)
@@ -679,5 +681,172 @@ func TestSeries_DepartedIdentityIsComputedWithoutItsAutoscaler(t *testing.T) {
 
 	if got := autoscalerSeries(); got != 0 {
 		t.Errorf("a departed identity keeps %d autoscaler series", got)
+	}
+}
+
+// identityGauges describe an identity's live members, so a departed
+// identity has none.
+var identityGauges = []string{
+	"k8s_sustain_workload_pods",
+	"k8s_sustain_workload_stale_pods",
+	"k8s_sustain_workload_retry_state",
+	"k8s_sustain_autoscaler_present",
+	"k8s_sustain_autoscaler_target_configured",
+}
+
+var identityHealthMetrics = append([]string{
+	"k8s_sustain_workload_retry_attempts",
+	"k8s_sustain_recycle_suppressed_total",
+}, identityGauges...)
+
+// Two owner-name members of one Deployment identity and a bare-pod group must
+// each surface as ONE series per health metric under the identity's labels,
+// aggregated over the members, never under a member's own name; once the
+// identities depart so do their gauges.
+func TestSeries_IdentityHealthAggregatesMembers(t *testing.T) {
+	const ns, policyName = "health-agg", "health-agg"
+	api := promclient.WorkloadIdentity{Namespace: ns, OwnerKind: "Deployment", OwnerName: "api"}
+	etl := promclient.WorkloadIdentity{Namespace: ns, OwnerKind: "Pod", OwnerName: "etl"}
+
+	onCreate := sustainv1alpha1.UpdateModeOnCreate
+	policy := policyManaging(policyName, sustainv1alpha1.UpdateTypes{Deployment: &onCreate, Pod: &onCreate})
+
+	blue := groupedDeployment(ns, "api-blue", "api", policyName)
+	green := groupedDeployment(ns, "api-green", "api", policyName)
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "api-green"},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "api-green"},
+			MaxReplicas:    4,
+			Metrics: []autoscalingv2.MetricSpec{{
+				Type: autoscalingv2.ResourceMetricSourceType,
+				Resource: &autoscalingv2.ResourceMetricSource{
+					Name:   corev1.ResourceCPU,
+					Target: autoscalingv2.MetricTarget{Type: autoscalingv2.UtilizationMetricType, AverageUtilization: ptr.To[int32](70)},
+				},
+			}},
+		},
+	}
+	etlAnnotations := map[string]string{
+		sustainv1alpha1.PolicyAnnotation:    policyName,
+		sustainv1alpha1.OwnerNameAnnotation: "etl",
+	}
+	inputs := recommendertest.NewStaticInputs().Set(api, appUsage()...).Set(etl, appUsage()...)
+	r := reconcilerWithInputs(t, inputs, false,
+		policy, blue, green, hpa,
+		deploymentPod(ns, "api-blue-1", "api-blue"),
+		deploymentPod(ns, "api-blue-2", "api-blue"),
+		deploymentPod(ns, "api-green-1", "api-green"),
+		identityPod(ns, "etl-run-1", nil, etlAnnotations),
+		identityPod(ns, "etl-run-2", nil, etlAnnotations))
+
+	reconcileOnce(t, r, policyName)
+
+	if got := gaugeOf(t, "k8s_sustain_workload_pods", ns, "Deployment", "api"); got != 3 {
+		t.Errorf("identity pods = %v, want 3 (2 blue + 1 green)", got)
+	}
+	if got := gaugeOf(t, "k8s_sustain_workload_stale_pods", ns, "Deployment", "api"); got != 3 {
+		t.Errorf("identity stale pods = %v, want 3", got)
+	}
+	if got := gaugeOf(t, "k8s_sustain_workload_pods", ns, "Pod", "etl"); got != 2 {
+		t.Errorf("bare-pod identity pods = %v, want 2", got)
+	}
+	if got := gaugeOf(t, "k8s_sustain_workload_stale_pods", ns, "Pod", "etl"); got != 2 {
+		t.Errorf("bare-pod identity stale pods = %v, want 2", got)
+	}
+	present := seriesForWorkload(t, "k8s_sustain_autoscaler_present", ns, "Deployment", "api")
+	if len(present) != 1 || labelOf(present[0], "kind") != "HPA" {
+		t.Errorf("autoscaler_present: want one HPA series for the identity, got %v", present)
+	}
+	targets := seriesForWorkload(t, "k8s_sustain_autoscaler_target_configured", ns, "Deployment", "api")
+	if len(targets) != 1 || targets[0].GetGauge().GetValue() != 70 {
+		t.Errorf("autoscaler_target_configured: want one series at 70, got %v", targets)
+	}
+	if got := blockedOn(t, ns, "Deployment", "api"); got != "" {
+		t.Errorf("a healthy identity must have no retry_state series, got one Blocked on %q", got)
+	}
+	if got := policyGauge(t, "k8s_sustain_policy_workload_count", policyName); got != 2 {
+		t.Errorf("policy_workload_count = %v, want 2 identities", got)
+	}
+	if got := policyGauge(t, "k8s_sustain_policy_blocked_count", policyName); got != 0 {
+		t.Errorf("policy_blocked_count = %v, want 0", got)
+	}
+
+	inputs.Fail(api, errors.New("prometheus down"))
+	reconcileOnce(t, r, policyName)
+
+	if got := blockedOn(t, ns, "Deployment", "api"); got != string(workload.StepPrometheus) {
+		t.Errorf("retry_state: want one series for the identity with two blocked members, Blocked on %s; got %q", workload.StepPrometheus, got)
+	}
+	if got := gaugeOf(t, "k8s_sustain_workload_pods", ns, "Deployment", "api"); got != 3 {
+		t.Errorf("failed members must keep their last counts: pods = %v, want 3", got)
+	}
+	if got := policyGauge(t, "k8s_sustain_policy_blocked_count", policyName); got != 1 {
+		t.Errorf("policy_blocked_count = %v, want 1 identity (not 2 members)", got)
+	}
+	for _, member := range []string{"api-blue", "api-green"} {
+		for _, metric := range identityHealthMetrics {
+			if got := seriesForWorkload(t, metric, ns, "Deployment", member); len(got) != 0 {
+				t.Errorf("%s carries member %s: health series must be keyed by the identity", metric, member)
+			}
+		}
+	}
+
+	ctx := context.Background()
+	for _, o := range []client.Object{blue, green} {
+		if err := r.Delete(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"etl-run-1", "etl-run-2"} {
+		if err := r.Delete(ctx, &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A departed identity's computation drops its autoscaler gauges; a failed
+	// fetch would keep them.
+	inputs.Set(api, appUsage()...)
+
+	reconcileOnce(t, r, policyName)
+
+	for _, id := range []promclient.WorkloadIdentity{api, etl} {
+		for _, metric := range identityGauges {
+			if got := seriesForWorkload(t, metric, id.Namespace, id.OwnerKind, id.OwnerName); len(got) != 0 {
+				t.Errorf("%s still has %d series for departed identity %s/%s", metric, len(got), id.OwnerKind, id.OwnerName)
+			}
+		}
+	}
+	if got := policyGauge(t, "k8s_sustain_policy_workload_count", policyName); got != 0 {
+		t.Errorf("policy_workload_count = %v, want 0 once every identity departed", got)
+	}
+}
+
+// A decrease the downsize threshold withholds is counted under the identity,
+// never under the owner-name member whose pod it was withheld from.
+func TestSeries_RecycleSuppressedCountsUnderIdentity(t *testing.T) {
+	const ns = "suppressed"
+	policy := ongoingDeployments("p")
+	policy.Spec.RightSizing.ResourcesConfigs.CPU.DownsizeThreshold = &sustainv1alpha1.DownsizeThreshold{Percent: ptr.To[int32](100)}
+	r := reconcilerWithInputs(t, usageFor(ns, "Deployment", "web"), true,
+		policy, groupedDeployment(ns, "web-blue", "web", "p"), deploymentPod(ns, "web-blue-pod", "web-blue"))
+
+	counter := func(name string) float64 {
+		var v float64
+		for _, m := range seriesForWorkload(t, "k8s_sustain_recycle_suppressed_total", ns, "Deployment", name) {
+			if labelOf(m, "resource") == "cpu" {
+				v += m.GetCounter().GetValue()
+			}
+		}
+		return v
+	}
+	before := counter("web")
+
+	reconcileOnce(t, r, "p")
+
+	if got := counter("web") - before; got != 1 {
+		t.Errorf("suppressed cpu decreases under the identity = %v, want 1", got)
+	}
+	if got := len(seriesForWorkload(t, "k8s_sustain_recycle_suppressed_total", ns, "Deployment", "web-blue")); got != 0 {
+		t.Errorf("recycle_suppressed_total must not carry the member name, got %d series", got)
 	}
 }

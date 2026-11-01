@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/ledger"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -220,8 +221,8 @@ func TestReconcile_PartialFailure_SetsConditionAndRequeues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if res.RequeueAfter != baseRetryDelay {
-		t.Errorf("RequeueAfter = %v, want %v: the failed member's first retry", res.RequeueAfter, baseRetryDelay)
+	if res.RequeueAfter != ledger.BaseRetryDelay {
+		t.Errorf("RequeueAfter = %v, want %v: the failed member's first retry", res.RequeueAfter, ledger.BaseRetryDelay)
 	}
 
 	ready := readyCondition(t, r, "p")
@@ -354,11 +355,12 @@ func TestReconcile_RecommendsPersistsAndApplies(t *testing.T) {
 // recommended and applied. A total outage reaches the controller only this
 // way, so without it a dead Prometheus would look like "already right-sized".
 func TestReconcile_FetchFailureFailsOnlyThatIdentity(t *testing.T) {
-	inputs := usageFor("default", "Deployment", "healthy").
-		Fail(identityOf("default", "Deployment", "broken"), errors.New("prometheus down"))
+	const ns = "fetch-failure"
+	inputs := usageFor(ns, "Deployment", "healthy").
+		Fail(identityOf(ns, "Deployment", "broken"), errors.New("prometheus down"))
 	r := reconcilerWithInputs(t, inputs, true, ongoingDeployments("p"),
-		establishedDeployment("default", "broken", "p"), runningPod("default", "broken-pod", "broken"),
-		establishedDeployment("default", "healthy", "p"), runningPod("default", "healthy-pod", "healthy"))
+		establishedDeployment(ns, "broken", "p"), runningPod(ns, "broken-pod", "broken"),
+		establishedDeployment(ns, "healthy", "p"), runningPod(ns, "healthy-pod", "healthy"))
 	// A delta: the counter is shared by policy label "p" across this package.
 	before := testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues("p"))
 
@@ -371,16 +373,16 @@ func TestReconcile_FetchFailureFailsOnlyThatIdentity(t *testing.T) {
 	if ready.Status == metav1.ConditionTrue || !strings.Contains(ready.Message, "1 of 2 workloads failed") {
 		t.Errorf("Ready = %s %q, want False naming 1 of 2 workloads failed", ready.Status, ready.Message)
 	}
-	if got := r.ledger.health("Deployment/default/broken").blockedOn; got != workload.StepPrometheus {
+	if got := blockedOn(t, ns, "Deployment", "broken"); got != string(workload.StepPrometheus) {
 		t.Errorf("broken: blocked on %q, want %q", got, workload.StepPrometheus)
 	}
-	if cpu := podCPU(t, r, "default", "broken-pod"); cpu != "10m" {
+	if cpu := podCPU(t, r, ns, "broken-pod"); cpu != "10m" {
 		t.Errorf("broken pod CPU = %s, want it untouched at 10m", cpu)
 	}
-	if got := r.ledger.health("Deployment/default/healthy").blockedOn; got != "" {
+	if got := blockedOn(t, ns, "Deployment", "healthy"); got != "" {
 		t.Errorf("healthy: blocked on %q, want not Blocked", got)
 	}
-	if cpu := podCPU(t, r, "default", "healthy-pod"); cpu != "100m" {
+	if cpu := podCPU(t, r, ns, "healthy-pod"); cpu != "100m" {
 		t.Errorf("healthy pod CPU = %s, want its 100m recommendation despite its neighbour failing", cpu)
 	}
 }
@@ -390,10 +392,11 @@ func TestReconcile_FetchFailureFailsOnlyThatIdentity(t *testing.T) {
 // overloaded Prometheus must turn the Policy not-Ready and back the identity
 // off, never pass for a healthy cycle.
 func TestReconcile_QueryTimeoutIsAFetchFailure(t *testing.T) {
+	const ns = "query-timeout"
 	timeout := fmt.Errorf("querying cpu: %w", context.DeadlineExceeded)
-	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), timeout)
+	inputs := recommendertest.NewStaticInputs().Fail(identityOf(ns, "Deployment", "web"), timeout)
 	r := reconcilerWithInputs(t, inputs, true,
-		ongoingDeployments("p"), establishedDeployment("default", "web", "p"), runningPod("default", "web-pod", "web"))
+		ongoingDeployments("p"), establishedDeployment(ns, "web", "p"), runningPod(ns, "web-pod", "web"))
 	rec := r.recorder.(*events.FakeRecorder)
 
 	reconcileOnce(t, r, "p")
@@ -402,7 +405,7 @@ func TestReconcile_QueryTimeoutIsAFetchFailure(t *testing.T) {
 	if ready.Status == metav1.ConditionTrue || !strings.Contains(ready.Message, "1 of 1 workloads failed") {
 		t.Errorf("Ready = %s %q, want False naming 1 of 1 workloads failed", ready.Status, ready.Message)
 	}
-	if got := r.ledger.health("Deployment/default/web").blockedOn; got != workload.StepPrometheus {
+	if got := blockedOn(t, ns, "Deployment", "web"); got != string(workload.StepPrometheus) {
 		t.Errorf("blocked on %q, want %q", got, workload.StepPrometheus)
 	}
 	if !slices.ContainsFunc(drainEvents(rec), func(e string) bool { return strings.Contains(e, "ReconciliationRetryScheduled") }) {
@@ -470,10 +473,10 @@ func TestReconcile_RetryEventNamesTheScheduledPass(t *testing.T) {
 	inputs := recommendertest.NewStaticInputs().Fail(identityOf("default", "Deployment", "web"), errors.New("prometheus down"))
 	r := reconcilerWithInputs(t, inputs, true, ongoingDeployments("p"), establishedDeployment("default", "web", "p"))
 	clk := clocktesting.NewFakePassiveClock(time.Now())
-	r.ledger = newLedger(clk)
+	r.ledger = ledger.New(clk)
 	rec := r.recorder.(*events.FakeRecorder)
 
-	for attempt, wantDelay := range []time.Duration{baseRetryDelay, 2 * baseRetryDelay} {
+	for attempt, wantDelay := range []time.Duration{ledger.BaseRetryDelay, 2 * ledger.BaseRetryDelay} {
 		res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
 		if err != nil {
 			t.Fatal(err)
@@ -493,8 +496,8 @@ func TestReconcile_RetryEventNamesTheScheduledPass(t *testing.T) {
 
 // reconcilerWithFailingRetry is a reconciler for Policy "p" over one
 // Deployment whose fetch always fails, so its first pass leaves a transient
-// retry due after baseRetryDelay. Listing Deployments fails once listFails is
-// set.
+// retry due after ledger.BaseRetryDelay. Listing Deployments fails once
+// listFails is set.
 func reconcilerWithFailingRetry(t *testing.T, listFails *atomic.Bool) *PolicyReconciler {
 	t.Helper()
 	scheme := testFullScheme(t)
@@ -527,8 +530,8 @@ func TestReconcile_ListFailedRequeuesAtTheDueRetry(t *testing.T) {
 	if got := readyCondition(t, r, "p").Reason; got != "ListFailed" {
 		t.Fatalf("Ready reason = %q, want ListFailed", got)
 	}
-	if res.RequeueAfter != baseRetryDelay {
-		t.Errorf("RequeueAfter = %v, want %v: the retry the first pass scheduled", res.RequeueAfter, baseRetryDelay)
+	if res.RequeueAfter != ledger.BaseRetryDelay {
+		t.Errorf("RequeueAfter = %v, want %v: the retry the first pass scheduled", res.RequeueAfter, ledger.BaseRetryDelay)
 	}
 }
 
@@ -541,18 +544,18 @@ func TestReconcile_ListFailedWithADueRetryRequeuesNoSoonerThanAFirstRetry(t *tes
 		interval time.Duration
 		want     time.Duration
 	}{
-		{"after the base retry delay", time.Hour, baseRetryDelay},
-		{"capped at a shorter interval", baseRetryDelay / 3, baseRetryDelay / 3},
+		{"after the base retry delay", time.Hour, ledger.BaseRetryDelay},
+		{"capped at a shorter interval", ledger.BaseRetryDelay / 3, ledger.BaseRetryDelay / 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var listFails atomic.Bool
 			r := reconcilerWithFailingRetry(t, &listFails)
 			r.ReconcileInterval = tc.interval
 			clk := clocktesting.NewFakePassiveClock(time.Now())
-			r.ledger = newLedger(clk)
+			r.ledger = ledger.New(clk)
 			reconcileOnce(t, r, "p")
 			listFails.Store(true)
-			clk.SetTime(clk.Now().Add(2 * baseRetryDelay))
+			clk.SetTime(clk.Now().Add(2 * ledger.BaseRetryDelay))
 
 			for pass := range 3 {
 				res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "p"}})
@@ -623,7 +626,7 @@ func TestPolicyEvents_OnlyGenerationChangesTriggerAPass(t *testing.T) {
 // ObserveOOM is at its trigger send. done closes when it returns.
 func observeOOMAsync(ctx context.Context, t *testing.T, r *PolicyReconciler, web promclient.WorkloadIdentity) (done <-chan struct{}) {
 	t.Helper()
-	t.Cleanup(func() { r.forget("p") })
+	t.Cleanup(func() { r.series.forget("p") })
 	returned := make(chan struct{})
 	go func() {
 		defer close(returned)
@@ -727,24 +730,27 @@ func (s clockAdvancingInputs) FetchInputs(
 // time would process it with nothing fetched, recording a success that clears
 // its retry state.
 func TestReconcile_BackedOffIdentityIsNotFetched(t *testing.T) {
+	const ns = "backed-off"
 	static := recommendertest.NewStaticInputs()
 	clk := clocktesting.NewFakePassiveClock(time.Now())
-	expiring := annotatedDeployment("default", "expiring", "p")
-	r := reconcilerWithInputs(t, clockAdvancingInputs{StaticInputs: static, clk: clk, took: 2 * baseRetryDelay}, true,
-		ongoingDeployments("p"), expiring, annotatedDeployment("default", "healthy", "p"))
-	r.ledger = newLedger(clk)
-	member := targetFromObject(expiring, "Deployment")
-	r.ledger.record(failedStep(&member, workload.StepPatch, errors.New("apiserver unavailable")))
+	r := reconcilerWithInputs(t, clockAdvancingInputs{StaticInputs: static, clk: clk, took: 2 * ledger.BaseRetryDelay}, true,
+		ongoingDeployments("p"), annotatedDeployment(ns, "expiring", "p"), annotatedDeployment(ns, "healthy", "p"))
+	r.ledger = ledger.New(clk)
+	expiring := identityOf(ns, "Deployment", "expiring")
+	r.ledger.Settle("p", map[promclient.WorkloadIdentity][]ledger.Result{expiring: {{
+		Member: ledger.MemberKey{Kind: "Deployment", Namespace: ns, Name: "expiring"},
+		Kind:   ledger.Failed, Step: workload.StepPatch, Err: errors.New("apiserver unavailable"),
+	}}})
 
 	reconcileOnce(t, r, "p")
 
-	if static.Requested(identityOf("default", "Deployment", "expiring")) {
+	if static.Requested(expiring) {
 		t.Error("an identity whose every member is in backoff was fetched")
 	}
-	if !static.Requested(identityOf("default", "Deployment", "healthy")) {
+	if !static.Requested(identityOf(ns, "Deployment", "healthy")) {
 		t.Error("the healthy identity was not fetched")
 	}
-	if got := r.ledger.health(member.key()).blockedOn; got != workload.StepPatch {
+	if got := blockedOn(t, ns, "Deployment", "expiring"); got != string(workload.StepPatch) {
 		t.Errorf("expiring: blocked on %q, want it still Blocked on %s: the member skipped at fetch time must be skipped at apply time", got, workload.StepPatch)
 	}
 }
@@ -753,7 +759,8 @@ func TestReconcile_BackedOffIdentityIsNotFetched(t *testing.T) {
 // samples are not a failure. Treating them as one would retry-storm every
 // workload that legitimately has nothing yet.
 func TestReconcile_EmptySuccessfulResponse_DeploymentSucceedsWithNoRetry(t *testing.T) {
-	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), true, ongoingDeployments("p"), annotatedDeployment("default", "app", "p"))
+	const ns = "empty-response"
+	r := reconcilerWithInputs(t, recommendertest.NewStaticInputs(), true, ongoingDeployments("p"), annotatedDeployment(ns, "app", "p"))
 	before := testutil.ToFloat64(policyBatchFailuresTotal.WithLabelValues("p"))
 
 	reconcileOnce(t, r, "p")
@@ -771,7 +778,7 @@ func TestReconcile_EmptySuccessfulResponse_DeploymentSucceedsWithNoRetry(t *test
 	if ready.Status != metav1.ConditionTrue || ready.Reason != "ReconciliationSucceeded" {
 		t.Errorf("Ready = %s/%s, want True/ReconciliationSucceeded", ready.Status, ready.Reason)
 	}
-	if got := r.ledger.health("Deployment/default/app").blockedOn; got != "" {
+	if got := blockedOn(t, ns, "Deployment", "app"); got != "" {
 		t.Errorf("blocked on %q for a successful-but-empty response, want not Blocked", got)
 	}
 }

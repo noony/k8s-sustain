@@ -28,6 +28,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/inventory"
+	"github.com/noony/k8s-sustain/internal/ledger"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
@@ -94,9 +95,8 @@ type PolicyReconciler struct {
 
 	recorder events.EventRecorder
 	patcher  *workload.Patcher
-	ledger   *ledger
+	ledger   *ledger.Ledger
 
-	health healthTracker
 	series publisher
 }
 
@@ -123,7 +123,7 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	r.patcher = workload.New(r.Client, r.InPlaceUpdates, patcherOpts...)
 	r.recorder = mgr.GetEventRecorder("k8s-sustain")
-	r.ledger = newLedger(clock.RealClock{})
+	r.ledger = ledger.New(clock.RealClock{})
 	r.applyTuningDefaults()
 	if err := mgr.Add(&orphanReaper{client: r.Client, interval: r.OrphanReapInterval}); err != nil {
 		return err
@@ -227,17 +227,14 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)
 		r.recorder.Eventf(policy, nil, corev1.EventTypeWarning, "ListFailed", "ListFailed", "%s", listErr.Error())
 		r.series.reconciled(policy.Name, "error", time.Since(start))
-		// A retry already due cannot run until a pass lists again, so it
-		// would otherwise requeue at once, pass after pass.
-		return ctrl.Result{RequeueAfter: r.requeueAfter(r.health.members(policy.Name), baseRetryDelay)}, nil
+		return ctrl.Result{RequeueAfter: r.ledger.RequeueAfterListFailure(policy.Name, r.ReconcileInterval)}, nil
 	}
 
 	report := r.runPass(ctx, policy, snap)
-	failed, attempts := r.settle(ctx, report)
-	live := report.liveMembers()
-	health := r.health.aggregate(policy.Name, live, r.ledger)
-	blocked := health.blocked()
-	r.series.publish(policy.Name, report.publication(health, attempts))
+	verdict := r.ledger.Settle(policy.Name, report.results())
+	r.warn(ctx, report, verdict.Events)
+	failed, blocked := report.failed(verdict), verdict.Blocked()
+	r.series.publish(policy.Name, report.publication(verdict))
 
 	_ = deleteRecommendations(logger, "sweep", func() (int, error) {
 		return wlrcache.Sweep(ctx, r.Client, policy.Name, standingIn(snap), snap.TakenAt, r.lifetimes())
@@ -261,44 +258,31 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	r.recorder.Eventf(policy, nil, eventType, cond.Reason, cond.Reason, "%s", cond.Message)
 	r.series.reconciled(policy.Name, result, time.Since(start))
 
-	// A zero RequeueAfter means no requeue at all.
-	return ctrl.Result{RequeueAfter: r.requeueAfter(memberKeys(live), time.Second)}, nil
+	return ctrl.Result{RequeueAfter: r.ledger.RequeueAfter(policy.Name, r.ReconcileInterval)}, nil
 }
 
 func (r *PolicyReconciler) forget(policy string) {
 	r.series.forget(policy)
-	r.health.forget(policy, r.ledger)
+	r.ledger.Forget(policy)
 }
 
-// settle hands every member's result in report to the ledger and emits the
-// events it calls for. It returns how many identities failed this pass: a
-// departed one whose decision could not be made or stored, or a live one with
-// a member the ledger counts as failed; and, per identity, how many of its
-// members the ledger counts as failed.
-func (r *PolicyReconciler) settle(ctx context.Context, report passReport) (failed int, attempts map[promclient.WorkloadIdentity]int) {
+// warn logs every member of report that failed and emits on it the Warning
+// the ledger's verdict calls for.
+func (r *PolicyReconciler) warn(ctx context.Context, report passReport, events map[ledger.MemberKey]ledger.Event) {
 	logger := log.FromContext(ctx)
-	attempts = make(map[promclient.WorkloadIdentity]int)
 	for _, rep := range report {
-		identityFailed := rep.failed
 		for _, res := range rep.members {
-			ev, isFailure := r.ledger.record(res)
-			if !isFailure {
+			if res.Kind != ledger.Failed {
 				continue
 			}
-			identityFailed = true
-			attempts[rep.key]++
 			t := res.member
-			logger.Error(res.err, "applying the recommendation failed",
-				"kind", t.Kind, "name", t.Name, "namespace", t.Namespace, "phase", res.phase)
-			if ev != nil {
-				r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, ev.reason, ev.reason, "%s", ev.message)
+			logger.Error(res.Err, "applying the recommendation failed",
+				"kind", t.Kind, "name", t.Name, "namespace", t.Namespace, "step", res.Step)
+			if ev, ok := events[t.key()]; ok {
+				r.recorder.Eventf(t.Object, nil, corev1.EventTypeWarning, ev.Reason, ev.Reason, "%s", ev.Message)
 			}
 		}
-		if identityFailed {
-			failed++
-		}
 	}
-	return failed, attempts
 }
 
 // passCondition is the Ready condition a pass leaves: True only when no
@@ -327,15 +311,4 @@ func passCondition(processed, failed, blocked int) metav1.Condition {
 		Reason:  "PartialFailure",
 		Message: strings.Join(parts, "; "),
 	}
-}
-
-// requeueAfter is the reconcile interval, or the time until the earliest
-// retry among members falls due when that comes first, so the time a retry
-// event names is a time a pass runs. A retry brings it no lower than floor.
-func (r *PolicyReconciler) requeueAfter(members []string, floor time.Duration) time.Duration {
-	due, ok := r.ledger.nextRetry(members)
-	if !ok {
-		return r.ReconcileInterval
-	}
-	return min(r.ReconcileInterval, max(due, floor))
 }
