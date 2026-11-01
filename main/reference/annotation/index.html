@@ -2316,7 +2316,7 @@
 </tbody>
 </table>
 <h3 id="the-webhooks-cost-control-does-not-fully-bound-itself">The webhook's cost control does not fully bound itself<a class="headerlink" href="#the-webhooks-cost-control-does-not-fully-bound-itself" title="Permanent link">&para;</a></h3>
-<p>When a Policy has an empty <code>selector</code>, the pre-check always passes, so every pod CREATE pays for up to two owner Gets (top-level owner, then its annotations for unannotated pods). Two ~30s TTL caches with <code>singleflight</code> collapse a rolling restart's burst to at most two Gets per owner, so a workload-level annotation change can take up to 30s to reach admission.</p>
+<p>When a Policy has an empty <code>selector</code>, the pre-check always passes, so every pod CREATE pays for up to two owner Gets (top-level owner, then its annotations for unannotated pods). Two ~30s TTL caches, each running one Get per owner at a time, collapse a rolling restart's burst to at most two Gets per owner, so a workload-level annotation change can take up to 30s to reach admission.</p>
 
 
 
