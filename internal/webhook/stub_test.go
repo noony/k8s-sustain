@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"k8s.io/apimachinery/pkg/types"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -186,11 +188,12 @@ func TestRequestRecommendation_DoesNotDropDistinctIdentities(t *testing.T) {
 // there re-opens the identity for a third admission and lets a second
 // concurrent create go out for the same object name.
 func TestDropStubClaimDoesNotEvictANewerClaim(t *testing.T) {
-	h := &Handler{}
-	const key = "prod/job-etl"
 	t0 := time.Now()
+	clk := clocktesting.NewFakePassiveClock(t0)
+	h := &Handler{stubClaims: newStubClaims(clk)}
+	const key = "prod/job-etl"
 
-	_, stale, ok := h.beginStubRequest(key, t0)
+	_, stale, ok := h.beginStubRequest(key)
 	if !ok {
 		t.Fatal("the first request for an unclaimed identity must be granted")
 	}
@@ -198,9 +201,8 @@ func TestDropStubClaimDoesNotEvictANewerClaim(t *testing.T) {
 
 	// The claim expires while its owner is still queued, and the next admission
 	// wins a fresh one.
-	later := t0.Add(stubRequestDedupTTL + time.Millisecond)
-	_, fresh, ok := h.beginStubRequest(key, later)
-	if !ok {
+	clk.SetTime(t0.Add(stubRequestDedupTTL + time.Millisecond))
+	if _, _, ok := h.beginStubRequest(key); !ok {
 		t.Fatal("an expired claim must not keep suppressing the identity")
 	}
 	h.stubWG.Done()
@@ -208,17 +210,38 @@ func TestDropStubClaimDoesNotEvictANewerClaim(t *testing.T) {
 	// Only now does the first goroutine's queue budget fire.
 	h.dropStubClaim(key, stale)
 
-	h.stubMu.Lock()
-	until, exists := h.stubRequested[key]
-	h.stubMu.Unlock()
-	if !exists || !until.Equal(fresh) {
-		t.Fatalf("the stale dropper erased a newer claim (exists=%v, until=%v, want %v): the "+
-			"admission that owns the in-flight create is left unprotected", exists, until, fresh)
+	if _, _, ok := h.beginStubRequest(key); ok {
+		t.Error("the stale dropper erased a newer claim: a third admission was granted one while " +
+			"the second one's create is still in flight, so two concurrent creates go out for one " +
+			"identity, one of them guaranteed to be rejected with AlreadyExists")
 	}
-	if _, _, ok := h.beginStubRequest(key, later.Add(time.Millisecond)); ok {
-		t.Error("a third admission was granted a claim while the second one's create is still " +
-			"in flight: two concurrent creates for one identity, one of them guaranteed to be " +
-			"rejected with AlreadyExists")
+}
+
+type failingCreateClient struct{ countingCreateClient }
+
+func (c *failingCreateClient) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	_ = c.countingCreateClient.Create(ctx, obj, opts...)
+	return errors.New("apiserver unavailable")
+}
+
+// Only a claim that never reached the apiserver is dropped. A failed create
+// keeps its claim for the TTL, so an outage costs one create per identity per
+// TTL, not one per admission.
+func TestRequestRecommendationKeepsTheClaimAfterAFailedCreate(t *testing.T) {
+	failing := &failingCreateClient{countingCreateClient{Client: fake.NewClientBuilder().WithScheme(config.Scheme()).Build()}}
+	h := &Handler{Client: failing}
+	r := stubRequest{identity: jobIdentity("etl"), policy: "p1"}
+
+	h.requestRecommendation(logr.Discard(), r)
+	h.stubWG.Wait()
+	if got := failing.count(); got != 1 {
+		t.Fatalf("%d creates issued for one request, want 1", got)
+	}
+
+	h.requestRecommendation(logr.Discard(), r)
+	h.stubWG.Wait()
+	if got := failing.count(); got != 1 {
+		t.Errorf("%d creates issued: a second admission within the TTL retried a failed create", got)
 	}
 }
 
@@ -344,12 +367,9 @@ func TestRequestRecommendationIsRefusedAfterShutdown(t *testing.T) {
 
 	// beginStubRequest refuses under stubMu, so "no claim recorded" is a
 	// synchronous fact, not a race with a goroutine that may or may not exist.
-	h.stubMu.Lock()
-	claims := len(h.stubRequested)
-	h.stubMu.Unlock()
-	if claims != 0 {
-		t.Fatalf("%d stub claims recorded after shutdown: a goroutine was registered past the "+
-			"point where Shutdown stopped waiting for them", claims)
+	if _, claimed := h.stubClaims.Get(wlrcache.Key(jobIdentity("etl")).String()); claimed {
+		t.Fatal("a stub claim was recorded after shutdown: a goroutine was registered past the " +
+			"point where Shutdown stopped waiting for them")
 	}
 	if got := counter.count(); got != 0 {
 		t.Errorf("%d creates issued after shutdown", got)

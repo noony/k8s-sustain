@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	"golang.org/x/sync/singleflight"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/noony/k8s-sustain/internal/cache"
 	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
 )
@@ -41,9 +41,9 @@ const (
 	governanceTimeout         = admissionTimeout - recommendationReadTimeout
 )
 
-// apiCallTimeout bounds each owner-chain Get, which runs on a singleflight
-// leader detached from the admissions waiting on it, so a wedged apiserver
-// call cannot pin the leader.
+// apiCallTimeout bounds each owner-chain Get, which runs on a read-through
+// fetch detached from the admissions waiting on it, so a wedged apiserver
+// call cannot pin the fetch.
 const apiCallTimeout = 2 * time.Second
 
 // Handler is the mutating admission handler. On Pod CREATE it injects the
@@ -62,10 +62,10 @@ type Handler struct {
 	// stubMu guards every stub field below, including stubWG.Add and
 	// stubStopping: registering a goroutine and deciding no more may start must
 	// be one atomic step or Shutdown can wait on a WaitGroup about to grow.
-	stubMu        sync.Mutex
-	stubRequested map[string]time.Time
-	stubInflight  chan struct{}
-	stubLastPrune time.Time
+	stubMu       sync.Mutex
+	stubClaims   *cache.LRU[string, uint64]
+	stubClaimSeq uint64
+	stubInflight chan struct{}
 
 	// stubCtx is the parent of every detached stub goroutine; stubStop cancels it.
 	stubCtx  context.Context
@@ -74,20 +74,10 @@ type Handler struct {
 	stubStopping bool
 	stubWG       sync.WaitGroup
 
-	// ownerAnnCache and ownerRefCache bound the per-admission owner Gets on
-	// clusters where a selector-less Policy covers every pod.
-	ownerAnnCache ownerAnnotationsCache
-	ownerRefCache ttlLRUCache[resolvedOwnerRef]
-
-	// ownerAnnSF and ownerRefSF collapse a concurrent burst of cache misses
-	// for the same key into one in-flight Get.
-	ownerAnnSF singleflight.Group
-	ownerRefSF singleflight.Group
-
-	// sfJoinHook, if non-nil, is called with the singleflight key right after
-	// DoChan registers a caller. Test-only; a per-Handler field rather than a
-	// global so one test's stragglers cannot fire another test's barrier.
-	sfJoinHook func(key string)
+	// owners is built on first use, so a Handler stays usable as a plain
+	// struct literal.
+	ownersOnce sync.Once
+	owners     ownerCaches
 }
 
 type jsonPatch struct {

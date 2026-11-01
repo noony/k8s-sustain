@@ -12,7 +12,6 @@ import (
 	rolloutsv1alpha1 "github.com/argoproj/argo-rollouts/pkg/apis/rollouts/v1alpha1"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"golang.org/x/sync/singleflight"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -21,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/cache"
 	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -66,8 +66,8 @@ type Server struct {
 	// and the detail page charts what its signals read, the OOM kills
 	// included.
 	Inputs recommender.InputsFetcher
-	// Clock is what a Simulation computes as of and what dates every
-	// inventory snapshot. Required.
+	// Clock is what a Simulation computes as of, what dates every inventory
+	// snapshot and what the /api/summary cache ages by. Required.
 	Clock  clock.PassiveClock
 	Logger logr.Logger
 	// CORSOrigins is the allowed origin allowlist: empty means same-origin
@@ -79,25 +79,19 @@ type Server struct {
 	// Policy governs, a hard deny applied ahead of a Policy's own selector.
 	Policies *governance.PolicyLister
 
-	cacheInit    sync.Once
-	summaryCache *Cache
+	summaryOnce     sync.Once
+	summarySnapshot *cache.LRU[string, summaryResponseV2]
 
-	// summarySF collapses concurrent /api/summary recomputes onto one shared
+	// summary collapses concurrent /api/summary recomputes onto one shared
 	// computation, so a slow recompute cannot overwrite a newer snapshot.
-	summarySF singleflight.Group
-
-	// sfJoinHook, if non-nil, is invoked with the key by every request just
-	// after it joins summarySF. Tests use it as a barrier; a field rather than
-	// a global so stragglers from one test cannot race the next.
-	sfJoinHook func(key string)
+	summary *cache.ReadThrough[string, summaryResponseV2]
 }
 
 // Handler returns an http.Handler with all dashboard routes registered.
 func (s *Server) Handler() http.Handler {
-	s.cacheInit.Do(func() {
-		if s.summaryCache == nil {
-			s.summaryCache = NewCache(8, 60*time.Second)
-		}
+	s.summaryOnce.Do(func() {
+		s.summarySnapshot = cache.NewLRU[string, summaryResponseV2](8, 60*time.Second, s.Clock)
+		s.summary = cache.NewReadThrough(s.summarySnapshot, summaryComputeTimeout, s.fetchSummary, nil)
 	})
 
 	mux := http.NewServeMux()

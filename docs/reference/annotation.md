@@ -217,4 +217,4 @@ Each component hands `governance.Decide` the pod template or pod it is deciding 
 
 ### The webhook's cost control does not fully bound itself
 
-When a Policy has an empty `selector`, the pre-check always passes, so every pod CREATE pays for up to two owner Gets (top-level owner, then its annotations for unannotated pods). Two ~30s TTL caches with `singleflight` collapse a rolling restart's burst to at most two Gets per owner, so a workload-level annotation change can take up to 30s to reach admission.
+When a Policy has an empty `selector`, the pre-check always passes, so every pod CREATE pays for up to two owner Gets (top-level owner, then its annotations for unannotated pods). Two ~30s TTL caches, each running one Get per owner at a time, collapse a rolling restart's burst to at most two Gets per owner, so a workload-level annotation change can take up to 30s to reach admission.

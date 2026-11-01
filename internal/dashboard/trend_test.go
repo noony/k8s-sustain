@@ -50,7 +50,6 @@ func (r *recordingPromClient) QueryRange(_ context.Context, expr string, _ promc
 func TestHandleSummaryTrendReturnsUsageRequestOriginalForCPUAndMemory(t *testing.T) {
 	prom := &recordingPromClient{}
 	srv := &Server{PromClient: prom, Logger: testLogger(t)}
-	srv.summaryCache = NewCache(2, 60*time.Second)
 	req := httptest.NewRequest(http.MethodGet, "/api/summary/trend?window=30d", nil)
 	rec := httptest.NewRecorder()
 	srv.handleSummaryTrend(rec, req)
