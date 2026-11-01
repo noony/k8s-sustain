@@ -2301,7 +2301,7 @@
 <tr>
 <td><code>--reconcile-interval</code></td>
 <td><code>5m</code></td>
-<td>How often policies are re-evaluated (e.g. <code>30m</code>, <code>6h</code>)</td>
+<td>How often policies are re-evaluated. Must be greater than zero. It also sizes the staleness budget: a live identity's recommendation is served for the larger of 30 minutes and three intervals past its last computation, so any interval keeps recommendations served between passes, and a pass can run late without pods losing them. See <a href="../../concepts/workload-recommendations/#how-long-a-recommendation-is-served">How long a recommendation is served</a>.</td>
 </tr>
 <tr>
 <td><code>--excluded-namespaces</code></td>
@@ -2331,7 +2331,7 @@
 <tr>
 <td><code>--recommendation-retention</code></td>
 <td><code>168h</code></td>
-<td>How long a WorkloadRecommendation is kept after its workload object disappears (bare pods, deleted or finished Jobs), and how long a Conflicted identity's frozen one is kept. Set it above the longest gap between runs of a recurring workload; <code>0</code> sweeps on the next reconcile. See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</td>
+<td>How long a Departed identity's WorkloadRecommendation (bare pods, deleted or finished Jobs) is kept, and its recommendation served, past its last computation; the same for a Conflicted identity's frozen one. Set it above the longest gap between runs of a recurring workload. Must be greater than zero. The webhook has no such flag: it serves what the controller stamped. See <a href="../../concepts/workload-recommendations/#retention-for-ephemeral-workloads">Retention for ephemeral workloads</a>.</td>
 </tr>
 <tr>
 <td><code>--query-shard-max-samples</code></td>
@@ -2499,11 +2499,6 @@ line, since a public-CA ingress on the same address would then fail with
 <td>—</td>
 <td>Comma-separated list of namespaces no Policy governs: the webhook injects no resources into their pods, whatever they opt into, and never mutates them. Mirrors the controller flag so both components stay in lockstep. The chart also drops these namespaces from the <code>MutatingWebhookConfiguration</code>'s <code>namespaceSelector</code>, so the webhook never sees their pods.</td>
 </tr>
-<tr>
-<td><code>--recommendation-retention</code></td>
-<td><code>168h</code></td>
-<td>Must match the controller flag. A departed or Conflicted identity's recommendation older than this is treated as stale instead of injected. The chart renders both from <code>controller.recommendationRetention</code>.</td>
-</tr>
 </tbody>
 </table>
 <p>The webhook also honours each Policy's <code>spec.selector.namespaces</code> and <code>spec.selector.labelSelector</code> (see <a href="../policy/#specselector">Policy reference</a>). A pod is admitted unmutated if any of the following holds: its namespace is in <code>--excluded-namespaces</code>, its namespace is not in a non-empty <code>selector.namespaces</code>, or its pod labels — its pod template's, which the controller matches too — do not satisfy <code>selector.labelSelector</code>. A malformed <code>labelSelector</code> causes the webhook to fail open (admit without injection, log a warning with reason <code>selector-invalid</code>, whichever level the pod opts in at) rather than deny.</p>
@@ -2669,7 +2664,7 @@ variables carry the <code>DASHBOARD</code> prefix — see <a href="#environment-
 </tr>
 </tbody>
 </table>
-<p>Flags shared across subcommands (<code>--log-level</code>, <code>--excluded-namespaces</code>, <code>--recommendation-retention</code>, every <code>--prometheus-*</code> flag) have the same flag name but a different variable per subcommand. A variable with the wrong prefix is <strong>silently ignored</strong>. The Helm chart renders the right prefix for each component. See <a href="../../guides/authenticated-prometheus/#environment-variables-the-prefixes-differ-per-subcommand">Authenticated Prometheus: environment variables</a> for the full Prometheus auth table.</p>
+<p>Flags shared across subcommands (<code>--log-level</code>, <code>--excluded-namespaces</code>, every <code>--prometheus-*</code> flag) have the same flag name but a different variable per subcommand. A variable with the wrong prefix is <strong>silently ignored</strong>. The Helm chart renders the right prefix for each component. See <a href="../../guides/authenticated-prometheus/#environment-variables-the-prefixes-differ-per-subcommand">Authenticated Prometheus: environment variables</a> for the full Prometheus auth table.</p>
 </div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nv">K8SSUSTAIN_RECONCILE_INTERVAL</span><span class="o">=</span>30m<span class="w"> </span>k8s-sustain<span class="w"> </span>start
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nv">K8SSUSTAIN_EXCLUDED_NAMESPACES</span><span class="o">=</span>kube-system,monitoring<span class="w"> </span>k8s-sustain<span class="w"> </span>start

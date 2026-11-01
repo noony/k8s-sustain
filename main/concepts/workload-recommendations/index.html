@@ -946,6 +946,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#how-long-a-recommendation-is-served" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How long a Recommendation is served
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#garbage-collection" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1965,6 +1976,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#how-long-a-recommendation-is-served" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        How long a Recommendation is served
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#garbage-collection" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2154,16 +2176,16 @@
 <tr>
 <td><strong>Ensure</strong> (controller, claim)</td>
 <td>Every reconcile, for each live identity the Policy governs</td>
-<td>Creates the object or adopts it (<code>spec.policy</code> and the <code>k8s.sustain.io/policy</code> label become the governing Policy's), replaces <code>status.observedResources</code> with the members' containers when it differs, clears <code>status.departed</code></td>
+<td>Creates the object or adopts it (<code>spec.policy</code> and the <code>k8s.sustain.io/policy</code> label become the governing Policy's), replaces <code>status.observedResources</code> with the members' containers when it differs, clears <code>status.departed</code> and restamps <code>status.servableUntil</code> for a live identity</td>
 </tr>
 <tr>
 <td><strong>Record</strong> (controller, computation)</td>
 <td>Every reconcile, once per identity on the work-list, and for each Conflicted identity the Policy is party to</td>
-<td>One status write with the pass's decision: <code>status.outcome</code>, <code>status.departed</code>, and for <code>Computed</code> the Recommendation, its <code>trace</code>, <code>observedAt</code> and <code>computedBy</code>. An unchanged decision costs no write</td>
+<td>One status write with the pass's decision: <code>status.outcome</code>, <code>status.departed</code>, for <code>Computed</code> the Recommendation, its <code>trace</code>, <code>observedAt</code> and <code>computedBy</code>, and <a href="#how-long-a-recommendation-is-served"><code>servableUntil</code></a>. An unchanged decision costs no write</td>
 </tr>
 </tbody>
 </table>
-<p>Record is the only writer of the Recommendation and of <code>departed</code>, so a departed identity whose samples are still in its query window costs at most one status write per 10 minutes, the interval after which an unchanged Recommendation is rewritten only to refresh <code>observedAt</code>. That keeps <code>observedAt</code> on a stable workload well inside the webhook's 30-minute staleness budget while etcd writes scale with change rather than workload count.</p>
+<p>Record is the only writer of the Recommendation and the only one that marks an identity departed, so a departed identity whose samples are still in its query window costs at most one status write per 10 minutes, the interval after which an unchanged Recommendation is rewritten only to refresh <code>observedAt</code>, and with it <code>servableUntil</code>. That keeps a stable workload's Recommendation served while etcd writes scale with change rather than workload count.</p>
 <p>The controller applies an identity's Recommendation only once its Record has landed: an identity whose object could not be ensured or written is left alone that cycle and counted as failed, because the replacement pods of an eviction would read the old value at admission.</p>
 <h3 id="states">States<a class="headerlink" href="#states" title="Permanent link">&para;</a></h3>
 <table>
@@ -2188,12 +2210,12 @@
 <tr>
 <td>Computed</td>
 <td>A pass of the governing Policy computed a Recommendation</td>
-<td><code>outcome: Computed</code>, <code>containers</code>, <code>computedBy</code>, fresh <code>observedAt</code></td>
+<td><code>outcome: Computed</code>, <code>containers</code>, <code>computedBy</code>, fresh <code>observedAt</code> and <code>servableUntil</code></td>
 </tr>
 <tr>
 <td>Kept</td>
 <td>A later pass recorded another outcome</td>
-<td>That outcome; the last <code>containers</code>, <code>computedBy</code> and <code>observedAt</code> kept</td>
+<td>That outcome; the last <code>containers</code>, <code>computedBy</code>, <code>observedAt</code> and <code>servableUntil</code> kept</td>
 </tr>
 <tr>
 <td>Departed</td>
@@ -2215,10 +2237,44 @@
 <h3 id="a-recommendation-is-served-only-to-its-policy">A Recommendation is served only to its Policy<a class="headerlink" href="#a-recommendation-is-served-only-to-its-policy" title="Permanent link">&para;</a></h3>
 <p>The webhook injects a Recommendation only into pods whose resolved Policy both governs the object (<code>spec.policy</code>) and computed the values (<code>status.computedBy</code>). When another Policy adopts an identity, the previous Policy's values stay in the object but are withheld from every pod until the new Policy records a Recommendation of its own; until then pods start on their template resources, whatever the new Policy's first passes record (too young under its minimum age, no data under its window, a failed fetch).</p>
 <p>An object written before <code>status.computedBy</code> existed carries none, and is withheld until its Policy records a Recommendation: a live identity with samples gets one on its next reconcile.</p>
+<h3 id="how-long-a-recommendation-is-served">How long a Recommendation is served<a class="headerlink" href="#how-long-a-recommendation-is-served" title="Permanent link">&para;</a></h3>
+<p>Every status write of the controller stamps <code>status.servableUntil</code>, the time the webhook stops injecting the Recommendation. The controller computes it from what the object holds, so it is always consistent with it:</p>
+<ul>
+<li><strong>A live identity</strong>: <code>observedAt</code> plus the staleness budget, the larger of 30 minutes and three times <code>--reconcile-interval</code>.</li>
+<li><strong>A Departed or Conflicted identity</strong>: its last computation plus <code>--recommendation-retention</code>, the same window the <a href="#garbage-collection">sweep</a> keeps its object for.</li>
+</ul>
+<p>Only a <code>Computed</code> outcome moves <code>observedAt</code>, so <code>NoData</code>, <code>TooYoung</code>, <code>FetchFailed</code> and <code>Conflicted</code> never extend the stamp. An object without one, written before the field existed, gets its first only from a <code>Computed</code> record: until then nothing is injected from it, whatever else the controller writes. A stable <code>Computed</code> Recommendation is rewritten every 10 minutes, so whatever the interval it stays served through a reconcile that runs one interval late:</p>
+<table>
+<thead>
+<tr>
+<th><code>--reconcile-interval</code></th>
+<th>Staleness budget</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>1m</code></td>
+<td><code>30m</code></td>
+</tr>
+<tr>
+<td><code>5m</code> (default)</td>
+<td><code>30m</code></td>
+</tr>
+<tr>
+<td><code>30m</code></td>
+<td><code>1h30m</code></td>
+</tr>
+<tr>
+<td><code>6h</code></td>
+<td><code>18h</code></td>
+</tr>
+</tbody>
+</table>
+<p>The webhook holds no freshness setting of its own: it serves a Recommendation only before the stamp. Because the stamp is an absolute time, a controller that stops reconciling stops injection once it passes. An object without a stamp is served nothing until the controller next records a decision for it.</p>
 <h3 id="garbage-collection">Garbage collection<a class="headerlink" href="#garbage-collection" title="Permanent link">&para;</a></h3>
 <p>Three independent mechanisms delete objects, each only at the revision it judged (its UID and <code>resourceVersion</code>), so an object rewritten since it was listed — adopted by another Policy, say — is judged again rather than deleted:</p>
 <ul>
-<li><strong>Per-cycle sweep</strong> — at the end of each reconcile, deletes the objects naming the Policy whose identity no Policy governs any more (annotation removed, namespace excluded, kind disabled, selector narrowed), and the objects of Departed and Conflicted identities past the <a href="#retention-for-ephemeral-workloads">retention window</a>. An object created in the last 10 minutes is never swept, and one now governed by another Policy is left for that Policy to adopt.</li>
+<li><strong>Per-cycle sweep</strong> — at the end of each reconcile, deletes the objects naming the Policy whose identity no Policy governs any more (annotation removed, namespace excluded, kind disabled, selector narrowed), and the objects of Departed and Conflicted identities past the <a href="#retention-for-ephemeral-workloads">retention window</a>. It judges them against the inventory the reconcile read at its start, as of that instant: an object created after it, or in the 10 minutes before it, is never swept, however long the reconcile took, and one now governed by another Policy is left for that Policy to adopt.</li>
 <li><strong>Policy-deletion finalizer</strong> — <code>k8s.sustain.io/cleanup</code> on every <code>Policy</code> blocks its deletion until every object still naming it is deleted. An object another Policy adopts while the cleanup runs (a GitOps rename creates the new Policy before deleting the old) survives: the delete conflicts, and the retry no longer lists it.</li>
 <li><strong>Orphan reaper</strong> — every 10 minutes, deletes objects whose <code>spec.policy</code> names a Policy that no longer exists (e.g. after <code>kubectl delete policy --force --grace-period=0</code>, which skips finalizers).</li>
 </ul>
@@ -2257,75 +2313,78 @@
 <a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">example</span>
 <a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">web</span>
 <a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="nt">status</span><span class="p">:</span>
-<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span><span class="nt">observedAt</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2026-05-01T12:34:56Z</span><span class="w">  </span><span class="c1"># when containers was last computed; the webhook</span>
-<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">                                    </span><span class="c1"># trusts ≤30m old, unless departed or Conflicted</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">  </span><span class="nt">outcome</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Computed</span><span class="w">                 </span><span class="c1"># the last pass: Computed, NoData, TooYoung,</span>
-<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">                                    </span><span class="c1"># FetchFailed or Conflicted; unset = not decided yet.</span>
-<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">                                    </span><span class="c1"># Every outcome but Computed keeps containers</span>
-<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">  </span><span class="nt">computedBy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production-rightsizing</span><span class="w"> </span><span class="c1"># the Policy that computed containers; they are</span>
-<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">                                    </span><span class="c1"># injected only into that Policy's pods</span>
-<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">  </span><span class="nt">departed</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">                   </span><span class="c1"># true = retained for an identity with no live</span>
-<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">                                    </span><span class="c1"># member; exempt from the staleness check, see below</span>
-<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
-<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="w">    </span><span class="nt">app</span><span class="p">:</span>
-<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="w">      </span><span class="nt">cpuRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">314m</span>
-<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">      </span><span class="nt">memoryRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
-<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="w">      </span><span class="nt">cpuLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">628m</span>
-<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="w">      </span><span class="nt">memoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
-<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="w">      </span><span class="nt">removeCpuLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">         </span><span class="c1"># true when the policy says NoLimit</span>
-<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="w">      </span><span class="nt">removeMemoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
-<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="w">  </span><span class="nt">trace</span><span class="p">:</span><span class="w">                            </span><span class="c1"># how each container's values were derived</span>
-<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="w">    </span><span class="nt">app</span><span class="p">:</span>
-<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
-<a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a><span class="w">        </span><span class="nt">request</span><span class="p">:</span><span class="w">                    </span><span class="c1"># the stages that ran, in order</span>
-<a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">percentile</span><span class="w">         </span><span class="c1"># usage percentile of the busiest pod</span>
-<a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">227500u</span>
-<a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">headroom</span><span class="w">           </span><span class="c1"># + headroom, rounded up</span>
-<a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">228m</span>
-<a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">clamp</span><span class="w">              </span><span class="c1"># after minAllowed/maxAllowed</span>
-<a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">228m</span>
-<a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">coordination</span><span class="w">       </span><span class="c1"># only when an autoscaler shapes it</span>
-<a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">314m</span><span class="w">               </span><span class="c1"># re-clamped: the final request</span>
-<a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a><span class="w">          </span><span class="nt">facts</span><span class="p">:</span>
-<a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a><span class="w">            </span><span class="nt">overheadFactor</span><span class="p">:</span><span class="w"> </span><span class="s">"1.375"</span><span class="w"> </span><span class="c1"># 110 / HPA target (80%)</span>
-<a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a><span class="w">        </span><span class="nt">limit</span><span class="p">:</span>
-<a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">requestsLimitsRatio</span>
-<a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">628m</span>
-<a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a><span class="w">          </span><span class="nt">facts</span><span class="p">:</span>
-<a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a><span class="w">            </span><span class="nt">ratio</span><span class="p">:</span><span class="w"> </span><span class="s">"2"</span>
-<a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span>
-<a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a><span class="w">        </span><span class="nt">request</span><span class="p">:</span>
-<a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">percentile</span>
-<a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">"183500800"</span>
-<a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">oomFloor</span><span class="w">           </span><span class="c1"># only after a recent OOM kill</span>
-<a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">240Mi</span>
-<a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a><span class="w">          </span><span class="nt">facts</span><span class="p">:</span>
-<a id="__codelineno-0-59" name="__codelineno-0-59" href="#__codelineno-0-59"></a><span class="w">            </span><span class="nt">determined</span><span class="p">:</span><span class="w"> </span><span class="s">"true"</span><span class="w">      </span><span class="c1"># the floor set the final request</span>
-<a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a><span class="w">            </span><span class="nt">anchor</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">killedAtLimit</span>
-<a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a><span class="w">            </span><span class="nt">killedAtLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200Mi</span>
-<a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">headroom</span>
-<a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
-<a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">clamp</span>
-<a id="__codelineno-0-65" name="__codelineno-0-65" href="#__codelineno-0-65"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
-<a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">coordination</span>
-<a id="__codelineno-0-67" name="__codelineno-0-67" href="#__codelineno-0-67"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
-<a id="__codelineno-0-68" name="__codelineno-0-68" href="#__codelineno-0-68"></a><span class="w">          </span><span class="nt">facts</span><span class="p">:</span>
-<a id="__codelineno-0-69" name="__codelineno-0-69" href="#__codelineno-0-69"></a><span class="w">            </span><span class="nt">overheadFactor</span><span class="p">:</span><span class="w"> </span><span class="s">"1"</span><span class="w">     </span><span class="c1"># the HPA has no memory target</span>
-<a id="__codelineno-0-70" name="__codelineno-0-70" href="#__codelineno-0-70"></a><span class="w">        </span><span class="nt">limit</span><span class="p">:</span>
-<a id="__codelineno-0-71" name="__codelineno-0-71" href="#__codelineno-0-71"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">keepLimit</span><span class="w">          </span><span class="c1"># the container's own limit...</span>
-<a id="__codelineno-0-72" name="__codelineno-0-72" href="#__codelineno-0-72"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200Mi</span>
-<a id="__codelineno-0-73" name="__codelineno-0-73" href="#__codelineno-0-73"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">guard</span><span class="w">              </span><span class="c1"># ...raised to the request it fell below</span>
-<a id="__codelineno-0-74" name="__codelineno-0-74" href="#__codelineno-0-74"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
-<a id="__codelineno-0-75" name="__codelineno-0-75" href="#__codelineno-0-75"></a><span class="w">  </span><span class="nt">observedResources</span><span class="p">:</span><span class="w">                </span><span class="c1"># what the workload actually ran with</span>
-<a id="__codelineno-0-76" name="__codelineno-0-76" href="#__codelineno-0-76"></a><span class="w">    </span><span class="nt">app</span><span class="p">:</span>
-<a id="__codelineno-0-77" name="__codelineno-0-77" href="#__codelineno-0-77"></a><span class="w">      </span><span class="nt">cpuRequest</span><span class="p">:</span><span class="w"> </span><span class="s">"1"</span>
-<a id="__codelineno-0-78" name="__codelineno-0-78" href="#__codelineno-0-78"></a><span class="w">      </span><span class="nt">memoryRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
-<a id="__codelineno-0-79" name="__codelineno-0-79" href="#__codelineno-0-79"></a><span class="w">      </span><span class="nt">cpuLimit</span><span class="p">:</span><span class="w"> </span><span class="s">"2"</span>
-<a id="__codelineno-0-80" name="__codelineno-0-80" href="#__codelineno-0-80"></a><span class="w">      </span><span class="nt">memoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200Mi</span>
-<a id="__codelineno-0-81" name="__codelineno-0-81" href="#__codelineno-0-81"></a><span class="w">    </span><span class="nt">istio-proxy</span><span class="p">:</span>
-<a id="__codelineno-0-82" name="__codelineno-0-82" href="#__codelineno-0-82"></a><span class="w">      </span><span class="nt">init</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                    </span><span class="c1"># init or sidecar container</span>
-<a id="__codelineno-0-83" name="__codelineno-0-83" href="#__codelineno-0-83"></a><span class="w">      </span><span class="nt">cpuRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
-<a id="__codelineno-0-84" name="__codelineno-0-84" href="#__codelineno-0-84"></a><span class="w">      </span><span class="nt">memoryRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span><span class="nt">observedAt</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2026-05-01T12:34:56Z</span><span class="w">  </span><span class="c1"># when containers was last computed</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">  </span><span class="nt">servableUntil</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2026-05-01T13:04:56Z</span><span class="w"> </span><span class="c1"># the webhook injects containers until then:</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">                                    </span><span class="c1"># observedAt + the staleness budget, or</span>
+<a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="w">                                    </span><span class="c1"># + the retention window when departed or</span>
+<a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a><span class="w">                                    </span><span class="c1"># Conflicted</span>
+<a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="w">  </span><span class="nt">outcome</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Computed</span><span class="w">                 </span><span class="c1"># the last pass: Computed, NoData, TooYoung,</span>
+<a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a><span class="w">                                    </span><span class="c1"># FetchFailed or Conflicted; unset = not decided yet.</span>
+<a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a><span class="w">                                    </span><span class="c1"># Every outcome but Computed keeps containers</span>
+<a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a><span class="w">  </span><span class="nt">computedBy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">production-rightsizing</span><span class="w"> </span><span class="c1"># the Policy that computed containers; they are</span>
+<a id="__codelineno-0-25" name="__codelineno-0-25" href="#__codelineno-0-25"></a><span class="w">                                    </span><span class="c1"># injected only into that Policy's pods</span>
+<a id="__codelineno-0-26" name="__codelineno-0-26" href="#__codelineno-0-26"></a><span class="w">  </span><span class="nt">departed</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">                   </span><span class="c1"># true = retained for an identity with no live</span>
+<a id="__codelineno-0-27" name="__codelineno-0-27" href="#__codelineno-0-27"></a><span class="w">                                    </span><span class="c1"># member, served for the retention window</span>
+<a id="__codelineno-0-28" name="__codelineno-0-28" href="#__codelineno-0-28"></a><span class="w">  </span><span class="nt">containers</span><span class="p">:</span>
+<a id="__codelineno-0-29" name="__codelineno-0-29" href="#__codelineno-0-29"></a><span class="w">    </span><span class="nt">app</span><span class="p">:</span>
+<a id="__codelineno-0-30" name="__codelineno-0-30" href="#__codelineno-0-30"></a><span class="w">      </span><span class="nt">cpuRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">314m</span>
+<a id="__codelineno-0-31" name="__codelineno-0-31" href="#__codelineno-0-31"></a><span class="w">      </span><span class="nt">memoryRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
+<a id="__codelineno-0-32" name="__codelineno-0-32" href="#__codelineno-0-32"></a><span class="w">      </span><span class="nt">cpuLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">628m</span>
+<a id="__codelineno-0-33" name="__codelineno-0-33" href="#__codelineno-0-33"></a><span class="w">      </span><span class="nt">memoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
+<a id="__codelineno-0-34" name="__codelineno-0-34" href="#__codelineno-0-34"></a><span class="w">      </span><span class="nt">removeCpuLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">         </span><span class="c1"># true when the policy says NoLimit</span>
+<a id="__codelineno-0-35" name="__codelineno-0-35" href="#__codelineno-0-35"></a><span class="w">      </span><span class="nt">removeMemoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-0-36" name="__codelineno-0-36" href="#__codelineno-0-36"></a><span class="w">  </span><span class="nt">trace</span><span class="p">:</span><span class="w">                            </span><span class="c1"># how each container's values were derived</span>
+<a id="__codelineno-0-37" name="__codelineno-0-37" href="#__codelineno-0-37"></a><span class="w">    </span><span class="nt">app</span><span class="p">:</span>
+<a id="__codelineno-0-38" name="__codelineno-0-38" href="#__codelineno-0-38"></a><span class="w">      </span><span class="nt">cpu</span><span class="p">:</span>
+<a id="__codelineno-0-39" name="__codelineno-0-39" href="#__codelineno-0-39"></a><span class="w">        </span><span class="nt">request</span><span class="p">:</span><span class="w">                    </span><span class="c1"># the stages that ran, in order</span>
+<a id="__codelineno-0-40" name="__codelineno-0-40" href="#__codelineno-0-40"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">percentile</span><span class="w">         </span><span class="c1"># usage percentile of the busiest pod</span>
+<a id="__codelineno-0-41" name="__codelineno-0-41" href="#__codelineno-0-41"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">227500u</span>
+<a id="__codelineno-0-42" name="__codelineno-0-42" href="#__codelineno-0-42"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">headroom</span><span class="w">           </span><span class="c1"># + headroom, rounded up</span>
+<a id="__codelineno-0-43" name="__codelineno-0-43" href="#__codelineno-0-43"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">228m</span>
+<a id="__codelineno-0-44" name="__codelineno-0-44" href="#__codelineno-0-44"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">clamp</span><span class="w">              </span><span class="c1"># after minAllowed/maxAllowed</span>
+<a id="__codelineno-0-45" name="__codelineno-0-45" href="#__codelineno-0-45"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">228m</span>
+<a id="__codelineno-0-46" name="__codelineno-0-46" href="#__codelineno-0-46"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">coordination</span><span class="w">       </span><span class="c1"># only when an autoscaler shapes it</span>
+<a id="__codelineno-0-47" name="__codelineno-0-47" href="#__codelineno-0-47"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">314m</span><span class="w">               </span><span class="c1"># re-clamped: the final request</span>
+<a id="__codelineno-0-48" name="__codelineno-0-48" href="#__codelineno-0-48"></a><span class="w">          </span><span class="nt">facts</span><span class="p">:</span>
+<a id="__codelineno-0-49" name="__codelineno-0-49" href="#__codelineno-0-49"></a><span class="w">            </span><span class="nt">overheadFactor</span><span class="p">:</span><span class="w"> </span><span class="s">"1.375"</span><span class="w"> </span><span class="c1"># 110 / HPA target (80%)</span>
+<a id="__codelineno-0-50" name="__codelineno-0-50" href="#__codelineno-0-50"></a><span class="w">        </span><span class="nt">limit</span><span class="p">:</span>
+<a id="__codelineno-0-51" name="__codelineno-0-51" href="#__codelineno-0-51"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">requestsLimitsRatio</span>
+<a id="__codelineno-0-52" name="__codelineno-0-52" href="#__codelineno-0-52"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">628m</span>
+<a id="__codelineno-0-53" name="__codelineno-0-53" href="#__codelineno-0-53"></a><span class="w">          </span><span class="nt">facts</span><span class="p">:</span>
+<a id="__codelineno-0-54" name="__codelineno-0-54" href="#__codelineno-0-54"></a><span class="w">            </span><span class="nt">ratio</span><span class="p">:</span><span class="w"> </span><span class="s">"2"</span>
+<a id="__codelineno-0-55" name="__codelineno-0-55" href="#__codelineno-0-55"></a><span class="w">      </span><span class="nt">memory</span><span class="p">:</span>
+<a id="__codelineno-0-56" name="__codelineno-0-56" href="#__codelineno-0-56"></a><span class="w">        </span><span class="nt">request</span><span class="p">:</span>
+<a id="__codelineno-0-57" name="__codelineno-0-57" href="#__codelineno-0-57"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">percentile</span>
+<a id="__codelineno-0-58" name="__codelineno-0-58" href="#__codelineno-0-58"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="s">"183500800"</span>
+<a id="__codelineno-0-59" name="__codelineno-0-59" href="#__codelineno-0-59"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">oomFloor</span><span class="w">           </span><span class="c1"># only after a recent OOM kill</span>
+<a id="__codelineno-0-60" name="__codelineno-0-60" href="#__codelineno-0-60"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">240Mi</span>
+<a id="__codelineno-0-61" name="__codelineno-0-61" href="#__codelineno-0-61"></a><span class="w">          </span><span class="nt">facts</span><span class="p">:</span>
+<a id="__codelineno-0-62" name="__codelineno-0-62" href="#__codelineno-0-62"></a><span class="w">            </span><span class="nt">determined</span><span class="p">:</span><span class="w"> </span><span class="s">"true"</span><span class="w">      </span><span class="c1"># the floor set the final request</span>
+<a id="__codelineno-0-63" name="__codelineno-0-63" href="#__codelineno-0-63"></a><span class="w">            </span><span class="nt">anchor</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">killedAtLimit</span>
+<a id="__codelineno-0-64" name="__codelineno-0-64" href="#__codelineno-0-64"></a><span class="w">            </span><span class="nt">killedAtLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200Mi</span>
+<a id="__codelineno-0-65" name="__codelineno-0-65" href="#__codelineno-0-65"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">headroom</span>
+<a id="__codelineno-0-66" name="__codelineno-0-66" href="#__codelineno-0-66"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
+<a id="__codelineno-0-67" name="__codelineno-0-67" href="#__codelineno-0-67"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">clamp</span>
+<a id="__codelineno-0-68" name="__codelineno-0-68" href="#__codelineno-0-68"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
+<a id="__codelineno-0-69" name="__codelineno-0-69" href="#__codelineno-0-69"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">coordination</span>
+<a id="__codelineno-0-70" name="__codelineno-0-70" href="#__codelineno-0-70"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
+<a id="__codelineno-0-71" name="__codelineno-0-71" href="#__codelineno-0-71"></a><span class="w">          </span><span class="nt">facts</span><span class="p">:</span>
+<a id="__codelineno-0-72" name="__codelineno-0-72" href="#__codelineno-0-72"></a><span class="w">            </span><span class="nt">overheadFactor</span><span class="p">:</span><span class="w"> </span><span class="s">"1"</span><span class="w">     </span><span class="c1"># the HPA has no memory target</span>
+<a id="__codelineno-0-73" name="__codelineno-0-73" href="#__codelineno-0-73"></a><span class="w">        </span><span class="nt">limit</span><span class="p">:</span>
+<a id="__codelineno-0-74" name="__codelineno-0-74" href="#__codelineno-0-74"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">keepLimit</span><span class="w">          </span><span class="c1"># the container's own limit...</span>
+<a id="__codelineno-0-75" name="__codelineno-0-75" href="#__codelineno-0-75"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200Mi</span>
+<a id="__codelineno-0-76" name="__codelineno-0-76" href="#__codelineno-0-76"></a><span class="w">        </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">stage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">guard</span><span class="w">              </span><span class="c1"># ...raised to the request it fell below</span>
+<a id="__codelineno-0-77" name="__codelineno-0-77" href="#__codelineno-0-77"></a><span class="w">          </span><span class="nt">value</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">264Mi</span>
+<a id="__codelineno-0-78" name="__codelineno-0-78" href="#__codelineno-0-78"></a><span class="w">  </span><span class="nt">observedResources</span><span class="p">:</span><span class="w">                </span><span class="c1"># what the workload actually ran with</span>
+<a id="__codelineno-0-79" name="__codelineno-0-79" href="#__codelineno-0-79"></a><span class="w">    </span><span class="nt">app</span><span class="p">:</span>
+<a id="__codelineno-0-80" name="__codelineno-0-80" href="#__codelineno-0-80"></a><span class="w">      </span><span class="nt">cpuRequest</span><span class="p">:</span><span class="w"> </span><span class="s">"1"</span>
+<a id="__codelineno-0-81" name="__codelineno-0-81" href="#__codelineno-0-81"></a><span class="w">      </span><span class="nt">memoryRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
+<a id="__codelineno-0-82" name="__codelineno-0-82" href="#__codelineno-0-82"></a><span class="w">      </span><span class="nt">cpuLimit</span><span class="p">:</span><span class="w"> </span><span class="s">"2"</span>
+<a id="__codelineno-0-83" name="__codelineno-0-83" href="#__codelineno-0-83"></a><span class="w">      </span><span class="nt">memoryLimit</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">200Mi</span>
+<a id="__codelineno-0-84" name="__codelineno-0-84" href="#__codelineno-0-84"></a><span class="w">    </span><span class="nt">istio-proxy</span><span class="p">:</span>
+<a id="__codelineno-0-85" name="__codelineno-0-85" href="#__codelineno-0-85"></a><span class="w">      </span><span class="nt">init</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">                    </span><span class="c1"># init or sidecar container</span>
+<a id="__codelineno-0-86" name="__codelineno-0-86" href="#__codelineno-0-86"></a><span class="w">      </span><span class="nt">cpuRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">100m</span>
+<a id="__codelineno-0-87" name="__codelineno-0-87" href="#__codelineno-0-87"></a><span class="w">      </span><span class="nt">memoryRequest</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128Mi</span>
 </code></pre></div>
 <p><code>removeCpuLimit</code> / <code>removeMemoryLimit</code> carry the Policy's <code>NoLimit</code> intent, since a nil <code>cpuLimit</code>/<code>memoryLimit</code> alone cannot distinguish "leave alone" from "remove".</p>
 <p><code>computedBy</code> is written with every <code>Computed</code> outcome and kept by every other one, like <code>containers</code>. It differs from <code>spec.policy</code> only after another Policy adopted the identity and before that Policy computed a Recommendation of its own; the webhook then withholds <code>containers</code> from every pod (see <a href="#a-recommendation-is-served-only-to-its-policy">above</a>).</p>
@@ -2373,7 +2432,7 @@
 <p>No Policy governs a Conflicted identity until its members agree again:</p>
 <ul>
 <li>The controller does not rewrite its <code>WorkloadRecommendation</code>'s <code>spec.policy</code> or label, does not recompute it and applies nothing to its pods. It only records <code>status.outcome: Conflicted</code> (and, since its members are live, clears <code>status.departed</code>).</li>
-<li>The stored Recommendation stays frozen, exempt from the staleness check like a departed one, and kept by the sweep for the same retention window. The webhook injects it only into pods of the Policy that computed it (counted as <code>retained</code>); pods of the other Policy are admitted unchanged (counted as <code>other-policy</code>).</li>
+<li>The stored Recommendation stays frozen, served like a departed one's for the retention window past its last computation, and kept by the sweep for that window. The webhook injects it only into pods of the Policy that computed it (counted as <code>retained</code>); pods of the other Policy are admitted unchanged (counted as <code>other-policy</code>).</li>
 <li>When the conflict resolves, the Policy that governs again adopts the object. If that is the other Policy, the frozen values were never computed for its pods and stay withheld until it computes its own.</li>
 <li>It counts towards neither Policy's <code>k8s_sustain_policy_workload_count</code>, and loses the controller's health series (pods, stale pods, retry state). The dashboard lists it once, in the Conflicted state, under no Policy.</li>
 <li>The controller logs every reconcile of a party Policy until the conflict is resolved. Fix it by aligning the members' policy annotations or giving them distinct <code>k8s.sustain.io/owner-name</code> values.</li>
@@ -2381,12 +2440,12 @@
 <h2 id="retention-for-ephemeral-workloads">Retention for ephemeral workloads<a class="headerlink" href="#retention-for-ephemeral-workloads" title="Permanent link">&para;</a></h2>
 <p>By default a <code>WorkloadRecommendation</code> is deleted as soon as no Policy governs its identity. Ephemeral workloads need a different rule, so the sweep distinguishes two cases:</p>
 <ul>
-<li><strong>The identity is Departed</strong> — no live member left: the objects were deleted (bare pods, TTL- or hook-deleted Job) or the only one is a Job in a terminal state. The recommendation is kept for the retention window (<code>--recommendation-retention</code> / Helm <code>controller.recommendationRetention</code>, default <code>168h</code>). The dashboard shows it as a <em>Departed</em> identity. Set <code>0</code> for immediate cleanup. A Conflicted identity's frozen recommendation is kept for the same window.</li>
-<li><strong>The identity still has live members but opted out</strong> (annotation removed, policy no longer matching, namespace excluded) — it is swept on the next reconcile regardless of retention. Objects created in the last 10 minutes are never swept.</li>
+<li><strong>The identity is Departed</strong> — no live member left: the objects were deleted (bare pods, TTL- or hook-deleted Job) or the only one is a Job in a terminal state. The recommendation is kept, and served, for the retention window (<code>--recommendation-retention</code> / Helm <code>controller.recommendationRetention</code>, default <code>168h</code>, greater than zero) past its last computation. The dashboard shows it as a <em>Departed</em> identity. A Conflicted identity's frozen recommendation is kept for the same window.</li>
+<li><strong>The identity still has live members but opted out</strong> (annotation removed, policy no longer matching, namespace excluded) — it is swept on the next reconcile regardless of retention. Objects created after that reconcile read its inventory, or in the 10 minutes before, are never swept.</li>
 </ul>
 <p><strong>Retention decides whether recurring ephemeral workloads are sized at admission.</strong> If the object is deleted between two runs, the next run cold-starts on template resources. Retention must exceed the longest gap between runs of the same identity: the <code>168h</code> default covers a weekly job; a monthly job needs more.</p>
 <p><strong>The clock starts late.</strong> A retained identity keeps being recomputed, and <code>observedAt</code> keeps advancing, while its samples are still inside the query window. Retention only starts counting once they age out, so a departed recommendation lives roughly <strong><code>window + retention</code></strong> — about 14 days with a <code>168h</code> window and the default retention. Budget object count and webhook memory against that figure.</p>
-<p><strong>Retained recommendations bypass the staleness check.</strong> Each reconcile records a departed identity's decision with <code>status.departed: true</code>. The webhook serves a departed recommendation regardless of <code>observedAt</code> age — counted as <code>retained</code> rather than <code>hit</code> — until the retention window (checked against the webhook's own <code>--recommendation-retention</code>, rendered from the same Helm value) runs out; after that it counts as <code>stale</code>. The flag is cleared as soon as the identity has a live member again, and is only set by a reconcile whose inventory read succeeded, so a workload the controller is merely failing to refresh still trips the staleness check.</p>
+<p><strong>Retained recommendations are served for the retention window.</strong> Each reconcile records a departed identity's decision with <code>status.departed: true</code>, which stamps <code>servableUntil</code> at its last computation plus the retention window, rather than the staleness budget. The webhook serves it — counted as <code>retained</code> rather than <code>hit</code> — until then; after that it counts as <code>stale</code>. The flag is cleared, and the stamp brought back to the staleness budget, as soon as the identity has a live member again; it is only set by a reconcile whose inventory read succeeded, so a workload the controller is merely failing to refresh still goes stale.</p>
 <p><strong>Cost depends on whether the identity's name is stable.</strong> The webhook's informer caches every retained object:</p>
 <table>
 <thead>
@@ -2430,13 +2489,13 @@
 <tr>
 <td>Fresh</td>
 <td><code>hit</code></td>
-<td>Computed by the pod's Policy, <code>observedAt</code> within 30 minutes</td>
+<td>Computed by the pod's Policy, before its <code>servableUntil</code></td>
 <td>Injected</td>
 </tr>
 <tr>
 <td>Retained</td>
 <td><code>retained</code></td>
-<td>Computed by the pod's Policy for a departed or Conflicted identity, within the retention window</td>
+<td>Computed by the pod's Policy for a departed or Conflicted identity, before its <code>servableUntil</code></td>
 <td>Injected</td>
 </tr>
 <tr>
@@ -2448,7 +2507,7 @@
 <tr>
 <td>Stale</td>
 <td><code>stale</code></td>
-<td><code>observedAt</code> older than 30 minutes, or than the retention window when retained. The controller has fallen behind (stuck reconcile, backlog, or Prometheus unreachable from the controller)</td>
+<td>Past its <a href="#how-long-a-recommendation-is-served"><code>servableUntil</code></a>, or none stamped. The controller has fallen behind (stuck reconcile, backlog, or Prometheus unreachable from the controller)</td>
 <td>Admitted unchanged</td>
 </tr>
 <tr>
@@ -2472,16 +2531,12 @@
 </tbody>
 </table>
 <p>A read that fails (apiserver, RBAC or cache problem) counts as <code>error</code> and admits the pod unchanged.</p>
-<div class="admonition warning">
-<p class="admonition-title">Keep <code>--reconcile-interval</code> well below 30 minutes</p>
-<p>The 30-minute staleness window is fixed. The controller refreshes <code>observedAt</code> on each reconcile, so with <code>--reconcile-interval</code> at or above 30m every recommendation goes stale between reconciles and new pods start on template resources.</p>
-</div>
 <p>The webhook never sees pods in the release namespace, <code>kube-system</code>, <code>kube-public</code>, or any namespace in the Helm value <code>excludedNamespaces</code>: the <code>MutatingWebhookConfiguration</code>'s <code>namespaceSelector</code> excludes them, so no annotation there has any effect at admission.</p>
 <h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
 <ul>
 <li><code>kubectl get wlrec -A</code> lists every cached recommendation.</li>
 <li><code>kubectl describe wlrec deployment-web -n example</code> shows the full status for one workload.</li>
-<li><code>status.observedAt</code> shows how fresh the data the webhook would serve is, and <code>status.computedBy</code> which Policy's pods it is served to.</li>
+<li><code>status.observedAt</code> shows when the data the webhook would serve was computed, <code>status.servableUntil</code> until when it serves it, and <code>status.computedBy</code> which Policy's pods it is served to.</li>
 <li><code>status.trace</code> shows why a container has the values it has; the dashboard's workload detail page renders it as a table.</li>
 </ul>
 <h2 id="rbac">RBAC<a class="headerlink" href="#rbac" title="Permanent link">&para;</a></h2>

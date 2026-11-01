@@ -2352,17 +2352,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#freshness-constants" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Freshness constants
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#startup-probe-budget" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2402,6 +2391,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#servable-until" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servable until
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#gc-preconditions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2413,21 +2413,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#freshness-grace" class="md-nav__link">
+  <a href="#sweep-grace" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Freshness grace
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#departed-waiver-bound" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Departed waiver bound
+        Sweep grace
       
     </span>
   </a>
@@ -3112,17 +3101,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#freshness-constants" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Freshness constants
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#startup-probe-budget" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3162,6 +3140,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#servable-until" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Servable until
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#gc-preconditions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3173,21 +3162,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#freshness-grace" class="md-nav__link">
+  <a href="#sweep-grace" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Freshness grace
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#departed-waiver-bound" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Departed waiver bound
+        Sweep grace
       
     </span>
   </a>
@@ -3376,7 +3354,7 @@ runs. The full posture and the verification commands are documented in
 <a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>│   │   └── recommendertest/  # In-memory inputs adapter for tests
 <a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a>│   ├── version/           # Build version
 <a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a>│   ├── webhook/           # Admission webhook HTTP handler
-<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>│   ├── wlrcache/          # WorkloadRecommendation lifecycle: every write (Request, Ensure, Record) and verdict (Read, Held, Expired)
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a>│   ├── wlrcache/          # WorkloadRecommendation lifecycle: every write (Request, Ensure, Record), verdict (Read, Held, Expired) and delete (Sweep, Release, Reap)
 <a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a>│   └── workload/          # Applying a Recommendation: the Policy's apply choices, the classified apply result, container injection (requests never above limits), the patcher (one rule per kind), template/owner-ref helpers
 <a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a>├── charts/
 <a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a>│   ├── k8s-sustain/          # Operator chart
@@ -3953,13 +3931,13 @@ transport-related ones:</p>
   <code>charts/k8s-sustain/tests/prometheus-auth_test.yaml</code>.</li>
 </ul>
 <h3 id="governance">Governance<a class="headerlink" href="#governance" title="Permanent link">&para;</a></h3>
-<p><code>internal/governance</code> decides, for one pod template or pod, the identity it reports into, the Policy it opts into and at which level, and the governing Policy or why there is none. Its interface is one call, <code>governance.Decide(ctx, subject, reader)</code>. A subject is a workload member's pod template (<code>PodTemplate</code>), a pod (<code>Pod</code>: the webhook's, the OOM watcher's, the inventory's bare pods) or a Departed identity (<code>Departed</code>, governed by the Policy its <code>WorkloadRecommendation</code> names; it has no labels to match, so its namespace is checked and its Policy's selector must parse, as for a live member). The identity is a <code>promclient.WorkloadIdentity</code>, the key the inventory, the OOM cache, the WorkloadRecommendation and the recording rules all use, and a governing decision carries the mode the Policy manages the identity's kind in. The <code>Reader</code> port supplies what the subject does not carry: the Policies (a <code>governance.Policies</code>: every Policy with its label selector compiled, and the excluded namespaces), a pod's owner, a workload's own annotations and a Namespace's. Each caller adapts it to its own reads: the inventory serves the Policies it listed and memoised Namespaces, the webhook lists Policies from its informer cache and reads the owner chain through its TTL caches, the OOM watcher reads through the manager's client and leaves a kill unresolved when the owner lookup fails. All three list Policies through <code>governance.PolicyLister</code>, which compiles a Policy's selector once per version of it (UID and resourceVersion), and every caller keeps one lister for the process, so an unchanged Policy set is never recompiled: the webhook and the OOM watcher, which list on every admission and every kill, and the controller and the dashboard, which hand theirs to every snapshot they take (<code>inventory.Options.Policies</code>, <code>TakeForPolicy</code>). The lister lists without deep copies (<code>client.UnsafeDisableDeepCopy</code>), so a Policy it returns shares its fields with the informer cache's object and with concurrent decisions: governance and every caller of <code>Decide</code> treat it as read-only.</p>
+<p><code>internal/governance</code> decides, for one pod template or pod, the identity it reports into, the Policy it opts into and at which level, and the governing Policy or why there is none. Its interface is one call, <code>governance.Decide(ctx, subject, reader)</code>. A subject is a workload member's pod template (<code>PodTemplate</code>), a pod (<code>Pod</code>: the webhook's, the OOM watcher's, the inventory's bare pods) or a Departed identity (<code>Departed</code>, governed by the Policy its <code>WorkloadRecommendation</code> names; it has no labels to match, so its namespace is checked and its Policy's selector must parse, as for a live member). The identity is a <code>promclient.WorkloadIdentity</code>, the key the inventory, the OOM cache, the WorkloadRecommendation and the recording rules all use, and a governing decision carries the mode the Policy manages the identity's kind in. The <code>Reader</code> port supplies what the subject does not carry: the Policies (a <code>governance.Policies</code>: every Policy with its label selector compiled, and the excluded namespaces), a pod's owner, a workload's own annotations and a Namespace's. Each caller adapts it to its own reads: the inventory serves the Policies it listed and memoised Namespaces, the webhook lists Policies from its informer cache and reads the owner chain through its TTL caches, the OOM watcher reads through the manager's client and leaves a kill unresolved when the owner lookup fails. All three list Policies through <code>governance.PolicyLister</code>, which compiles a Policy's selector once per version of it (UID and resourceVersion), and every caller keeps one lister for the process, so an unchanged Policy set is never recompiled: the webhook and the OOM watcher, which list on every admission and every kill, and the controller and the dashboard, which hand theirs to every snapshot they take (<code>inventory.Basis</code>). The lister lists without deep copies (<code>client.UnsafeDisableDeepCopy</code>), so a Policy it returns shares its fields with the informer cache's object and with concurrent decisions: governance and every caller of <code>Decide</code> treat it as read-only.</p>
 <p>Behind it: the opt-in walk (pod template, then workload, then Namespace; an opt-out or a non-empty policy decides, an empty value falls through), each level read only when every more specific one is silent and a pod's owner only when the walk needs it; the pre-gate, which before the first read checks that some Policy accepts the subject's namespace and labels by the same rule as the full decision (a Policy whose selector does not parse counts as accepting, so opting into it is refused <code>selector-invalid</code> at every level rather than <code>no-policy-selects</code> at some); the Policy's consent (it exists, the namespace is neither excluded nor unselected, the label selector is valid and matches the pod template's labels, the kind is managed); and the owner-name override, applied there and nowhere else.</p>
 <p>A governance rule changes in this module and its contract table (<code>internal/governance/governance_test.go</code>, a map-backed reader that records its reads), never in a caller.</p>
 <h3 id="controller">Controller<a class="headerlink" href="#controller" title="Permanent link">&para;</a></h3>
 <h4 id="identity-inventory">Identity inventory<a class="headerlink" href="#identity-inventory" title="Permanent link">&para;</a></h4>
-<p><code>internal/inventory</code> is the one place workload objects become identities. Its interface is one call, <code>inventory.Take(ctx, reader, Options)</code>, plus <code>inventory.TakeForPolicy(ctx, reader, policy, excludedNamespaces, lister)</code>, which narrows it to what a Policy can govern (its selector's namespaces and the kinds it manages, reading nothing for a Policy that manages none). Both return a <code>Snapshot</code> of <code>Identity</code> values (key, live members each with the Policy governing it, union containers, <code>Since</code>, governing Policy or <code>Conflicted</code>, stored <code>WorkloadRecommendation</code>). Behind it: listing every kind in scope (a kind the cluster does not serve, such as Argo Rollouts without its CRD, has no identities rather than failing the snapshot), skipping CronJob-owned Jobs and finished standalone Jobs, owner-name and bare-pod grouping, each member's <a href="#governance">governance decision</a> (<code>governance.Decide</code> on its pod template, reading a Namespace only when the object's own annotations leave it undecided), the Conflicted rule, and attaching each stored <code>WorkloadRecommendation</code> (which is what makes a Departed identity).</p>
-<p>The controller takes one <code>TakeForPolicy</code> snapshot per reconcile through its informer cache and works on <code>Snapshot.GovernedBy(policy)</code>. Every member of an identity shares its namespace and kind, so the narrowing never splits one, and every identity in it has a kind the Policy manages. The dashboard takes snapshots through its uncached client, narrowed to what each view shows: one namespace and kind for a detail page, <code>TakeForPolicy</code> for a Policy's list, everything for <code>/api/workloads</code>.</p>
+<p><code>internal/inventory</code> is the one place workload objects become identities. Its interface is one call, <code>inventory.Take(ctx, reader, Options)</code>, plus <code>inventory.TakeForPolicy(ctx, reader, policy, Basis)</code>, which narrows it to what a Policy can govern (its selector's namespaces and the kinds it manages, reading nothing for a Policy that manages none). A <code>Basis</code> is what a reader decides and dates every snapshot with, its excluded namespaces, its Policy lister and its clock, the reader's own: a snapshot without a clock fails rather than fall back on the wall clock; <code>Options</code> is a <code>Basis</code> and the namespaces and kinds that narrow the snapshot, which <code>TakeForPolicy</code> takes from the Policy. Both return a <code>Snapshot</code>, dated <code>TakenAt</code> by the Basis's clock when it began reading, of <code>Identity</code> values (key, live members each with the Policy governing it, union containers, <code>Since</code>, governing Policy or <code>Conflicted</code>, stored <code>WorkloadRecommendation</code>). Behind it: listing every kind in scope (a kind the cluster does not serve, such as Argo Rollouts without its CRD, has no identities rather than failing the snapshot), skipping CronJob-owned Jobs and finished standalone Jobs, owner-name and bare-pod grouping, each member's <a href="#governance">governance decision</a> (<code>governance.Decide</code> on its pod template, reading a Namespace only when the object's own annotations leave it undecided), the Conflicted rule, and attaching each stored <code>WorkloadRecommendation</code> (which is what makes a Departed identity).</p>
+<p>The controller takes one <code>TakeForPolicy</code> snapshot per reconcile through its informer cache, dated by <code>PolicyReconciler.Clock</code>, and works on <code>Snapshot.GovernedBy(policy)</code>. Every member of an identity shares its namespace and kind, so the narrowing never splits one, and every identity in it has a kind the Policy manages. The dashboard takes snapshots through its uncached client, dated by <code>Server.Clock</code>, narrowed to what each view shows: one namespace and kind for a detail page, <code>TakeForPolicy</code> for a Policy's list, everything for <code>/api/workloads</code>.</p>
 <p>A new identity rule goes in the inventory and its contract tests (<code>internal/inventory/inventory_test.go</code>), never in a caller.</p>
 <h4 id="informer-lag">Informer lag<a class="headerlink" href="#informer-lag" title="Permanent link">&para;</a></h4>
 <p>The controller's reads go through a watch-populated informer cache, so a <code>WorkloadRecommendation</code> that the pass's claim created moments earlier in the same reconcile is often not yet visible, and nothing watches <code>WorkloadRecommendation</code> to re-trigger a reconcile when it becomes visible. The work-list is built from the snapshot's identities, not from the listed objects: a live identity whose object the cache cannot see yet is computed from its members' containers and dated by its earliest member, and its decision is recorded into the object <code>wlrcache.Ensure</code> returned, never into one re-read from the cache. Without that a freshly matched workload would wait a full <code>--reconcile-interval</code> before being computed.</p>
@@ -3971,11 +3949,11 @@ transport-related ones:</p>
 <li>the containers recommended (<code>ContainersOf</code>, where the controller and Simulations apply <code>excludeInitContainers</code>): the identity's, its init containers too unless the spec excludes them, which also sizes the fetch; an identity with no containers at all (one the inventory has not seen) is recommended for every container its inputs report;</li>
 <li>the autoscaler: each member the identity's containers come from (<code>Identity.Contributors</code>) is looked up under its own name, and the first in name order that has one shapes the Recommendation (<code>ForIdentity</code>); a departed identity has none. The reads run while the inputs are fetched, each namespace's in order in a goroutine of its own, a few namespaces at once (<code>autoscalerReadConcurrency</code>), and the assembly waits for them before it returns. <code>NamespacedSnapshot</code> caches no failed read, so the assembly stops reading a namespace once a read of it failed: every identity of that namespace is recommended uncoordinated, at the cost of one failed read and one log line per namespace;</li>
 <li>the spec's resources with every default explicit (<code>WithDefaults</code>: the window, the percentile and headroom unless the request is kept, <code>keepLimit</code> when no strategy is set), which the fetch and the computation both use and a Simulation returns as its effective settings;</li>
-<li>one instant per batch, read from <code>now</code> once, before the fetch, and handed to it: every query is evaluated as of it, and the live decorator merges only the kills at or before it, so the age gate, the inputs and the live OOM window are judged as of one instant. The caller owns the clock: the controller passes <code>PolicyReconciler.Clock</code>, the dashboard <code>Server.Clock</code>. Nil is the wall clock on both, and a test fixes the instant with a fake one.</li>
+<li>one instant per batch, read from <code>now</code> once, before the fetch, and handed to it: every query is evaluated as of it, and the live decorator merges only the kills at or before it, so the age gate, the inputs and the live OOM window are judged as of one instant. The caller owns the clock: the controller passes <code>PolicyReconciler.Clock</code>, the dashboard <code>Server.Clock</code>. Both readers must hold one, and a test fixes the instant with a fake one.</li>
 </ul>
 <p><code>Request</code> has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young) and the identity it fetches for, which <code>ComputeRange</code> reads the identity's history with. The dashboard never reads a signal's values itself.</p>
 <h4 id="the-policy-pass">The Policy pass<a class="headerlink" href="#the-policy-pass" title="Permanent link">&para;</a></h4>
-<p><code>Reconcile</code> reads the Policy, handles deletion and the finalizer, takes the <code>inventory.TakeForPolicy</code> snapshot, and runs one pass over it (<code>runPass</code> in <code>internal/controller/pass.go</code>). Everything after the pass consumes the <strong>report</strong> it returns, one entry per identity on the work-list (its key, whether it is departed, whether it was fetched and, if so, its outcome, whether its fetch resolved, whether a departed identity failed, one <code>applyResult</code> per live member, the Recommendation a live identity holds for the Policy after the pass, and what computing it found: its autoscaler, whether its members disagree on it, and the containers the OOM floor determined): <code>settle</code> hands the member results to the <a href="#apply-results-and-the-ledger">ledger</a> and returns how many identities failed and, per identity, how many members, the health tracker aggregates each live identity's health from the ledger, the <a href="#metric-series">series publisher</a> publishes what the report, the health and those counts describe, the sweep runs, <code>passCondition</code> derives the <code>Ready</code> condition from those counts, and the ledger schedules the requeue. The pass keeps no state between passes, and no step reads another's struct fields: each takes what it needs from the earlier steps' return values, in the order the pass calls them.</p>
+<p><code>Reconcile</code> reads the Policy, handles deletion and the finalizer, takes the <code>inventory.TakeForPolicy</code> snapshot, and runs one pass over it (<code>runPass</code> in <code>internal/controller/pass.go</code>). Everything after the pass consumes the <strong>report</strong> it returns, one entry per identity on the work-list (its key, whether it is departed, whether it was fetched and, if so, its outcome, whether its fetch resolved, whether a departed identity failed, one <code>applyResult</code> per live member, the Recommendation a live identity holds for the Policy after the pass, and what computing it found: its autoscaler, whether its members disagree on it, and the containers the OOM floor determined): <code>settle</code> hands the member results to the <a href="#apply-results-and-the-ledger">ledger</a> and returns how many identities failed and, per identity, how many members, the health tracker aggregates each live identity's health from the ledger, the <a href="#metric-series">series publisher</a> publishes what the report, the health and those counts describe, the <a href="#sweep-grace">sweep</a> runs against the snapshot, as of its <code>TakenAt</code>, <code>passCondition</code> derives the <code>Ready</code> condition from those counts, and the ledger schedules the requeue. The pass keeps no state between passes, and no step reads another's struct fields: each takes what it needs from the earlier steps' return values, in the order the pass calls them.</p>
 <ul>
 <li><strong>Work-list.</strong> The identities the Policy governs, taken from the inventory as they are: a departed one's containers come from its stored snapshot, and one without a snapshot is on it but not fetched (counted as <code>no-snapshot</code> in <code>wlr_refresh_total</code>), so it keeps its series, as every departed identity does, until its <code>WorkloadRecommendation</code> is swept. Each live member is a <code>workloadTarget</code> (<code>targetsOf</code>; a bare-pod identity's governed pods form one), and the <a href="#apply-results-and-the-ledger">ledger</a> is asked once, before the fetch, which members may run: backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out.</li>
 <li><strong>Claim.</strong> <code>wlrcache.Ensure</code> for every live identity, with its members' container union as the observed snapshot. It returns the object each decision is recorded into: the one <code>Ensure</code> wrote, or the one the inventory read for a departed identity. A failed claim is logged and kept for that identity alone.</li>
@@ -4053,9 +4031,7 @@ transport-related ones:</p>
 <p>Whether an admission requests anything is <code>wlrcache.ShouldRequest</code>: always when there is no object, and otherwise only to add to the snapshot of an object of the pod's Policy that is departed or has none, when the pod runs a container the snapshot lacks (existing entries are kept, so alternating container sets cannot churn it). A live identity's snapshot is the union of every member's containers, written by the controller's claim, which one pod's view would only flip back and forth. A request that loses the create race to another writer does nothing more: the next admission reads the winner's object. Only the absent case creates a stub: an undecided, nodata or stale object already exists, and a create would be a guaranteed no-op.</p>
 <p>The <code>k8s.sustain.io/stub</code> label is provenance, not control flow. The controller's own write path must <code>Create</code> before it can patch status (the status subresource discards status supplied at create), so every controller-written recommendation is transiently empty-status too.</p>
 <h4 id="read-verdict">Read verdict<a class="headerlink" href="#read-verdict" title="Permanent link">&para;</a></h4>
-<p>The webhook takes <code>wlrcache.Read</code>'s verdict on the object it read: a pure function of the object, the pod's resolved Policy and the time, returning one of a closed set (absent, undecided, nodata, withheld, stale, fresh, retained) mapped one-to-one onto the <code>source</code> label. It injects only when both <code>spec.policy</code> and <code>status.computedBy</code> are the pod's Policy: that keeps a Conflicted identity's frozen numbers out of the other Policy's pods, and keeps an identity moving between Policies from receiving numbers computed under the old one until the new one computes its own. A Conflicted object is exempt from the staleness gate like a departed one, bounded by the same retention window.</p>
-<h4 id="freshness-constants">Freshness constants<a class="headerlink" href="#freshness-constants" title="Permanent link">&para;</a></h4>
-<p>The refresh interval (<code>wlrcache.RefreshInterval</code>, 10m), the staleness window (<code>wlrcache.DefaultStaleness</code>, 30m) and the retention default (<code>wlrcache.DefaultRetention</code>, 168h, the default of both <code>--recommendation-retention</code> flags) live together in <code>internal/wlrcache</code>. The staleness window is <code>webhook.Handler.CacheStaleness</code> when set; it is not exposed as a flag or Helm value.</p>
+<p>The webhook takes <code>wlrcache.Read</code>'s verdict on the object it read: a pure function of the object, the pod's resolved Policy and the time, returning one of a closed set (absent, undecided, nodata, withheld, stale, fresh, retained) mapped one-to-one onto the <code>source</code> label. It injects only when both <code>spec.policy</code> and <code>status.computedBy</code> are the pod's Policy: that keeps a Conflicted identity's frozen numbers out of the other Policy's pods, and keeps an identity moving between Policies from receiving numbers computed under the old one until the new one computes its own. It injects only before the object's <code>status.servableUntil</code>, which the controller <a href="#servable-until">stamped</a>; the webhook holds no freshness setting.</p>
 <h4 id="startup-probe-budget">Startup probe budget<a class="headerlink" href="#startup-probe-budget" title="Permanent link">&para;</a></h4>
 <p>The webhook builds an informer
 cache before its HTTPS listener starts, and that build waits up to two minutes
@@ -4092,24 +4068,27 @@ while the <code>values.yaml</code> side still passes.</p>
 <p><code>internal/wlrcache</code> is the only code that writes a <code>WorkloadRecommendation</code> or judges one; callers never patch the object themselves. Its interface:</p>
 <ul>
 <li><code>Request(ctx, client, known, ref, policy, observed)</code> — the webhook's stub, or its snapshot refresh (<code>ShouldRequest</code> decides whether there is anything to do).</li>
-<li><code>Ensure(ctx, client, ref, policy, observed)</code> — the governing Policy's per-cycle claim on a live identity: create or adopt, replace the snapshot when it differs, clear <code>departed</code>. It returns the object as written.</li>
-<li><code>Record(ctx, client, known, Decision, now)</code> — the one status write per identity per cycle: the outcome, the Recommendation and trace for <code>Computed</code>, and the <code>departed</code> fact, into the object <code>Ensure</code> returned (or, for a departed or Conflicted identity, the one the inventory read). An unchanged decision costs no write, except the refresh of a <code>Computed</code> one's <code>observedAt</code> every <code>RefreshInterval</code>. A missing object is an error, never a silent no-op.</li>
-<li><code>Read(known, policy, now, Freshness)</code> — the <a href="#read-verdict">read verdict</a>.</li>
-<li><code>Expired(known, policy, Standing, now, retention)</code> — the sweep verdict: keep or delete, given where the identity stands in the reconcile's snapshot (governed, ungoverned, departed, Conflicted).</li>
+<li><code>Ensure(ctx, client, ref, policy, observed, Lifetimes)</code> — the governing Policy's per-cycle claim on a live identity: create or adopt, replace the snapshot when it differs, clear <code>departed</code>. It returns the object as written.</li>
+<li><code>Record(ctx, client, known, Decision, now, Lifetimes)</code> — the one status write per identity per cycle: the outcome, the Recommendation and trace for <code>Computed</code>, the <code>departed</code> fact and the <a href="#servable-until"><code>servableUntil</code></a> stamp, into the object <code>Ensure</code> returned (or, for a departed or Conflicted identity, the one the inventory read). <code>now</code> comes from <code>PolicyReconciler.Clock</code>, the clock that dates the pass's snapshot, so a test clock drives <code>observedAt</code> and <code>servableUntil</code>. An unchanged decision costs no write, except the refresh of a <code>Computed</code> one's <code>observedAt</code> every <code>RefreshInterval</code>. A missing object is an error, never a silent no-op.</li>
+<li><code>Read(known, policy, now)</code> — the <a href="#read-verdict">read verdict</a>.</li>
+<li><code>Expired(known, policy, Standing, at, Lifetimes)</code> — the sweep verdict: keep or delete, given where the identity stands in the reconcile's snapshot (governed, ungoverned, departed, Conflicted) taken at <code>at</code>.</li>
+<li><code>Sweep(ctx, client, policy, Standings, at, Lifetimes)</code>, <code>Release(ctx, client, policy)</code> and <code>Reap(ctx, client)</code> — the only three deletes: a Policy's objects judged by <code>Expired</code>, a deleted Policy's objects, and objects naming a Policy that no longer exists. The controller supplies the standings (<code>standingIn</code>, a function over its snapshot: <code>wlrcache</code> does not import the inventory) and the snapshot's instant.</li>
 <li><code>Key(id)</code> and <code>WorkloadRef(id)</code> — the object key of an identity's <code>WorkloadRecommendation</code> and the <code>spec.workloadRef</code> that names it; the webhook reads by the one, and the controller's claim and the webhook's request name the identity by the other.</li>
 </ul>
 <p>Every writer runs against a cache-backed client, so nothing re-reads an object it just wrote: each write patches off the object the previous one returned, and a create that loses the race to another writer claims that writer's object with a patch, whose response carries it. The lifecycle suite (<code>internal/wlrcache/lifecycle_test.go</code>) runs every writer against a client whose cache lags behind every create.</p>
+<h4 id="servable-until">Servable until<a class="headerlink" href="#servable-until" title="Permanent link">&para;</a></h4>
+<p>Every status write of <code>Ensure</code> and <code>Record</code> stamps <code>status.servableUntil</code> from one formula over the status it writes and the controller's <code>wlrcache.Lifetimes</code> (<code>--reconcile-interval</code>, <code>--recommendation-retention</code>): <code>observedAt</code> plus <code>StalenessBudget()</code>, the larger of <code>MinStalenessBudget</code> (30m) and three intervals, for a live identity; the last computation plus the retention window for a departed or Conflicted one. Only <code>Computed</code> moves <code>observedAt</code>, so no other outcome extends it, and only a <code>Computed</code> record gives an object without a stamp its first (<code>Lifetimes.stamp</code>): an object written before the field existed is served nothing until then, since a claim or another outcome stamping it would extend what it is served for. <code>Request</code> writes only the snapshot, which the formula does not read. The stamp is truncated to the second the API stores, so restamping a stored status reproduces it and an unchanged decision still costs no write.</p>
+<p>The refresh interval (<code>wlrcache.RefreshInterval</code>, 10m) must stay well below the minimum budget: a stable Recommendation is up to one refresh interval plus one reconcile interval old when a pass refreshes it, and must outlive a pass that runs one interval late. <code>TestAStableRecommendationStaysServableThroughALatePass</code> pins that across intervals; the closest call is an interval just under 10m, where three intervals start to set the budget. The retention default (<code>wlrcache.DefaultRetention</code>, 168h) is the flag's default; the configuration rejects a retention or a reconcile interval of zero or less, which would stamp nothing servable.</p>
+<p>The stamp is an absolute time, not a bound the webhook applies to the object's age, so whatever the controller last wrote stops being served once it passes, even when the controller stops writing: both the sweep and the record that sets or clears <code>departed</code> live inside the reconcile, which returns early when the inventory cannot be read (RBAC revoked on one kind, an unreachable API group). <code>departed</code> is only recorded from a snapshot that read successfully, never on a failed read.</p>
 <h4 id="gc-preconditions">GC preconditions<a class="headerlink" href="#gc-preconditions" title="Permanent link">&para;</a></h4>
-<p>Every cleanup path decides on a copy read from the informer cache, so every one deletes with <code>uid</code> + <code>resourceVersion</code> preconditions: the <code>uid</code> refuses a name reused by a delete-and-recreate, the <code>resourceVersion</code> an object rewritten since it was listed — typically re-labelled and re-pointed at another Policy that adopted it. What a conflict means differs:</p>
+<p>Every cleanup path decides on a copy read from the informer cache, so every one deletes with <code>uid</code> + <code>resourceVersion</code> preconditions (<code>deleteWhere</code> in <code>internal/wlrcache/delete.go</code>): the <code>uid</code> refuses a name reused by a delete-and-recreate, the <code>resourceVersion</code> an object rewritten since it was listed — typically re-labelled and re-pointed at another Policy that adopted it. What a conflict means differs:</p>
 <ul>
 <li><strong>Per-cycle sweep</strong> and <strong>orphan reaper</strong> leave the object alone and re-judge it on their next pass. A conflict is an expected outcome, not an error.</li>
 <li><strong>Policy-deletion finalizer</strong> returns any failure, conflicts included, so the finalizer stays on and the deletion is retried. The retry re-lists the Policy's objects by label: one another Policy adopted meanwhile (a GitOps rename) is no longer listed and survives.</li>
 </ul>
-<h4 id="freshness-grace">Freshness grace<a class="headerlink" href="#freshness-grace" title="Permanent link">&para;</a></h4>
+<h4 id="sweep-grace">Sweep grace<a class="headerlink" href="#sweep-grace" title="Permanent link">&para;</a></h4>
 <p>The sweep judges each of the Policy's <code>WorkloadRecommendation</code>s against the reconcile's inventory snapshot (<code>wlrcache.Expired</code>): one whose identity is Departed or Conflicted is kept for the retention window, counted from its last computation; one whose identity is governed by a Policy, this one or another that will adopt it, is kept; one whose identity is live but governed by no Policy, or is outside the snapshot (namespace or kind no longer in the Policy's scope), is deleted.</p>
-<p>Independently of retention, a <code>WorkloadRecommendation</code> created within the last 10 minutes is never swept; it protects an identity first written just after a reconcile took its snapshot. The grace keys off the creation timestamp, not <code>status.observedAt</code>: the computation phase refreshes <code>observedAt</code> for every identity it computes each cycle, departed identities included, so an <code>observedAt</code>-based guard would be self-satisfying and an opted-out workload would keep its recommendation (and its share of Prometheus load) indefinitely.</p>
-<h4 id="departed-waiver-bound">Departed waiver bound<a class="headerlink" href="#departed-waiver-bound" title="Permanent link">&para;</a></h4>
-<p>The webhook bounds the <code>departed</code> (and Conflicted) staleness waiver with its own <code>--recommendation-retention</code> (rendered from the same <code>controller.recommendationRetention</code> Helm value as the controller's). Relying on the sweep to delete a lapsed object would leave the waiver unbounded whenever the controller stops sweeping: both the sweep and the record that sets or clears <code>departed</code> live inside the reconcile, which returns early when the inventory cannot be read (RBAC revoked on one kind, an unreachable API group). <code>departed</code> is only recorded from a snapshot that read successfully, never on a failed read.</p>
+<p>Independently of retention, a <code>WorkloadRecommendation</code> created after the snapshot, or within the 10 minutes before it, is never swept: the snapshot cannot account for an identity first written after it, nor for one whose members its cache had not seen yet. The grace is counted from the snapshot's instant (<code>inventory.Snapshot.TakenAt</code>), not the sweep's own clock: a pass that waits on evictions can sweep long after its snapshot, and a webhook stub created in between would otherwise be judged ungoverned and deleted. It keys off the creation timestamp, not <code>status.observedAt</code>: the computation phase refreshes <code>observedAt</code> for every identity it computes each cycle, departed identities included, so an <code>observedAt</code>-based guard would be self-satisfying and an opted-out workload would keep its recommendation (and its share of Prometheus load) indefinitely.</p>
 
 
 
