@@ -6,6 +6,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -14,11 +15,11 @@ import (
 // A signal is an observed input that contributes one stage to a
 // Recommendation. It owns everything about that input: the Policy settings it
 // reads, the PromQL that reads it for a shard of identities and what that
-// costs, how samples become per-container values, whether an identity can be
-// recommended without them, whether they excuse an identity's age, its stage
-// and trace entry, and what it needs from Prometheus. PromInputs fetches every
-// signal in signals and Compute runs their stages, so adding a signal is
-// adding its module and listing it.
+// costs, how samples become its values, of a type of its own, whether an
+// identity can be recommended without them, whether they excuse an identity's
+// age, its stage and trace entry, and what it needs from Prometheus.
+// PromInputs fetches every signal in signals and Compute runs their stages,
+// so adding a signal is adding its module and listing it.
 type signal interface {
 	// name labels the signal in errors and logs.
 	name() string
@@ -32,26 +33,38 @@ type signal interface {
 	query(cfg sustainv1alpha1.ResourcesConfigs, shard promclient.Shard) string
 	// contract is what query reads from Prometheus and what that rests on.
 	contract() PromContract
-	// collect replaces the signal's values in in with those of one identity's
-	// samples. No samples leaves it holding empty values. It reads a sample
-	// of every rule contract declares, named as the query returns it.
-	collect(in *WorkloadInputs, samples []promclient.ShardSample)
-	// observed lists the containers in holds values of the signal for.
-	observed(in *WorkloadInputs) []string
-	// excusesAge reports whether the signal's values let a Too young identity
-	// through the age gate.
-	excusesAge(in *WorkloadInputs) bool
+	// collect is the signal's values from one identity's samples, empty
+	// values from none. It reads a sample of every rule contract declares,
+	// named as the query returns it.
+	collect(samples []promclient.ShardSample) signalValues
 	// slot is where the signal's stage runs.
 	slot() slot
-	// contribute is the signal's value for one container's request before
-	// headroom, or for its limit, and false when it has none for that
-	// container.
-	contribute(in *WorkloadInputs, container string) (contribution, bool)
-	// stage is the signal's trace entry for the value it contributed to
-	// container. determined says that value reached the final request or
-	// limit: no other signal beat it and no operator bound or guard replaced
-	// it.
-	stage(in *WorkloadInputs, container string, value float64, determined bool) sustainv1alpha1.TraceStage
+	// contribute is the signal's value for the request of the container sc
+	// sizes, before headroom, or for its limit, and false when it has none
+	// for that container.
+	contribute(sc stageContext) (contribution, bool)
+	// stage is the signal's trace entry for the value it contributed to the
+	// container sc sizes. determined says that value reached the final
+	// request or limit: no other signal beat it and no operator bound or
+	// guard replaced it.
+	stage(sc stageContext, value float64, determined bool) sustainv1alpha1.TraceStage
+}
+
+// stageContext is what every stage of one container's resource sizes with,
+// on the request side and the limit side alike.
+type stageContext struct {
+	inputs *WorkloadInputs
+	// config is the Policy's configuration of the resource.
+	config sustainv1alpha1.ResourceConfig
+	// container is the container as the identity holds it, the union of its
+	// members' containers rather than a live pod's, with the requests and
+	// limits it declares.
+	container corev1.Container
+	// now is the instant the Request computes as of.
+	now time.Time
+	// request is the final request on the limit side, and nil on the request
+	// side, which computes it.
+	request *resource.Quantity
 }
 
 // signals is every signal, in the order their stages run within a role.
@@ -111,12 +124,14 @@ var shardLabels = []string{"namespace", "owner_kind", "owner_name", "container"}
 // maps a pod to its identity from. Every rule a signal reads joins it.
 var podWorkloadMetrics = []string{"kube_pod_owner", "kube_job_owner", "kube_replicaset_owner", "kube_pod_annotations"}
 
-// role orders the stages of a resource: every base signal before every
-// adjuster on the request side, then every limit adjuster on the limit side.
+// role orders the stages of a resource and says how their contributions
+// combine: every base signal before every adjuster on the request side, then
+// every limit adjuster on the limit side.
 type role int
 
 const (
-	// base signals set a request from observed usage.
+	// base signals set a request from observed usage. The highest
+	// contribution sets it, a tie going to the first in signals' order.
 	base role = iota
 	// adjusters raise the value the base signals set, never lower it.
 	adjuster
@@ -147,12 +162,13 @@ type contribution struct {
 	anchors bool
 }
 
-// observedContainers lists, sorted, every container any signal holds values
-// for: all an identity with no known containers has to recommend for.
+// observedContainers lists, sorted, every container any signal's values give
+// something to recommend from: all an identity with no known containers has to
+// recommend for.
 func observedContainers(in *WorkloadInputs) []corev1.Container {
 	names := make(map[string]struct{})
-	for _, s := range signals {
-		for _, n := range s.observed(in) {
+	for _, v := range in.values {
+		for _, n := range v.observed() {
 			names[n] = struct{}{}
 		}
 	}

@@ -43,7 +43,7 @@ var identityHealthMetrics = append([]string{
 func usageForIdentities(ids ...promclient.WorkloadIdentity) *recommendertest.StaticInputs {
 	in := recommendertest.NewStaticInputs()
 	for _, id := range ids {
-		in.Set(id, appUsage())
+		in.Set(id, appUsage()...)
 	}
 	return in
 }

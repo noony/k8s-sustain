@@ -9,7 +9,6 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
 const (
@@ -64,14 +63,6 @@ func (r resourceKind) config(cfg sustainv1alpha1.ResourcesConfigs) sustainv1alph
 		return cfg.CPU
 	}
 	return cfg.Memory
-}
-
-// usage is where in holds the resource's usage percentile of each container.
-func (r resourceKind) usage(in *WorkloadInputs) *promclient.ContainerValues {
-	if r == cpuResource {
-		return &in.CPUPerPod
-	}
-	return &in.MemPerPod
 }
 
 // value is q in cores or bytes.

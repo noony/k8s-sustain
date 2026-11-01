@@ -153,8 +153,8 @@ func simulationContainers(res recommender.Result, inputs *recommender.WorkloadIn
 	out := make(map[string]simulationContainerResult, len(res.Recs))
 	for name, rec := range res.Recs {
 		cr := simulationContainerResult{
-			CPUUsageCores:      inputs.CPUPerPod[name],
-			MemoryUsageBytes:   inputs.MemPerPod[name],
+			CPUUsageCores:      inputs.Usage(name, corev1.ResourceCPU),
+			MemoryUsageBytes:   inputs.Usage(name, corev1.ResourceMemory),
 			CPULimitRemoved:    rec.RemoveCPULimit,
 			MemoryLimitRemoved: rec.RemoveMemoryLimit,
 		}

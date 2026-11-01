@@ -42,7 +42,7 @@ The requests and limits an identity's pods should run, as held in its WorkloadRe
 _Avoid_: applied recommendation, current recommendation
 
 **Signal**:
-An observed input that contributes one stage to a Recommendation: the CPU and memory usage of the busiest replica, which set the requests, and recent OOM kills, which can only raise the memory request and excuse a Too young identity. A signal's stage shapes either a request or a limit; one that shapes a limit can only raise it. An identity whose usage cannot be read gets no Recommendation; one whose OOM kills cannot be read is recommended without them.
+An observed input that contributes one stage to a Recommendation: the CPU and memory usage of the busiest replica, which set the requests, and recent OOM kills, which can only raise the memory request and excuse a Too young identity. A signal's stage shapes either a request or a limit. Of the signals that set a request, the highest contribution wins; one that adjusts a request or shapes a limit can only raise it. An identity whose usage cannot be read gets no Recommendation; one whose OOM kills cannot be read is recommended without them.
 _Avoid_: metric, input (when one source is meant)
 
 **Trace**:

@@ -9,7 +9,6 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
-	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -52,8 +51,8 @@ func tooYoung(since, now time.Time, in *WorkloadInputs) bool {
 	if since.IsZero() || now.Sub(since) >= MinWorkloadAge {
 		return false
 	}
-	for _, s := range signals {
-		if s.excusesAge(in) {
+	for _, v := range in.values {
+		if v.excusesAge() {
 			return false
 		}
 	}
@@ -132,16 +131,12 @@ func (r Request) Resources() sustainv1alpha1.ResourcesConfigs { return r.resourc
 // container, not a whole computation.
 func (r Request) RequestAt(name string, res corev1.ResourceName, usage float64) float64 {
 	kind := resourceKind(res)
+	u, ok := usageOf(kind)
 	i := slices.IndexFunc(r.containers, func(c corev1.Container) bool { return c.Name == name })
-	if i < 0 || (kind != cpuResource && kind != memoryResource) {
+	if i < 0 || !ok {
 		return 0
 	}
-	var point WorkloadInputs
-	if r.inputs != nil {
-		point = *r.inputs
-	}
-	*kind.usage(&point) = promclient.ContainerValues{name: usage}
-	r.inputs = &point
+	r.inputs = r.inputs.with(u, usageValues{name: usage})
 	sized, _ := size(kind, r.containers[i], r)
 	if sized == nil {
 		return 0
@@ -225,13 +220,13 @@ type contributed struct {
 	contribution
 }
 
-// contributionsTo runs, in order, the signals of res in each of roles for
-// container, keeping those with a value for it.
-func contributionsTo(in *WorkloadInputs, container string, res resourceKind, roles ...role) []contributed {
+// contributionsTo runs, in order, the signals of res in each of roles for the
+// container sc sizes, keeping those with a value for it.
+func contributionsTo(sc stageContext, res resourceKind, roles ...role) []contributed {
 	var out []contributed
 	for _, r := range roles {
 		for _, s := range inSlot(slot{role: r, resource: res}) {
-			if ct, ok := s.contribute(in, container); ok {
+			if ct, ok := s.contribute(sc); ok {
 				out = append(out, contributed{signal: s, role: r, contribution: ct})
 			}
 		}
@@ -241,10 +236,10 @@ func contributionsTo(in *WorkloadInputs, container string, res resourceKind, rol
 
 // stagesOf is the trace entry of each of cs, in order. Only cs[determined],
 // if any, reached the final request or limit.
-func stagesOf(cs []contributed, in *WorkloadInputs, container string, determined int) []sustainv1alpha1.TraceStage {
+func stagesOf(cs []contributed, sc stageContext, determined int) []sustainv1alpha1.TraceStage {
 	out := make([]sustainv1alpha1.TraceStage, 0, len(cs))
 	for i, c := range cs {
-		out = append(out, c.signal.stage(in, container, c.value, i == determined))
+		out = append(out, c.signal.stage(sc, c.value, i == determined))
 	}
 	return out
 }
@@ -260,16 +255,11 @@ const (
 // justified is false when no signal justified a request; the sizing is nil
 // then, and when the Policy keeps the request.
 func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justified bool) {
-	contributions := contributionsTo(req.inputs, c.Name, res, base, adjuster)
-	var value float64
-	winner := -1
-	for i, ct := range contributions {
-		justified = justified || ct.anchors
-		if ct.role == base || ct.value > value {
-			value, winner = ct.value, i
-		}
-	}
 	cfg := res.config(req.resources)
+	sc := stageContext{inputs: req.inputs, config: cfg, container: c, now: req.now}
+	contributions := contributionsTo(sc, res, base, adjuster)
+	value, winner := requestOf(contributions)
+	justified = slices.ContainsFunc(contributions, func(ct contributed) bool { return ct.anchors })
 	if !justified || cfg.Requests.KeepRequest {
 		return nil, justified
 	}
@@ -284,14 +274,31 @@ func size(res resourceKind, c corev1.Container, req Request) (_ *sizing, justifi
 	}
 
 	out := &sizing{request: clamped}
-	out.trace.Request = append(stagesOf(contributions, req.inputs, c.Name, winner),
+	out.trace.Request = append(stagesOf(contributions, sc, winner),
 		quantityStage(stageHeadroom, headroom), quantityStage(stageClamp, clamped))
 	if co != nil {
 		out.request = co.value
 		out.trace.Request = append(out.trace.Request, co.stage())
 	}
-	out.limit, out.trace.Limit = limitChain(res, out.request, c, req.inputs, cfg.Limits)
+	sc.request = &out.request
+	out.limit, out.trace.Limit = limitChain(res, sc)
 	return out, true
+}
+
+// requestOf combines the request side's contributions, every base one before
+// every adjuster's: the highest base contribution, a tie going to the first,
+// then any adjuster's above it. winner is the one that set the value, -1 for
+// none.
+func requestOf(cs []contributed) (value float64, winner int) {
+	winner = -1
+	for i, ct := range cs {
+		// A base contribution finding no winner yet is the first base one,
+		// so it sets the value whatever its size.
+		if ct.value > value || (ct.role == base && winner < 0) {
+			value, winner = ct.value, i
+		}
+	}
+	return value, winner
 }
 
 func quantityStage(name string, q resource.Quantity) sustainv1alpha1.TraceStage {

@@ -144,9 +144,7 @@ func TestOwnerNameGroupShowsUnionContainersAndEarliestAge(t *testing.T) {
 		deploymentPolicy("p"),
 		deploymentWithOwnerName("prod", "api-blue", "api", time.Now().Add(-48*time.Hour)),
 		deploymentWithOwnerName("prod", "api-green", "api", time.Now().Add(-time.Minute)))
-	srv.Inputs = recommendertest.NewStaticInputs().Set(identity("prod", "Deployment", "api"), &recommender.WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"api-blue": 0.1, "api-green": 0.1},
-	})
+	srv.Inputs = recommendertest.NewStaticInputs().Set(identity("prod", "Deployment", "api"), recommender.WithCPUUsage(promclient.ContainerValues{"api-blue": 0.1, "api-green": 0.1}))
 
 	page := listAll(t, srv, "")
 	if len(page.Items) != 1 {
@@ -296,10 +294,9 @@ func TestCoordinationFactorsComeFromTheStoredTrace(t *testing.T) {
 	anchor := 1.0
 	api := identity("prod", "Deployment", "api")
 	assembled := recommender.Assemble(context.Background(),
-		recommendertest.NewStaticInputs().Set(api, &recommender.WorkloadInputs{
-			CPUPerPod: promclient.ContainerValues{"api": 0.2},
-			MemPerPod: promclient.ContainerValues{"api": 128 << 20},
-		}),
+		recommendertest.NewStaticInputs().Set(api,
+			recommender.WithCPUUsage(promclient.ContainerValues{"api": 0.2}),
+			recommender.WithMemoryUsage(promclient.ContainerValues{"api": 128 << 20})),
 		everyMemberScaledBy(autoscaler.Info{
 			Kind: autoscaler.KindHPA, MinReplicas: 1, MaxReplicas: 10, CurrentReplicas: 1,
 			ConfiguredTargets: map[string]int32{autoscaler.ResourceCPU: 80, autoscaler.ResourceMemory: 55},

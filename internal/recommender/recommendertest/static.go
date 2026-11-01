@@ -13,11 +13,12 @@ import (
 )
 
 // StaticInputs serves canned inputs per identity, whatever the settings it is
-// asked to fetch under. An identity given inputs with Set gets them, one given
-// an error with Fail gets the error, and any other identity gets empty inputs,
-// as Prometheus answers for an identity with no samples. Every call is
-// recorded so a test can assert on what was fetched, and under which
-// settings.
+// asked to fetch under. An identity given signal values with Set gets inputs
+// holding them, one given an error with Fail gets the error, and any other
+// identity gets empty inputs, as Prometheus answers for an identity with no
+// samples. Inputs are built with recommender.NewInputs, so they read exactly
+// as PromInputs' do. Every call is recorded so a test can assert on what was
+// fetched, and under which settings.
 type StaticInputs struct {
 	mu     sync.Mutex
 	inputs map[promclient.WorkloadIdentity]*recommender.WorkloadInputs
@@ -42,11 +43,12 @@ func NewStaticInputs() *StaticInputs {
 	}
 }
 
-// Set serves in for id.
-func (s *StaticInputs) Set(id promclient.WorkloadIdentity, in *recommender.WorkloadInputs) *StaticInputs {
+// Set serves id inputs holding values, each set by a signal's option
+// (recommender.WithCPUUsage, …), and every other signal's empty values.
+func (s *StaticInputs) Set(id promclient.WorkloadIdentity, values ...recommender.InputsOption) *StaticInputs {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.inputs[id] = in
+	s.inputs[id] = recommender.NewInputs(values...)
 	delete(s.errs, id)
 	return s
 }
@@ -75,17 +77,11 @@ func (s *StaticInputs) FetchInputs(
 			out[r.Identity] = recommender.InputsResult{Err: err}
 			continue
 		}
-		in := recommender.WorkloadInputs{}
-		if set := s.inputs[r.Identity]; set != nil {
-			in = *set
+		in := s.inputs[r.Identity]
+		if in == nil {
+			in = recommender.NewInputs()
 		}
-		if in.CPUPerPod == nil {
-			in.CPUPerPod = promclient.ContainerValues{}
-		}
-		if in.MemPerPod == nil {
-			in.MemPerPod = promclient.ContainerValues{}
-		}
-		out[r.Identity] = recommender.InputsResult{Inputs: &in}
+		out[r.Identity] = recommender.InputsResult{Inputs: in}
 	}
 	return out
 }

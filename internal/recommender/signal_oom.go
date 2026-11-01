@@ -150,11 +150,43 @@ func (oomFloor) contract() PromContract {
 	}
 }
 
+// oomValues are the OOM floor's values: each container's OOM kills.
+type oomValues map[string]OOM
+
+// WithOOMKills sets each container's OOM kills.
+func WithOOMKills(kills map[string]OOM) InputsOption {
+	return setting(oomFloor{}, oomValues(maps.Clone(kills)))
+}
+
+// observed lists the containers that were OOM-killed, so a crash-looping
+// container with no usage samples is still recommended for.
+func (v oomValues) observed() []string {
+	var out []string
+	for name, o := range v {
+		if o.recent() {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// excusesAge: a crash-looping workload would otherwise wait out the age gate
+// while it keeps getting killed. Only the gate is identity-wide; the floor
+// applies to the killed container alone.
+func (v oomValues) excusesAge() bool {
+	for _, o := range v {
+		if o.recent() {
+			return true
+		}
+	}
+	return false
+}
+
 // collect sums kill counts and keeps the highest peak and limit of each
 // container, collapsing the duplicate series several kube-state-metrics
 // replicas produce.
-func (oomFloor) collect(in *WorkloadInputs, samples []promclient.ShardSample) {
-	ooms := make(map[string]OOM)
+func (oomFloor) collect(samples []promclient.ShardSample) signalValues {
+	ooms := make(oomValues)
 	for _, s := range samples {
 		o := ooms[s.Container]
 		switch s.Metric {
@@ -171,31 +203,7 @@ func (oomFloor) collect(in *WorkloadInputs, samples []promclient.ShardSample) {
 		}
 		ooms[s.Container] = o
 	}
-	in.OOM = ooms
-}
-
-// observed lists the containers that were OOM-killed, so a crash-looping
-// container with no usage samples is still recommended for.
-func (oomFloor) observed(in *WorkloadInputs) []string {
-	var out []string
-	for name, o := range in.OOM {
-		if o.recent() {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-// excusesAge: a crash-looping workload would otherwise wait out the age gate
-// while it keeps getting killed. Only the gate is identity-wide; the floor
-// applies to the killed container alone.
-func (oomFloor) excusesAge(in *WorkloadInputs) bool {
-	for _, o := range in.OOM {
-		if o.recent() {
-			return true
-		}
-	}
-	return false
+	return ooms
 }
 
 func (oomFloor) slot() slot { return slot{role: adjuster, resource: memoryResource} }
@@ -205,8 +213,8 @@ func (oomFloor) slot() slot { return slot{role: adjuster, resource: memoryResour
 // cannot accumulate usage samples, still gets one. An unanchored floor does
 // not: the only request it could produce is the hard 1Mi minimum, which would
 // guarantee the next kill.
-func (oomFloor) contribute(in *WorkloadInputs, container string) (contribution, bool) {
-	o := in.OOM[container]
+func (f oomFloor) contribute(sc stageContext) (contribution, bool) {
+	o := valuesOf[oomValues](sc.inputs, f)[sc.container.Name]
 	if !o.recent() {
 		return contribution{}, false
 	}
@@ -214,8 +222,8 @@ func (oomFloor) contribute(in *WorkloadInputs, container string) (contribution, 
 	return contribution{value: floor, anchors: anchor != ""}, true
 }
 
-func (oomFloor) stage(in *WorkloadInputs, container string, value float64, determined bool) sustainv1alpha1.TraceStage {
-	o := in.OOM[container]
+func (f oomFloor) stage(sc stageContext, value float64, determined bool) sustainv1alpha1.TraceStage {
+	o := valuesOf[oomValues](sc.inputs, f)[sc.container.Name]
 	facts := map[string]string{factDetermined: strconv.FormatBool(determined)}
 	if _, anchor := o.floor(); anchor != "" {
 		facts[factAnchor] = anchor
@@ -290,23 +298,22 @@ func (l *liveOOMInputs) FetchInputs(
 	return out
 }
 
-// withLiveOOMs returns in with the watcher's kills merged into its OOMs.
+// withLiveOOMs returns in with the watcher's kills merged into its OOM kills.
 // Kills the watcher saw longer than LiveOOMWindow before now are ignored. in
 // itself is left untouched: the decorated fetcher may still hold it.
 func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord, now time.Time) *WorkloadInputs {
 	if len(live) == 0 {
 		return in
 	}
-	merged := *in
-	merged.OOM = maps.Clone(in.OOM)
-	if merged.OOM == nil {
-		merged.OOM = make(map[string]OOM, len(live))
+	merged := maps.Clone(valuesOf[oomValues](in, oomFloor{}))
+	if merged == nil {
+		merged = make(oomValues, len(live))
 	}
 	for container, rec := range live {
 		if rec == nil || now.Sub(rec.ObservedAt) > LiveOOMWindow {
 			continue
 		}
-		o := merged.OOM[container]
+		o := merged[container]
 		// FinishedAt dates the kill but the kubelet may leave it unset; the
 		// watcher seeing an OOMKilled termination is still a kill.
 		o.LiveAt = rec.TerminatedAt
@@ -314,7 +321,7 @@ func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord, now t
 			o.LiveAt = rec.ObservedAt
 		}
 		o.LimitBytes = max(o.LimitBytes, float64(rec.OOMLimitBytes))
-		merged.OOM[container] = o
+		merged[container] = o
 	}
-	return &merged
+	return in.with(oomFloor{}, merged)
 }

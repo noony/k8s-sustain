@@ -49,24 +49,19 @@ func (l limit) stage(name string, facts map[string]string) sustainv1alpha1.Trace
 	return st
 }
 
-// limitChain runs one container's limit for res through its stages: the
-// Policy's limit strategy applied to the final request, the limit adjusters,
-// then the guard. A limit below the request, derived or the container's own,
-// is rejected by the apiserver, so the guard raises it to the request; the
-// request is never capped instead, as it may carry the OOM floor
+// limitChain runs the limit of res of the container sc sizes through its
+// stages: the Policy's limit strategy applied to sc's final request, the limit
+// adjusters, then the guard. A limit below the request, derived or the
+// container's own, is rejected by the apiserver, so the guard raises it to the
+// request; the request is never capped instead, as it may carry the OOM floor
 // (docs/adr/0005).
-func limitChain(
-	res resourceKind,
-	request resource.Quantity,
-	c corev1.Container,
-	in *WorkloadInputs,
-	cfg sustainv1alpha1.ResourceLimitsConfig,
-) (limit, []sustainv1alpha1.TraceStage) {
+func limitChain(res resourceKind, sc stageContext) (limit, []sustainv1alpha1.TraceStage) {
+	request, cfg := *sc.request, sc.config.Limits
 	s := strategyOf(cfg)
-	l, facts := s.limit(limitBasis{res: res, request: request, current: c.Resources, cfg: cfg})
+	l, facts := s.limit(limitBasis{res: res, request: request, current: sc.container.Resources, cfg: cfg})
 	stages := []sustainv1alpha1.TraceStage{l.stage(s.name, facts)}
 
-	raised := contributionsTo(in, c.Name, res, limitAdjuster)
+	raised := contributionsTo(sc, res, limitAdjuster)
 	winner := -1
 	for i, ct := range raised {
 		// Rounded up to a whole millicore or MiB, as a request is.
@@ -80,7 +75,7 @@ func limitChain(
 		l, winner = limit{value: &q, set: true}, -1
 	}
 
-	stages = append(stages, stagesOf(raised, in, c.Name, winner)...)
+	stages = append(stages, stagesOf(raised, sc, winner)...)
 	if guarded {
 		stages = append(stages, l.stage(stageGuard, nil))
 	}

@@ -48,10 +48,9 @@ func TestReconcile_LiveOOMRaisesTheFloorAndIsCounted(t *testing.T) {
 	const ns = "liveoom"
 	dep := establishedDeployment(ns, "web", "p")
 	dep.Spec.Template.Spec.Containers = append(dep.Spec.Template.Spec.Containers, corev1.Container{Name: "side"})
-	static := recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "web"), &recommender.WorkloadInputs{
-		CPUPerPod: promclient.ContainerValues{"app": 0.1, "side": 0.05},
-		MemPerPod: promclient.ContainerValues{"app": 100 << 20, "side": 100 << 20},
-	})
+	static := recommendertest.NewStaticInputs().Set(identityOf(ns, "Deployment", "web"),
+		recommender.WithCPUUsage(promclient.ContainerValues{"app": 0.1, "side": 0.05}),
+		recommender.WithMemoryUsage(promclient.ContainerValues{"app": 100 << 20, "side": 100 << 20}))
 	r := reconcilerWithInputs(t, recommender.WithLiveOOMs(static, &fakeOOMSource{records: map[string]*oomwatch.OOMRecord{
 		"app": {Container: "app", ObservedAt: time.Now(), TerminatedAt: time.Now().Add(-10 * time.Second), OOMLimitBytes: 200 << 20},
 	}}, time.Now), true, ongoingDeployments("p"), dep)

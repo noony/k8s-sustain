@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -165,17 +168,17 @@ func TestPromInputs_BatchesIdentitiesIntoOneShardPerSignal(t *testing.T) {
 	if api.Err != nil || web.Err != nil {
 		t.Fatalf("unexpected errors: api=%v web=%v", api.Err, web.Err)
 	}
-	if api.Inputs.CPUPerPod["app"] != 0.5 || web.Inputs.CPUPerPod["app"] != 1.5 {
-		t.Errorf("cpu = %v / %v, want 0.5 / 1.5", api.Inputs.CPUPerPod, web.Inputs.CPUPerPod)
+	wantAPI := NewInputs(
+		WithCPUUsage(promclient.ContainerValues{"app": 0.5}),
+		WithMemoryUsage(promclient.ContainerValues{"app": 100}),
+		WithOOMKills(map[string]OOM{"app": {Kills: 3}}),
+	)
+	if !reflect.DeepEqual(api.Inputs, wantAPI) {
+		t.Errorf("api = %+v, want %+v", api.Inputs, wantAPI)
 	}
-	if api.Inputs.MemPerPod["app"] != 100 || web.Inputs.MemPerPod["app"] != 200 {
-		t.Errorf("memory = %v / %v, want 100 / 200", api.Inputs.MemPerPod, web.Inputs.MemPerPod)
-	}
-	if api.Inputs.OOM["app"].Kills != 3 {
-		t.Errorf("api OOM = %+v, want 3 kills", api.Inputs.OOM["app"])
-	}
-	if len(web.Inputs.OOM) != 0 {
-		t.Errorf("web has no OOM series, got %+v", web.Inputs.OOM)
+	wantWeb := NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 1.5}), WithMemoryUsage(promclient.ContainerValues{"app": 200}))
+	if !reflect.DeepEqual(web.Inputs, wantWeb) {
+		t.Errorf("web = %+v, want %+v without OOM kills", web.Inputs, wantWeb)
 	}
 }
 
@@ -239,7 +242,7 @@ func TestPromInputs_RetriesAFailedShardOnce(t *testing.T) {
 
 	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), promInputsCfg(), reqsFor(1, "api", "web"))
 
-	if r := got[prodID("api")]; r.Err != nil || r.Inputs.CPUPerPod["app"] != 0.5 {
+	if r := got[prodID("api")]; r.Err != nil || r.Inputs.Usage("app", corev1.ResourceCPU) != 0.5 {
 		t.Errorf("api = %+v, want the retried shard's 0.5", r)
 	}
 	for _, signal := range []string{"cpu", "memory", "oom"} {
@@ -280,10 +283,10 @@ func TestPromInputs_FailedShardFallsBackToOneIdentityShards(t *testing.T) {
 			t.Errorf("%s: %d one-identity queries, want 2 (one per identity)", signal, n)
 		}
 	}
-	if r := got[prodID("api")]; r.Err != nil || r.Inputs.CPUPerPod["app"] != 0.1 {
+	if r := got[prodID("api")]; r.Err != nil || r.Inputs.Usage("app", corev1.ResourceCPU) != 0.1 {
 		t.Errorf("api = %+v, want CPU 0.1 from its own query", r)
 	}
-	if r := got[prodID("web")]; r.Err != nil || r.Inputs.MemPerPod["app"] != 0.2 {
+	if r := got[prodID("web")]; r.Err != nil || r.Inputs.Usage("app", corev1.ResourceMemory) != 0.2 {
 		t.Errorf("web = %+v, want memory 0.2 from its own query", r)
 	}
 }
@@ -338,16 +341,16 @@ func TestPromInputs_OOMFailureIsBestEffort(t *testing.T) {
 	if r.Err != nil {
 		t.Fatalf("an OOM failure must not fail the identity, got %v", r.Err)
 	}
-	if r.Inputs.CPUPerPod["app"] != 0.5 {
-		t.Errorf("cpu = %v, want 0.5", r.Inputs.CPUPerPod)
-	}
-	if len(r.Inputs.OOM) != 0 {
-		t.Errorf("OOM = %+v, want empty", r.Inputs.OOM)
+	if want := NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.5})); !reflect.DeepEqual(r.Inputs, want) {
+		t.Errorf("inputs = %+v, want %+v with no OOM kills", r.Inputs, want)
 	}
 }
 
 // "Queried and found nothing" must stay distinguishable from "could not
-// query": every identity gets non-nil, empty maps and no error.
+// query": every identity gets inputs and no error. They hold every signal's
+// values from no samples, exactly the inputs NewInputs builds with none set,
+// which is what an InputsFetcher serving canned inputs answers for an
+// identity it knows nothing of.
 func TestPromInputs_EmptyResponseYieldsEmptyInputs(t *testing.T) {
 	_, c := startFakeShardProm(t, emptyAnswer)
 	reqs := append(reqsFor(1, "api", "web"),
@@ -359,15 +362,8 @@ func TestPromInputs_EmptyResponseYieldsEmptyInputs(t *testing.T) {
 		t.Fatalf("got %d results, want one per request (%d)", len(got), len(reqs))
 	}
 	for _, r := range reqs {
-		res := got[r.Identity]
-		if res.Err != nil || res.Inputs == nil {
-			t.Fatalf("%v = %+v, want empty inputs and no error", r.Identity, res)
-		}
-		if res.Inputs.CPUPerPod == nil || res.Inputs.MemPerPod == nil {
-			t.Errorf("%v: CPUPerPod and MemPerPod must be non-nil", r.Identity)
-		}
-		if len(res.Inputs.CPUPerPod) != 0 || len(res.Inputs.MemPerPod) != 0 || len(res.Inputs.OOM) != 0 {
-			t.Errorf("%v: want empty inputs, got %+v", r.Identity, res.Inputs)
+		if res := got[r.Identity]; res.Err != nil || !reflect.DeepEqual(res.Inputs, NewInputs()) {
+			t.Errorf("%v = %+v, want empty inputs and no error", r.Identity, res)
 		}
 	}
 }
