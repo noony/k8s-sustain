@@ -40,9 +40,9 @@ func TestApply_PodCounts_AfterEviction(t *testing.T) {
 	c, _ := countsTestClient(t, cpuPod("stale", "50m"), cpuPod("fresh", "200m"))
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatal(err)
+	out := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatal(out.Err)
 	}
 	if out.Pods != (PodCounts{Total: 2, Stale: 0}) {
 		t.Errorf("counts = %+v, want {2 0}", out.Pods)
@@ -53,12 +53,12 @@ func TestApply_DryRun_CountsWithoutMutating(t *testing.T) {
 	c, evicted := countsTestClient(t, cpuPod("stale", "50m"), cpuPod("fresh", "200m"))
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{DryRun: true})
-	if err != nil {
-		t.Fatal(err)
+	out := p.Apply(context.Background(), testMember(), recs, ApplySettings{DryRun: true})
+	if out.Err != nil {
+		t.Fatal(out.Err)
 	}
-	if out.Changed != 0 || len(*evicted) != 0 {
-		t.Fatalf("dry-run mutated: changed=%d evicted=%v", out.Changed, *evicted)
+	if out.Changed() != 0 || len(*evicted) != 0 {
+		t.Fatalf("dry-run mutated: changed=%d evicted=%v", out.Changed(), *evicted)
 	}
 	if out.Pods != (PodCounts{Total: 2, Stale: 1}) {
 		t.Errorf("counts = %+v, want {2 1}", out.Pods)
@@ -69,9 +69,9 @@ func TestApply_DryRun_DecreaseWithinToleranceIsFresh(t *testing.T) {
 	c, _ := countsTestClient(t, cpuPod("a", "200m"))
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("195m")}}
-	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{DryRun: true, Tolerance: tol5})
-	if err != nil {
-		t.Fatal(err)
+	out := p.Apply(context.Background(), testMember(), recs, ApplySettings{DryRun: true, Tolerance: tol5})
+	if out.Err != nil {
+		t.Fatal(out.Err)
 	}
 	if out.Pods != (PodCounts{Total: 1, Stale: 0}) {
 		t.Errorf("counts = %+v, want {1 0}", out.Pods)
@@ -84,9 +84,9 @@ func TestApply_DryRun_SkipsTerminatingAndTerminal(t *testing.T) {
 	c, _ := countsTestClient(t, cpuPod("live", "50m"), done)
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{DryRun: true})
-	if err != nil {
-		t.Fatal(err)
+	out := p.Apply(context.Background(), testMember(), recs, ApplySettings{DryRun: true})
+	if out.Err != nil {
+		t.Fatal(out.Err)
 	}
 	if out.Pods != (PodCounts{Total: 1, Stale: 1}) {
 		t.Errorf("counts = %+v, want {1 1}", out.Pods)
@@ -106,9 +106,9 @@ func TestApply_PodCounts_ExcludeNotOwnedPods(t *testing.T) {
 	t.Run("dry-run", func(t *testing.T) {
 		c, _ := countsTestClient(t, owned.DeepCopy(), other.DeepCopy(), bare.DeepCopy())
 		p := New(c, false, testEvictionOpts()...)
-		out, err := p.Apply(context.Background(), statefulSetMember(), recs, ApplySettings{DryRun: true})
-		if err != nil {
-			t.Fatal(err)
+		out := p.Apply(context.Background(), statefulSetMember(), recs, ApplySettings{DryRun: true})
+		if out.Err != nil {
+			t.Fatal(out.Err)
 		}
 		if out.Pods != (PodCounts{Total: 1, Stale: 1}) {
 			t.Errorf("counts = %+v, want {1 1}", out.Pods)
@@ -118,9 +118,9 @@ func TestApply_PodCounts_ExcludeNotOwnedPods(t *testing.T) {
 	t.Run("real pass", func(t *testing.T) {
 		c, _ := countsTestClient(t, owned.DeepCopy(), other.DeepCopy(), bare.DeepCopy())
 		p := New(c, false, testEvictionOpts()...)
-		out, err := p.Apply(context.Background(), statefulSetMember(), recs, ApplySettings{})
-		if err != nil {
-			t.Fatal(err)
+		out := p.Apply(context.Background(), statefulSetMember(), recs, ApplySettings{})
+		if out.Err != nil {
+			t.Fatal(out.Err)
 		}
 		if out.Pods != (PodCounts{Total: 1, Stale: 0}) {
 			t.Errorf("counts = %+v, want {1 0}", out.Pods)
@@ -132,9 +132,9 @@ func TestApply_InPlaceOnly_NoInPlaceSupport_CountsOnly(t *testing.T) {
 	c, _ := countsTestClient(t, jobCPUPod("stale", "50m"))
 	p := New(c, false)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatal(err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatal(out.Err)
 	}
 	if out.Pods != (PodCounts{Total: 1, Stale: 1}) {
 		t.Errorf("counts = %+v, want {1 1}", out.Pods)
@@ -145,9 +145,9 @@ func TestApply_InPlaceOnly_ResizedPodIsFresh(t *testing.T) {
 	c, _ := countsTestClient(t, jobCPUPod("stale", "50m"))
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err != nil {
-		t.Fatal(err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err != nil {
+		t.Fatal(out.Err)
 	}
 	if out.Pods != (PodCounts{Total: 1, Stale: 0}) {
 		t.Errorf("counts = %+v, want {1 0}", out.Pods)
@@ -175,12 +175,12 @@ func TestApply_InPlaceOnly_DryRun_NeverResizes(t *testing.T) {
 	}, stale)
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{DryRun: true})
-	if err != nil {
-		t.Fatal(err)
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{DryRun: true})
+	if out.Err != nil {
+		t.Fatal(out.Err)
 	}
-	if out.Changed != 0 || resizeCalls != 0 {
-		t.Fatalf("dry run resized: changed=%d resizeCalls=%d", out.Changed, resizeCalls)
+	if out.Changed() != 0 || resizeCalls != 0 {
+		t.Fatalf("dry run resized: changed=%d resizeCalls=%d", out.Changed(), resizeCalls)
 	}
 	var live corev1.Pod
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: stale.Namespace, Name: stale.Name}, &live); err != nil {
@@ -204,8 +204,8 @@ func TestApply_InPlaceOnly_ErrorReportsNoCounts(t *testing.T) {
 	}, jobCPUPod("stale", "50m"))
 	p := New(c, true)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-	out, err := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
-	if err == nil {
+	out := p.Apply(context.Background(), jobMember(), recs, ApplySettings{})
+	if out.Err == nil {
 		t.Fatal("expected the resize error to surface")
 	}
 	if out.Pods != (PodCounts{}) {
@@ -221,8 +221,8 @@ func TestApply_EvictionErrorReportsNoCounts(t *testing.T) {
 	}, cpuPod("stale", "50m"))
 	p := New(c, false, testEvictionOpts()...)
 	recs := map[string]ContainerRecommendation{"app": {CPURequest: qtyp("200m")}}
-	out, err := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
-	if err == nil {
+	out := p.Apply(context.Background(), testMember(), recs, ApplySettings{})
+	if out.Err == nil {
 		t.Fatal("expected the eviction error to surface")
 	}
 	if out.Pods != (PodCounts{}) {

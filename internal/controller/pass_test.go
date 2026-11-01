@@ -26,6 +26,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
 	"github.com/noony/k8s-sustain/internal/wlrcache"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // When the claim on an identity's WorkloadRecommendation fails, the identity
@@ -57,8 +58,8 @@ func TestReconcile_FailedClaimWithholdsTheIdentityAndCountsOnce(t *testing.T) {
 		t.Errorf("Ready = %s %q, want False %q: the failed claim counted once", ready.Status, ready.Message, want)
 	}
 	state := seriesForWorkload(t, "k8s_sustain_workload_retry_state", ns, "Deployment", "web")
-	if len(state) != 1 || labelOf(state[0], "reason") != phaseStore {
-		t.Errorf("retry_state = %v, want the identity Blocked on %s", state, phaseStore)
+	if len(state) != 1 || labelOf(state[0], "reason") != string(workload.StepStore) {
+		t.Errorf("retry_state = %v, want the identity Blocked on %s", state, workload.StepStore)
 	}
 }
 

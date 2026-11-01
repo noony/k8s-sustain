@@ -11,4 +11,5 @@ Decisions that shape how the code is structured, recorded when they were made. A
 | [0005](0005-a-limit-never-falls-below-its-request.md) | A limit never falls below its request | Accepted |
 | [0006](0006-owner-name-is-read-from-the-annotation.md) | The owner-name override is read from the annotation | Accepted |
 | [0007](0007-the-overview-is-built-from-the-identity-inventory.md) | The Overview is built from the identity inventory | Accepted |
+| [0009](0009-a-change-to-limits-alone-never-evicts-a-pod.md) | A change to limits alone never evicts a pod | Accepted |
 | [0010](0010-an-oom-kill-is-counted-once.md) | An OOM kill is counted once | Accepted |

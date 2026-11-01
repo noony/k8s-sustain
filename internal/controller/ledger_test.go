@@ -27,7 +27,7 @@ func ledgerOnFakeClock() (*ledger, *clocktesting.FakePassiveClock) {
 
 func TestLedger_Record(t *testing.T) {
 	member := deploymentTarget("default", "web")
-	failedOn := func(phase string, err error) applyResult { return failedStep(member, phase, err) }
+	failedOn := func(phase workload.Step, err error) applyResult { return failedStep(member, phase, err) }
 	succeeded := func(kind applyKind) applyResult { return applyResult{member: member, kind: kind} }
 	cases := []struct {
 		name        string
@@ -35,69 +35,69 @@ func TestLedger_Record(t *testing.T) {
 		res         applyResult
 		wantFailed  bool
 		wantEvent   string
-		wantBlocked string
+		wantBlocked workload.Step
 		wantMayRun  bool
 	}{
 		{
-			name: "transient failure backs off", res: failedOn(phasePatch, unavailable),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: phasePatch,
+			name: "transient failure backs off", res: failedOn(workload.StepPatch, unavailable),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepPatch,
 		},
 		{
-			name: "query timeout is a transient failure", res: failedOn(phasePrometheus, fmt.Errorf("querying cpu: %w", context.DeadlineExceeded)),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: phasePrometheus,
+			name: "query timeout is a transient failure", res: failedOn(workload.StepPrometheus, fmt.Errorf("querying cpu: %w", context.DeadlineExceeded)),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepPrometheus,
 		},
 		{
-			name: "every transient attempt is warned about", before: []applyResult{failedOn(phasePatch, unavailable)}, res: failedOn(phasePatch, unavailable),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: phasePatch,
+			name: "every transient attempt is warned about", before: []applyResult{failedOn(workload.StepPatch, unavailable)}, res: failedOn(workload.StepPatch, unavailable),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepPatch,
 		},
 		{
-			name: "permanent failure blocks without backoff", res: failedOn(phasePatch, forbidden),
-			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: phasePatch, wantMayRun: true,
+			name: "permanent failure blocks without backoff", res: failedOn(workload.StepPatch, forbidden),
+			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: workload.StepPatch, wantMayRun: true,
 		},
 		{
-			name: "permanent failure is warned about once", before: []applyResult{failedOn(phasePatch, forbidden)}, res: failedOn(phasePatch, forbidden),
-			wantFailed: true, wantBlocked: phasePatch, wantMayRun: true,
+			name: "permanent failure is warned about once", before: []applyResult{failedOn(workload.StepPatch, forbidden)}, res: failedOn(workload.StepPatch, forbidden),
+			wantFailed: true, wantBlocked: workload.StepPatch, wantMayRun: true,
 		},
 		{
-			name: "transient failure turning permanent is warned about", before: []applyResult{failedOn(phasePatch, unavailable)}, res: failedOn(phasePatch, forbidden),
-			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: phasePatch, wantMayRun: true,
+			name: "transient failure turning permanent is warned about", before: []applyResult{failedOn(workload.StepPatch, unavailable)}, res: failedOn(workload.StepPatch, forbidden),
+			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: workload.StepPatch, wantMayRun: true,
 		},
 		{
-			name: "a conflict is retried with backoff", res: failedOn(phaseResize, apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, "web-1", errors.New("modified"))),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: phaseResize,
+			name: "a conflict is retried with backoff", res: failedOn(workload.StepResize, apierrors.NewConflict(schema.GroupResource{Resource: "pods"}, "web-1", errors.New("modified"))),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepResize,
 		},
 		{
-			name: "a refused member blocks without backoff", res: failedOn(phasePatch, fmt.Errorf("%w: Deployment default/web has no selector", workload.ErrRefused)),
-			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: phasePatch, wantMayRun: true,
+			name: "a refused member blocks without backoff", res: failedOn(workload.StepPatch, fmt.Errorf("%w: Deployment default/web has no selector", workload.ErrRefused)),
+			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: workload.StepPatch, wantMayRun: true,
 		},
 		{
-			name: "member withheld for a failed write counts", res: failedOn(phaseStore, unavailable),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: phaseStore,
+			name: "member withheld for a failed write counts", res: failedOn(workload.StepStore, unavailable),
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepStore,
 		},
 		{
-			name: "member withheld for a record whose object was deleted since its claim backs off", res: failedOn(phaseStore,
+			name: "member withheld for a record whose object was deleted since its claim backs off", res: failedOn(workload.StepStore,
 				apierrors.NewNotFound(schema.GroupResource{Resource: "workloadrecommendations"}, "deployment-web")),
-			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: phaseStore,
+			wantFailed: true, wantEvent: "ReconciliationRetryScheduled", wantBlocked: workload.StepStore,
 		},
 		{
-			name: "member withheld for a forbidden Ensure counts", res: failedOn(phaseStore, forbidden),
-			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: phaseStore, wantMayRun: true,
+			name: "member withheld for a forbidden Ensure counts", res: failedOn(workload.StepStore, forbidden),
+			wantFailed: true, wantEvent: "ReconciliationFailed", wantBlocked: workload.StepStore, wantMayRun: true,
 		},
 		{
-			name: "applying clears a failure", before: []applyResult{failedOn(phasePatch, forbidden)}, res: succeeded(applyDone),
+			name: "applying clears a failure", before: []applyResult{failedOn(workload.StepPatch, forbidden)}, res: succeeded(applyDone),
 			wantMayRun: true,
 		},
 		{
-			name: "nothing to apply clears a failure", before: []applyResult{failedOn(phasePatch, unavailable)}, res: succeeded(applyIdle),
+			name: "nothing to apply clears a failure", before: []applyResult{failedOn(workload.StepPatch, unavailable)}, res: succeeded(applyIdle),
 			wantMayRun: true,
 		},
 		{
-			name: "a failed OnCreate count clears a failure", before: []applyResult{failedOn(phasePatch, unavailable)}, res: succeeded(applyUncounted),
+			name: "a failed OnCreate count clears a failure", before: []applyResult{failedOn(workload.StepPatch, unavailable)}, res: succeeded(applyUncounted),
 			wantMayRun: true,
 		},
 		{
-			name: "a skipped member stays Blocked", before: []applyResult{failedOn(phasePatch, unavailable)}, res: succeeded(applySkipped),
-			wantBlocked: phasePatch,
+			name: "a skipped member stays Blocked", before: []applyResult{failedOn(workload.StepPatch, unavailable)}, res: succeeded(applySkipped),
+			wantBlocked: workload.StepPatch,
 		},
 	}
 	for _, tc := range cases {
@@ -142,7 +142,7 @@ func TestLedger_TransientBackoffGrowsToItsCap(t *testing.T) {
 		want = append(want, maxRetryDelay)
 	}
 	for i, delay := range want {
-		ev, _ := l.record(failedStep(member, phasePatch, unavailable))
+		ev, _ := l.record(failedStep(member, workload.StepPatch, unavailable))
 		got, ok := l.nextRetry([]string{member.key()})
 		if !ok || got != delay {
 			t.Fatalf("attempt %d: next retry in %v (%v), want %v", i+1, got, ok, delay)
@@ -166,12 +166,12 @@ func TestLedger_TransientBackoffGrowsToItsCap(t *testing.T) {
 func TestLedger_PermanentFailuresDoNotGrowTheBackoff(t *testing.T) {
 	l, clk := ledgerOnFakeClock()
 	member := deploymentTarget("default", "web")
-	l.record(failedStep(member, phasePatch, unavailable))
+	l.record(failedStep(member, workload.StepPatch, unavailable))
 	for range 3 {
-		l.record(failedStep(member, phasePatch, forbidden))
+		l.record(failedStep(member, workload.StepPatch, forbidden))
 	}
 
-	ev, _ := l.record(failedStep(member, phasePatch, unavailable))
+	ev, _ := l.record(failedStep(member, workload.StepPatch, unavailable))
 
 	if got, ok := l.nextRetry([]string{member.key()}); !ok || got != baseRetryDelay {
 		t.Errorf("next retry in %v (%v), want %v", got, ok, baseRetryDelay)
@@ -186,10 +186,10 @@ func TestLedger_NextRetryIsTheEarliestBackoff(t *testing.T) {
 	l, clk := ledgerOnFakeClock()
 	first, second := deploymentTarget("default", "first"), deploymentTarget("default", "second")
 	denied, healthy := deploymentTarget("default", "denied"), deploymentTarget("default", "healthy")
-	l.record(failedStep(second, phasePatch, unavailable))
+	l.record(failedStep(second, workload.StepPatch, unavailable))
 	clk.SetTime(clk.Now().Add(10 * time.Second))
-	l.record(failedStep(first, phasePatch, unavailable))
-	l.record(failedStep(denied, phasePatch, forbidden))
+	l.record(failedStep(first, workload.StepPatch, unavailable))
+	l.record(failedStep(denied, workload.StepPatch, forbidden))
 	l.record(applyResult{member: healthy, kind: applyDone})
 
 	all := []string{first.key(), second.key(), denied.key(), healthy.key()}
@@ -218,7 +218,7 @@ func TestLedger_PodCounts(t *testing.T) {
 		{"nothing to apply drops them", applyResult{member: member, kind: applyIdle}, false, workload.PodCounts{}},
 		{"a failed OnCreate count keeps them", applyResult{member: member, kind: applyUncounted}, true, measured},
 		{"a skipped member keeps them", applyResult{member: member, kind: applySkipped}, true, measured},
-		{"a failed member keeps them", failedStep(member, phasePatch, unavailable), true, measured},
+		{"a failed member keeps them", failedStep(member, workload.StepPatch, unavailable), true, measured},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l, _ := ledgerOnFakeClock()

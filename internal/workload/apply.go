@@ -13,6 +13,8 @@ import (
 	klabels "k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 )
 
 // ErrRefused is wrapped by every error Apply returns for a member it will not
@@ -32,10 +34,27 @@ type Member struct {
 	Object client.Object
 	// Pods are a bare-pod identity's governed pods. Read only for kind Pod.
 	Pods []*corev1.Pod
+	// Containers and InitContainers are what the member declares: its pod
+	// template's, or a bare-pod identity's union. Apply narrows the
+	// Recommendation to them.
+	Containers, InitContainers []corev1.Container
 }
 
-// ApplySettings are the Policy's choices for one Apply.
+// RecommendOnly is what makes a member recommend-only, empty when nothing
+// does.
+type RecommendOnly string
+
+const (
+	// RecommendOnlyFlag: the controller's --recommend-only.
+	RecommendOnlyFlag RecommendOnly = "flag"
+	// RecommendOnlyPolicy: the Policy's rightSizing.recommendOnly.
+	RecommendOnlyPolicy RecommendOnly = "policy"
+)
+
+// ApplySettings are the Policy's choices for applying to one member.
 type ApplySettings struct {
+	// RecommendOnly, when set, applies nothing and reads no pod.
+	RecommendOnly RecommendOnly
 	// DryRun evaluates the member's pods without touching any, so OnCreate can
 	// count the pods still waiting for a rollout to pick up the
 	// Recommendation.
@@ -46,46 +65,143 @@ type ApplySettings struct {
 	IgnoreSafeToEvict bool
 }
 
-// Outcome is what one Apply did to a member's pods.
-type Outcome struct {
-	// InPlaceOnly is set, error or not, for kinds whose pods are never
-	// evicted.
-	InPlaceOnly bool
-	// Changed counts the pods resized in place or evicted.
-	Changed int
+// ApplySettingsFor maps policy to its choices for a member of kind.
+// recommendOnly is the controller's --recommend-only, which no Policy can
+// turn off.
+func ApplySettingsFor(policy *sustainv1alpha1.Policy, kind string, recommendOnly bool) ApplySettings {
+	rs := policy.Spec.RightSizing
+	mode := rs.Update.Types.ModeForKind(kind)
+	var why RecommendOnly
+	switch {
+	case recommendOnly:
+		why = RecommendOnlyFlag
+	case rs.RecommendOnly:
+		why = RecommendOnlyPolicy
+	}
+	return ApplySettings{
+		RecommendOnly: why,
+		// Only Ongoing touches running pods; under OnCreate the webhook
+		// applies resources at admission.
+		DryRun:            mode == nil || *mode != sustainv1alpha1.UpdateModeOngoing,
+		Tolerance:         toleranceOf(rs.ResourcesConfigs),
+		IgnoreSafeToEvict: rs.Update.Eviction.IgnoreAutoscalerSafeToEvictAnnotations,
+	}
+}
+
+// ResultKind classifies what one Apply did with a member.
+type ResultKind int
+
+const (
+	// ResultDone: the member's pods were driven toward the Recommendation,
+	// and counted.
+	ResultDone ResultKind = iota
+	// ResultIdle: there was nothing to apply, no Recommendation for the
+	// member's containers or recommend-only. No pod was read.
+	ResultIdle
+	// ResultCountedOnly: a dry run counted the pods still waiting for the
+	// Recommendation, and touched none.
+	ResultCountedOnly
+	// ResultFailed: a step failed.
+	ResultFailed
+)
+
+// Step is what applying to a member failed on: the reason its Blocked
+// identity reports. Apply fails on StepPatch or StepResize; a caller that
+// withholds the apply fails the member on StepPrometheus or StepStore.
+type Step string
+
+const (
+	// StepPrometheus: the identity's inputs could not be read.
+	StepPrometheus Step = "prometheus"
+	// StepPatch: listing, resizing or evicting the pods of a kind that
+	// evicts.
+	StepPatch Step = "patch"
+	// StepResize: listing or resizing the pods of an in-place-only kind.
+	StepResize Step = "resize"
+	// StepStore: the identity's Recommendation could not be stored for the
+	// webhook, which the replacement of an evicted pod would read.
+	StepStore Step = "store"
+)
+
+// Result is what one Apply did with a member.
+type Result struct {
+	Kind ResultKind
+	// Step and Err are the step that failed and why, set for ResultFailed.
+	Step Step
+	Err  error
 	// Pods counts the member's live pods and those still stale after the
-	// pass. Set only when Apply returns no error.
-	Pods PodCounts
+	// pass, when Counted: always for ResultDone, and for ResultCountedOnly
+	// unless the member's pods could not be listed.
+	Pods    PodCounts
+	Counted bool
+	// Resized and Evicted name the pods resized in place and evicted.
+	Resized, Evicted []string
+	// Containers names, sorted, the containers whose resources changed on a
+	// pod resized or evicted.
+	Containers []string
 	// Suppressed counts, per resource ("cpu", "memory"), the pods whose
 	// decrease the Tolerance withheld.
 	Suppressed map[string]int
 }
 
-func (o *Outcome) countSuppressed(resource string) {
-	if o.Suppressed == nil {
-		o.Suppressed = map[string]int{}
+// Changed counts the pods resized in place or evicted.
+func (r Result) Changed() int { return len(r.Resized) + len(r.Evicted) }
+
+func (r *Result) countSuppressed(resource string) {
+	if r.Suppressed == nil {
+		r.Suppressed = map[string]int{}
 	}
-	o.Suppressed[resource]++
+	r.Suppressed[resource]++
 }
 
-// Apply drives a member's pods toward recs, the Recommendation narrowed to
-// the containers the member declares. Pods are resized in place where the
-// cluster supports it and otherwise evicted one at a time, so the webhook
-// injects recs into the replacement. Pods of in-place-only kinds are never
-// evicted.
-func (p *Patcher) Apply(ctx context.Context, m Member, recs map[string]ContainerRecommendation, s ApplySettings) (Outcome, error) {
+// Apply drives a member's pods toward recs, the identity's Recommendation,
+// narrowed to the containers the member declares. Pods are resized in place
+// where the cluster supports it and otherwise evicted one at a time, so the
+// webhook injects recs into the replacement. Pods of in-place-only kinds are
+// never evicted.
+func (p *Patcher) Apply(ctx context.Context, m Member, recs map[string]ContainerRecommendation, s ApplySettings) Result {
+	logger := log.FromContext(ctx)
+	recs = Inject(m.Containers, m.InitContainers, false, recs).Recs
+	if len(recs) == 0 {
+		logger.V(1).Info("no recommendation for the member's containers, nothing to apply")
+		return Result{Kind: ResultIdle}
+	}
+	if s.RecommendOnly != "" {
+		logger.Info("recommend-only: applying nothing", "source", s.RecommendOnly, "recommendations", recs)
+		return Result{Kind: ResultIdle}
+	}
 	rule, ok := applyRules[m.Kind]
 	if !ok {
-		return Outcome{}, fmt.Errorf("%w: no apply rule for kind %q", ErrRefused, m.Kind)
+		return Result{Kind: ResultFailed, Step: StepPatch, Err: fmt.Errorf("%w: no apply rule for kind %q", ErrRefused, m.Kind)}
+	}
+	step := StepPatch
+	if rule.inPlaceOnly {
+		step = StepResize
 	}
 	set, err := rule.podsOf(ctx, p.client, m)
-	if err != nil {
-		return Outcome{InPlaceOnly: rule.inPlaceOnly}, err
+	switch {
+	case err != nil && s.DryRun:
+		// Not a failure: a dry run touches no pod.
+		logger.Info("counting the member's pods failed, pod counts left unchanged", "error", err.Error())
+		return Result{Kind: ResultCountedOnly}
+	case err != nil:
+		return Result{Kind: ResultFailed, Step: step, Err: err}
+	case s.DryRun:
+		return Result{Kind: ResultCountedOnly, Pods: countPods(set.pods, recs, s.Tolerance, nil), Counted: true}
 	}
+	logger.V(1).Info("applying recommendations", "recommendations", recs)
+	var res Result
 	if rule.inPlaceOnly {
-		return p.resizeInPlaceOnly(ctx, set.pods, recs, s)
+		res, err = p.resizeInPlaceOnly(ctx, set.pods, recs, s)
+	} else {
+		res, err = p.recycle(ctx, set, recs, s)
 	}
-	return p.recycle(ctx, set, recs, s)
+	if err != nil {
+		res.Kind, res.Step, res.Err = ResultFailed, step, err
+		return res
+	}
+	res.Kind = ResultDone
+	return res
 }
 
 // applyRule is how Apply treats one kind's members.

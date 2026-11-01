@@ -38,7 +38,7 @@ The stored record of one identity's Recommendation, the Policy that computed it,
 _Avoid_: cache entry, wlrec (outside kubectl)
 
 **Recommendation**:
-The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. It is served only to pods of the Policy that computed it: an identity another Policy adopts gets none until that Policy computes its own. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold, and it never leaves a container's request above its limit: where it would, the limit is raised to the request.
+The requests and limits an identity's pods should run, as held in its WorkloadRecommendation. It is served only to pods of the Policy that computed it: an identity another Policy adopts gets none until that Policy computes its own. Applying it (resizing, evicting, injecting) is a separate step that recommend-only, OnCreate or a suppressed decrease can withhold; a change to limits alone resizes pods in place or waits for their replacements, never evicting one; and applying never leaves a container's request above its limit: where it would, the limit is raised to the request.
 _Avoid_: applied recommendation, current recommendation
 
 **Signal**:
@@ -72,4 +72,4 @@ _Avoid_: OOM event, OOM (alone)
 An identity with an OOM kill in the last 24 hours.
 
 **Drifted**:
-An identity with pods whose running resources differ from its Recommendation by more than its Policy tolerates; a decrease the Policy suppresses is not drift.
+An identity with pods whose running resources differ from its Recommendation by more than its Policy tolerates; a decrease the Policy suppresses, or a change to limits alone that waits for the pods' replacements, is not drift.

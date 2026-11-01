@@ -18,19 +18,11 @@ const (
 	maxRetryDelay  = 5 * time.Minute
 )
 
-// The step a member failed on: the reason its Blocked identity reports.
-const (
-	phasePrometheus = "prometheus"
-	phasePatch      = "patch"
-	phaseResize     = "resize"
-	phaseStore      = "store"
-)
-
-var stepFailures = map[string]string{
-	phasePrometheus: "Prometheus query failed",
-	phasePatch:      "Pod recycle failed",
-	phaseResize:     "In-place pod resize failed",
-	phaseStore:      "Recommendation could not be stored for the webhook",
+var stepFailures = map[workload.Step]string{
+	workload.StepPrometheus: "Prometheus query failed",
+	workload.StepPatch:      "Pod recycle failed",
+	workload.StepResize:     "In-place pod resize failed",
+	workload.StepStore:      "Recommendation could not be stored for the webhook",
 }
 
 type applyKind int
@@ -63,7 +55,7 @@ type applyResult struct {
 	// pods is the member's pod counts, set for applyDone.
 	pods workload.PodCounts
 	// phase and err are the step that failed and why, set for applyFailed.
-	phase string
+	phase workload.Step
 	err   error
 	// suppressed counts, per resource, the member's pods on which the
 	// downsize threshold held back a decrease.
@@ -84,7 +76,7 @@ type healthState struct {
 	pods     workload.PodCounts
 	measured bool
 	// blockedOn is the step it keeps failing on, empty unless it is Blocked.
-	blockedOn string
+	blockedOn workload.Step
 }
 
 // ledger is the controller's memory of applying each live member, across
@@ -107,7 +99,7 @@ type memberEntry struct {
 
 // failure is a member's run of consecutive failed passes.
 type failure struct {
-	phase     string
+	phase     workload.Step
 	permanent bool
 	// attempts counts the consecutive transient failures the backoff grows
 	// with, zero for a permanent one: a permanent failure in between restarts

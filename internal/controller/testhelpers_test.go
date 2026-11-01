@@ -63,25 +63,6 @@ func annotatedDeployment(ns, name, policy string) *appsv1.Deployment {
 	}
 }
 
-func annotatedCronJob(ns, name, policy string) *batchv1.CronJob {
-	return &batchv1.CronJob{
-		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: types.UID(name + "-uid")},
-		Spec: batchv1.CronJobSpec{
-			Schedule: "* * * * *",
-			JobTemplate: batchv1.JobTemplateSpec{
-				Spec: batchv1.JobSpec{
-					Template: corev1.PodTemplateSpec{
-						ObjectMeta: metav1.ObjectMeta{
-							Annotations: map[string]string{sustainv1alpha1.PolicyAnnotation: policy},
-						},
-						Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
-					},
-				},
-			},
-		},
-	}
-}
-
 // annotatedJob builds a standalone (not CronJob-owned), non-terminal Job
 // opted into policy via its pod template annotation.
 func annotatedJob(ns, name, policy string) *batchv1.Job {
@@ -257,11 +238,11 @@ func targetFromObject(obj client.Object, kind string) workloadTarget {
 		m.Containers, m.InitContainers = tmpl.Spec.Containers, tmpl.Spec.InitContainers
 		_, name = workload.ApplyOwnerNameOverride(kind, name, tmpl.Annotations)
 	}
-	return *targetFromMember(identityOf(obj.GetNamespace(), kind, name), m, "")
+	return *targetFromMember(identityOf(obj.GetNamespace(), kind, name), m)
 }
 
 // failedStep is the result of a member whose step failed with err.
-func failedStep(t *workloadTarget, phase string, err error) applyResult {
+func failedStep(t *workloadTarget, phase workload.Step, err error) applyResult {
 	return applyResult{member: t, kind: applyFailed, phase: phase, err: err}
 }
 
@@ -306,44 +287,9 @@ func barePodTarget(t *testing.T, ns, ownerName string, pods ...*corev1.Pod) *wor
 		t.Fatalf("inventory: %v", err)
 	}
 	if id, ok := snap.Lookup(identityOf(ns, "Pod", ownerName)); ok {
-		if targets := targetsOf(id, "p", ongoing); len(targets) == 1 {
+		if targets := targetsOf(id, "p"); len(targets) == 1 {
 			return targets[0]
 		}
 	}
-	return &workloadTarget{Kind: "Pod", Name: ownerName, Namespace: ns}
-}
-
-// podRecorder records which pods received a /resize subresource patch and
-// which were evicted.
-type podRecorder struct {
-	resized map[string]bool
-	evicted map[string]bool
-}
-
-// recordPods rewires r onto a fake cluster holding objs whose resizes and
-// evictions are recorded, never applied.
-func recordPods(t *testing.T, r *PolicyReconciler, objs ...client.Object) *podRecorder {
-	t.Helper()
-	rec := &podRecorder{resized: map[string]bool{}, evicted: map[string]bool{}}
-	r.Client = fake.NewClientBuilder().
-		WithScheme(r.Scheme).
-		WithStatusSubresource(&sustainv1alpha1.Policy{}, &sustainv1alpha1.WorkloadRecommendation{}).
-		WithObjects(objs...).
-		WithInterceptorFuncs(interceptor.Funcs{
-			SubResourcePatch: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
-				if _, ok := obj.(*corev1.Pod); ok && sub == "resize" {
-					rec.resized[obj.GetName()] = true
-				}
-				return nil
-			},
-			SubResourceCreate: func(_ context.Context, _ client.Client, sub string, obj client.Object, _ client.Object, _ ...client.SubResourceCreateOption) error {
-				if sub == "eviction" {
-					rec.evicted[obj.GetName()] = true
-				}
-				return nil
-			},
-		}).
-		Build()
-	r.patcher = workload.New(r.Client, r.InPlaceUpdates)
-	return rec
+	return &workloadTarget{Member: workload.Member{Kind: "Pod"}, Name: ownerName, Namespace: ns}
 }

@@ -194,9 +194,8 @@ func statusEquivalent(a, b sustainv1alpha1.WorkloadRecommendationStatus) bool {
 }
 
 // quantityEqual treats a nil pointer and an explicit zero as the same "unset"
-// value. Deliberately not shared with internal/controller/diff.go: comparing two
-// stored recommendations is a distinct concern from comparing a live container
-// against one.
+// value. Deliberately not workload's comparison of a live container against a
+// Recommendation, where a nil field means "leave alone" rather than unset.
 func quantityEqual(a, b *resource.Quantity) bool {
 	aZero := a == nil || a.IsZero()
 	bZero := b == nil || b.IsZero()

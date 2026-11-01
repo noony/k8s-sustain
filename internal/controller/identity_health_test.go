@@ -21,6 +21,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
+	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // identityGauges describe an identity's live members, so a departed
@@ -192,8 +193,8 @@ func TestReconcile_IdentityHealthSeriesAggregateMembers(t *testing.T) {
 	blueTarget, greenTarget := targetFromObject(blue, "Deployment"), targetFromObject(green, "Deployment")
 	transient := apierrors.NewServiceUnavailable("apiserver unavailable")
 	r.settle(ctx, passReport{{key: api, members: []applyResult{
-		failedStep(&greenTarget, phasePrometheus, transient),
-		failedStep(&blueTarget, phasePatch, transient),
+		failedStep(&greenTarget, workload.StepPrometheus, transient),
+		failedStep(&blueTarget, workload.StepPatch, transient),
 	}}})
 
 	reconcilePolicy(t, r, policyName)

@@ -553,8 +553,9 @@ coexist.
   ```
 
 - The operator says why nothing happens — the controller logs
-  `recommend-only: computed recommendations` with `source=policy`, and the
-  webhook logs `recommend-only: would inject resources` on pod creation:
+  `recommend-only: applying nothing`, and the webhook logs
+  `recommend-only: would inject resources` on pod creation, both with
+  `source=policy`:
 
   ```bash
   kubectl logs -n k8s-sustain -l app.kubernetes.io/name=k8s-sustain --tail=500 \
