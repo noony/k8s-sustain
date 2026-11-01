@@ -3,7 +3,6 @@ package webhook
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -17,8 +16,6 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/governance"
-	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
-	"github.com/noony/k8s-sustain/internal/workload"
 )
 
 // Under a selector-less Policy the pre-gate always passes, so every pod CREATE
@@ -177,23 +174,4 @@ func mapKeys(m map[string]string) []string {
 		keys = append(keys, k)
 	}
 	return keys
-}
-
-// Every kind WorkloadAnnotations can Get must appear in k8s.OwnerChainDisableFor,
-// or the first pod CREATE reaching that kind stands up a cluster-wide informer
-// instead of costing one Get — its LIST is charged against governanceTimeout, so on
-// a large cluster it silently times out and fails open. The two lists live in
-// different packages with nothing else forcing them to agree.
-func TestDisableForCoversOwnerAnnotationKinds(t *testing.T) {
-	disabled := map[reflect.Type]bool{}
-	for _, obj := range k8sclient.OwnerChainDisableFor() {
-		disabled[reflect.TypeOf(obj)] = true
-	}
-	for _, kind := range workload.OwnerChainKinds() {
-		typ := reflect.TypeOf(workload.ObjectForKind(kind))
-		if !disabled[typ] {
-			t.Errorf("WorkloadAnnotations can Get kind %q (%s) but k8s.OwnerChainDisableFor does not list it; "+
-				"its first Get would stand up a cluster-wide informer on the admission hot path", kind, typ)
-		}
-	}
 }

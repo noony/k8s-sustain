@@ -14,6 +14,7 @@ import {
 } from '../lib/api'
 import { parseCPUQuantity, parseMemoryQuantity, formatBytes, formatSeconds } from '../lib/format'
 import { outcomeLabel } from '../lib/outcomes'
+import { getKinds, type WorkloadKind } from '../lib/kinds'
 import { limitModeOf, limitModeOrder, limitModes, limitsPatch, type LimitMode } from '../lib/limits'
 import { patches, setPatch, valueAt, type KeyPath, type ValueAt } from '../lib/patch'
 import type { Chart } from 'chart.js'
@@ -43,7 +44,7 @@ const props = defineProps<{
 }>()
 
 const simNs = ref(props.namespace || '')
-const simKind = ref(props.kind || 'Deployment')
+const simKind = ref(props.kind || '')
 const simName = ref(props.name || '')
 const { range } = useTimeRange()
 
@@ -90,6 +91,8 @@ const override = ref<SimulationOverride>({})
 const basePolicy = ref('')
 
 const policies = ref<PolicySummary[]>([])
+const kinds = ref<WorkloadKind[]>([])
+const kindsError = ref('')
 const simData = ref<SimulationResult | null>(null)
 const simError = ref('')
 const overrideError = ref('')
@@ -268,6 +271,17 @@ async function loadPolicies() {
   } catch {
     policies.value = []
   }
+}
+
+async function loadKinds() {
+  try {
+    kinds.value = await getKinds()
+    kindsError.value = ''
+  } catch (e: any) {
+    kindsError.value = e.message
+    return
+  }
+  if (!simKind.value) simKind.value = kinds.value[0]?.name ?? ''
 }
 
 function startFrom(policy: string) {
@@ -461,7 +475,7 @@ function resetRange() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadPolicies(), loadWorkloads()])
+  await Promise.all([loadPolicies(), loadWorkloads(), loadKinds()])
   if (props.namespace && props.name) {
     runSimulation()
   }
@@ -481,7 +495,13 @@ onUnmounted(() => {
 
   <div class="card">
     <div class="card-header"><h2>Workload Target</h2></div>
-    <div class="workload-selector">
+    <ErrorState
+      v-if="kindsError"
+      title="Could not load the workload kinds"
+      :message="kindsError"
+      @retry="loadKinds"
+    />
+    <div v-else class="workload-selector">
       <div class="form-group">
         <label for="sim-ns">Namespace</label>
         <Combobox
@@ -497,13 +517,7 @@ onUnmounted(() => {
       <div class="form-group">
         <label for="sim-kind">Kind</label>
         <select id="sim-kind" v-model="simKind">
-          <option value="Deployment">Deployment</option>
-          <option value="StatefulSet">StatefulSet</option>
-          <option value="DaemonSet">DaemonSet</option>
-          <option value="CronJob">CronJob</option>
-          <option value="Job">Job</option>
-          <option value="Rollout">Rollout</option>
-          <option value="Pod">Pod</option>
+          <option v-for="k in kinds" :key="k.name" :value="k.name">{{ k.name }}</option>
         </select>
       </div>
       <div class="form-group">

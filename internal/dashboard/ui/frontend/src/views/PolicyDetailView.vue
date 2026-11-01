@@ -9,6 +9,7 @@ import { useListQuery } from '../composables/useListQuery'
 import { formatBytes, timeAgo } from '../lib/format'
 import { outcomeLabel } from '../lib/outcomes'
 import { limitsLabel } from '../lib/limits'
+import { getKinds, updateModes, type WorkloadKind } from '../lib/kinds'
 import { rangeQueryParams, resolveRange } from '../lib/timerange'
 import StatusBadge from '../components/StatusBadge.vue'
 import ResourceDiff from '../components/ResourceDiff.vue'
@@ -28,6 +29,7 @@ const loading = ref(true)
 const error = ref('')
 const policy = ref<PolicySpec | null>(null)
 const workloadData = ref<PolicyWorkloadsData | null>(null)
+const kinds = ref<WorkloadKind[] | null>(null)
 const batchLoading = ref(false)
 const batchData = ref<BatchSimulateData | null>(null)
 const batchError = ref('')
@@ -87,11 +89,15 @@ async function loadWorkloads() {
 }
 
 function load() {
+  // Without the kinds the page still renders, naming each by its raw key.
   return track(
-    Promise.all([fetchPolicy(), fetchWorkloads()]).then(([pol, w]) => {
-      policy.value = pol
-      if (w) workloadData.value = w
-    }),
+    Promise.all([fetchPolicy(), fetchWorkloads(), getKinds().catch(() => null)]).then(
+      ([pol, w, served]) => {
+        policy.value = pol
+        kinds.value = served
+        if (w) workloadData.value = w
+      },
+    ),
   )
 }
 
@@ -125,7 +131,7 @@ function excludeInit(): boolean {
 }
 
 function updateTypes() {
-  return policy.value?.spec?.rightSizing?.update?.types || policy.value?.update || {}
+  return policy.value?.spec?.rightSizing?.update?.types || policy.value?.update
 }
 
 function matchExprs(): string[] {
@@ -170,18 +176,6 @@ function memEffectivenessSeries() {
   const mem = policy.value?.effectivenessSeries?.memory || []
   if (mem.length === 0) return []
   return [{ label: 'Mem saved', color: 'mem', points: mem }]
-}
-
-function modeBadges(): string {
-  const u = updateTypes()
-  const parts: string[] = []
-  if (u.deployment) parts.push(`Deploy:${u.deployment}`)
-  if (u.statefulSet) parts.push(`STS:${u.statefulSet}`)
-  if (u.daemonSet) parts.push(`DS:${u.daemonSet}`)
-  if (u.cronJob) parts.push(`CJ:${u.cronJob}`)
-  if (u.job) parts.push(`Job:${u.job}`)
-  if (u.argoRollout) parts.push(`Rollout:${u.argoRollout}`)
-  return parts.join(', ') || '-'
 }
 
 function renderYaml(p: typeof policy.value): string {
@@ -301,7 +295,7 @@ function renderYaml(p: typeof policy.value): string {
       <div class="mt-3">
         <div class="rec-row">
           <span class="label">Update mode</span>
-          <span class="value">{{ modeBadges() }}</span>
+          <span class="value">{{ updateModes(kinds, updateTypes()) }}</span>
         </div>
         <div class="rec-row">
           <span class="label">Ignore safe-to-evict annotations</span>

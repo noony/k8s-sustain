@@ -24,7 +24,7 @@ var (
 func ownerlessKinds(c chart) []string {
 	var out []string
 	for _, d := range c.rules[promclient.MetricPodWorkload] {
-		for _, m := range ownerKindLiterals.FindAllStringSubmatch(d.expr, -1) {
+		for _, m := range ownerKindLiterals.FindAllStringSubmatch(d.Expr, -1) {
 			out = append(out, m[1])
 		}
 	}
@@ -38,7 +38,7 @@ func ownerNamePatterns(t *testing.T, c chart) []string {
 	var out []string
 	for _, name := range slices.Sorted(maps.Keys(c.rules)) {
 		for _, d := range c.rules[name] {
-			for _, m := range annotationSelectors.FindAllStringSubmatch(d.expr, -1) {
+			for _, m := range annotationSelectors.FindAllStringSubmatch(d.Expr, -1) {
 				sub := ownerNameMatcher.FindStringSubmatch(strings.TrimSpace(m[1]))
 				if sub == nil {
 					t.Errorf("%s selects kube_pod_annotations{%s}, want exactly annotation_k8s_sustain_io_owner_name=~\"...\"", name, m[1])
@@ -95,7 +95,7 @@ func TestRecordingRulesApplyTheOwnerNameOverrideWhereTheControllerDoes(t *testin
 			c.podAnnotations, sustainv1alpha1.OwnerNameAnnotation)
 	}
 	for i, d := range c.rules[promclient.MetricPodWorkload] {
-		if !annotationSelectors.MatchString(d.expr) {
+		if !annotationSelectors.MatchString(d.Expr) {
 			t.Errorf("definition %d of %s does not read the owner-name override from kube_pod_annotations", i, promclient.MetricPodWorkload)
 		}
 	}

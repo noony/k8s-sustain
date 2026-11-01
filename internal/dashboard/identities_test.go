@@ -20,6 +20,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -75,7 +76,7 @@ func deploymentPolicy(name string) *sustainv1alpha1.Policy {
 
 func identityServer(t *testing.T, health memHealthSignals, objs ...client.Object) *Server {
 	t.Helper()
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(objs...).Build()
 	return &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: health, Inputs: recommendertest.NewStaticInputs()}
 }
 
@@ -400,7 +401,7 @@ func TestWorkloadDetailReadsEventsOfEveryMember(t *testing.T) {
 			return b.WithIndex(&corev1.Event{}, name, func(o client.Object) []string { return []string{value(o.(*corev1.Event))} })
 		}
 	}
-	b := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...)
+	b := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(objs...)
 	for _, index := range []func(*fake.ClientBuilder) *fake.ClientBuilder{
 		field("source", func(e *corev1.Event) string { return e.Source.Component }),
 		field("involvedObject.kind", func(e *corev1.Event) string { return e.InvolvedObject.Kind }),

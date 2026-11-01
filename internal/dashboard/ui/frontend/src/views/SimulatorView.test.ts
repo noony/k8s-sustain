@@ -3,7 +3,12 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import SimulatorView from './SimulatorView.vue'
 import * as api from '../lib/api'
 import * as chart from '../lib/chart'
+import * as kindsLib from '../lib/kinds'
 vi.mock('../lib/api', async (o) => ({ ...((await o()) as object), api: vi.fn() }))
+vi.mock('../lib/kinds', async (o) => ({
+  ...((await o()) as object),
+  getKinds: vi.fn(async () => []),
+}))
 vi.mock('../lib/chart', async (o) => ({
   ...((await o()) as object),
   createTimeSeriesChart: vi.fn(),
@@ -339,11 +344,63 @@ describe('SimulatorView', () => {
     expect((w.find('[data-test="cpu-percentile"]').element as HTMLInputElement).value).toBe('90')
   })
 
-  it('renders form with Rollout option', async () => {
-    ;(api.api as any).mockResolvedValue([])
+  it('offers the kinds the server serves, starting from the first', async () => {
+    ;(api.api as any).mockReset()
+    ;(api.api as any).mockImplementation(async () => [])
+    ;(kindsLib.getKinds as any).mockResolvedValueOnce([
+      { name: 'Rollout', updateField: 'argoRollout', inPlaceOnly: false },
+      { name: 'Widget', updateField: 'widget', inPlaceOnly: true },
+    ])
     const w = mount(SimulatorView, { global: { stubs: ['TimeRangePicker'] } })
     await flushPromises()
-    expect(w.html()).toContain('<option value="Rollout">')
+    const select = w.find('#sim-kind')
+    expect(select.findAll('option').map((o) => o.attributes('value'))).toEqual([
+      'Rollout',
+      'Widget',
+    ])
+    expect((select.element as HTMLSelectElement).value).toBe('Rollout')
+  })
+
+  it('shows an error in place of the target when the kinds cannot load, and retries', async () => {
+    ;(api.api as any).mockReset()
+    ;(api.api as any).mockImplementation(async () => [])
+    ;(kindsLib.getKinds as any)
+      .mockRejectedValueOnce(new Error('kinds unavailable'))
+      .mockResolvedValueOnce([
+        { name: 'Deployment', updateField: 'deployment', inPlaceOnly: false },
+      ])
+    const w = mount(SimulatorView, { global: { stubs: ['TimeRangePicker'] } })
+    await flushPromises()
+    expect(w.find('[role="alert"]').text()).toContain('kinds unavailable')
+    expect(w.find('#sim-kind').exists()).toBe(false)
+
+    await w.find('[role="alert"] button').trigger('click')
+    await flushPromises()
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+    expect((w.find('#sim-kind').element as HTMLSelectElement).value).toBe('Deployment')
+  })
+
+  it('simulates the kind the URL names', async () => {
+    const bodies: api.SimulateRequest[] = []
+    ;(api.api as any).mockReset()
+    ;(kindsLib.getKinds as any).mockResolvedValueOnce([
+      { name: 'Deployment', updateField: 'deployment', inPlaceOnly: false },
+      { name: 'Job', updateField: 'job', inPlaceOnly: true },
+    ])
+    ;(api.api as any).mockImplementation(async (path: string, opts?: RequestInit) => {
+      if (path === '/api/simulate') {
+        bodies.push(JSON.parse(opts!.body as string))
+        return simulation()
+      }
+      return []
+    })
+    const w = mount(SimulatorView, {
+      props: { namespace: 'prod', kind: 'Job', name: 'once' },
+      global: { stubs: ['TimeRangePicker'] },
+    })
+    await flushPromises()
+    expect((w.find('#sim-kind').element as HTMLSelectElement).value).toBe('Job')
+    expect(bodies.map((b) => b.ownerKind)).toEqual(['Job'])
   })
 
   it('pages through every workload within the API page-size limit', async () => {

@@ -93,7 +93,7 @@ func NewCached(runCtx, startCtx context.Context, scheme *runtime.Scheme) (_ clie
 // OwnerChainDisableFor lists the owner-chain kinds NewCached reads straight
 // from the apiserver: each is read at most once per pod CREATE, so an
 // informer over every object of the kind would cost more than it saves.
-// Exported so the webhook can assert it covers every kind it Gets.
+// Exported so hack/kindcontract can check it covers every owner-chain kind.
 func OwnerChainDisableFor() []client.Object {
 	return []client.Object{
 		&appsv1.ReplicaSet{},

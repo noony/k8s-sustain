@@ -19,11 +19,8 @@ type kindSpec struct {
 }
 
 // ownerKinds maps each workload kind to its constructors. A table rather than
-// a switch so callers can enumerate it via OwnerChainKinds.
-// TestDisableForCoversOwnerAnnotationKinds cross-checks that enumeration
-// against k8s.OwnerChainDisableFor: a kind read this way but missing there
-// stands up a cluster-wide informer on a hot path instead of costing one Get —
-// a silent, self-healing failure.
+// a switch so hack/kindcontract can enumerate it via OwnerChainKinds and check
+// every other place a kind is registered in against it.
 var ownerKinds = map[string]kindSpec{
 	"Deployment": {
 		newObject:     func() client.Object { return &appsv1.Deployment{} },
@@ -62,7 +59,8 @@ var ownerKinds = map[string]kindSpec{
 	},
 }
 
-// SupportedKinds is the canonical ordering of the kinds a Policy can target.
+// SupportedKinds is the canonical ordering of the kinds a Policy can target,
+// the one kind table hack/kindcontract checks every other place against.
 // "Pod" means bare-pod identities formed via the owner-name annotation; it is
 // deliberately absent from ownerKinds, since a bare pod has no separate owner
 // object to read.

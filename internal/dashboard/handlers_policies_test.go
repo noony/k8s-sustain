@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/config"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -13,7 +14,7 @@ import (
 func newTestServerWithPolicy(t *testing.T, name string) *Server {
 	t.Helper()
 	p := &sustainv1alpha1.Policy{ObjectMeta: metav1.ObjectMeta{Name: name}}
-	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(p).Build()
+	c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(p).Build()
 	return &Server{K8sClient: c, Logger: testLogger(t)}
 }
 

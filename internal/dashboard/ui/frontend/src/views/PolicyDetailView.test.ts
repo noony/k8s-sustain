@@ -2,11 +2,23 @@ import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import PolicyDetailView from './PolicyDetailView.vue'
 import * as api from '../lib/api'
+import * as kindsLib from '../lib/kinds'
 import { createRouter, createMemoryHistory, createWebHistory, type Router } from 'vue-router'
 
 vi.mock('../lib/api', async (o) => ({ ...((await o()) as object), api: vi.fn() }))
+vi.mock('../lib/kinds', async (o) => ({ ...((await o()) as object), getKinds: vi.fn() }))
+
+const kinds = [
+  { name: 'Deployment', updateField: 'deployment', inPlaceOnly: false },
+  { name: 'CronJob', updateField: 'cronJob', inPlaceOnly: true },
+  { name: 'Widget', updateField: 'widget', inPlaceOnly: false },
+]
 
 describe('PolicyDetailView', () => {
+  beforeEach(() => {
+    ;(kindsLib.getKinds as any).mockResolvedValue(kinds)
+  })
+
   it('renders effectiveness chart band and view-as-yaml button', async () => {
     ;(api.api as any).mockImplementation((path: string) => {
       if (path === '/api/policies/p')
@@ -64,6 +76,60 @@ describe('PolicyDetailView', () => {
       .filter((r) => r.find('.label').text() === 'Limits')
       .map((r) => r.find('.value').text())
     expect(limits).toEqual(['Keep existing limit', 'Multiple of request (×1.5)'])
+  })
+
+  it('shows the update mode of every kind the server serves', async () => {
+    ;(api.api as any).mockImplementation((path: string) => {
+      if (path.startsWith('/api/policies/p/workloads'))
+        return Promise.resolve({ items: [], total: 0, pageSize: 50 })
+      if (path.startsWith('/api/policies/p'))
+        return Promise.resolve({
+          name: 'p',
+          conditions: [],
+          spec: { rightSizing: { update: { types: { widget: 'OnCreate', cronJob: 'Ongoing' } } } },
+          effectivenessSeries: { cpu: [], memory: [] },
+        })
+      return Promise.resolve({})
+    })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/:catchAll(.*)', component: { template: '<div/>' } }],
+    })
+    const w = mount(PolicyDetailView, {
+      props: { name: 'p' },
+      global: { plugins: [router], stubs: ['router-link', 'StatusBadge', 'TrendChart'] },
+    })
+    await flushPromises()
+    const mode = w.findAll('.rec-row').find((r) => r.find('.label').text() === 'Update mode')!
+    expect(mode.find('.value').text()).toBe('CronJob: Ongoing (in place), Widget: OnCreate')
+  })
+
+  it('renders without the kinds, naming each managed kind by its raw key', async () => {
+    ;(kindsLib.getKinds as any).mockRejectedValue(new Error('kinds unavailable'))
+    ;(api.api as any).mockImplementation((path: string) => {
+      if (path.startsWith('/api/policies/p/workloads'))
+        return Promise.resolve({ items: [], total: 0, pageSize: 50 })
+      if (path.startsWith('/api/policies/p'))
+        return Promise.resolve({
+          name: 'p',
+          conditions: [],
+          spec: { rightSizing: { update: { types: { widget: 'OnCreate', cronJob: 'Ongoing' } } } },
+          effectivenessSeries: { cpu: [], memory: [] },
+        })
+      return Promise.resolve({})
+    })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/:catchAll(.*)', component: { template: '<div/>' } }],
+    })
+    const w = mount(PolicyDetailView, {
+      props: { name: 'p' },
+      global: { plugins: [router], stubs: ['router-link', 'StatusBadge', 'TrendChart'] },
+    })
+    await flushPromises()
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+    const mode = w.findAll('.rec-row').find((r) => r.find('.label').text() === 'Update mode')!
+    expect(mode.find('.value').text()).toBe('widget: OnCreate, cronJob: Ongoing')
   })
 
   it('flags a batch row whose outcome keeps it out of the savings', async () => {

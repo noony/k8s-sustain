@@ -58,16 +58,3 @@ func TestGroupResourceForKind(t *testing.T) {
 		t.Errorf("GroupResourceForKind(Pod) = %v, want core pods", got)
 	}
 }
-
-// Every listed kind except the bare-pod pseudo-kind must be Get-able and
-// List-able, or the controller and dashboard listings silently skip it.
-func TestSupportedKinds_CoveredByOwnerKinds(t *testing.T) {
-	for _, kind := range SupportedKinds {
-		if kind == "Pod" {
-			continue
-		}
-		if ObjectForKind(kind) == nil || ListForKind(kind) == nil {
-			t.Errorf("SupportedKinds lists %q but the ownerKinds table does not know it", kind)
-		}
-	}
-}

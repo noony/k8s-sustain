@@ -1,9 +1,11 @@
 package docscheck
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/noony/k8s-sustain/cmd/controller"
 	_ "github.com/noony/k8s-sustain/cmd/dashboard"
 	_ "github.com/noony/k8s-sustain/cmd/webhook"
+	"github.com/noony/k8s-sustain/hack/recordingrules"
 )
 
 const repoRoot = "../.."
@@ -87,16 +90,14 @@ func TestMetricsDocumented(t *testing.T) {
 	assertDocumented(t, readFile(t, doc), doc, uniqueSorted(names), backticked)
 }
 
-var recordRe = regexp.MustCompile(`(?m)^\s*-?\s*record:\s*(\S+)\s*$`)
-
 func TestRecordingRulesDocumented(t *testing.T) {
-	names := map[string]struct{}{}
-	for _, m := range recordRe.FindAllStringSubmatch(readFile(t, "charts/k8s-sustain/values.yaml"), -1) {
-		names[m[1]] = struct{}{}
+	rules, err := recordingrules.Load(repoRoot)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	const doc = "docs/reference/recording-rules.md"
-	assertDocumented(t, readFile(t, doc), doc, uniqueSorted(names), backticked)
+	assertDocumented(t, readFile(t, doc), doc, slices.Sorted(maps.Keys(rules)), backticked)
 }
 
 var subchartKeys = map[string]bool{"prometheus": true}

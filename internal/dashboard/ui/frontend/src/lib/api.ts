@@ -91,15 +91,6 @@ export interface PolicySelector {
   labelSelector?: LabelSelector
 }
 
-export interface UpdateTypes {
-  deployment?: string
-  statefulSet?: string
-  daemonSet?: string
-  cronJob?: string
-  job?: string
-  argoRollout?: string
-}
-
 export interface EvictionPolicy {
   ignoreAutoscalerSafeToEvictAnnotations?: boolean
 }
@@ -119,7 +110,8 @@ export interface PolicySpec {
         memory?: ResourceConfig
       }
       update?: {
-        types?: UpdateTypes
+        // Keyed by each served WorkloadKind's updateField.
+        types?: Record<string, string>
         eviction?: EvictionPolicy
       }
       autoscalerCoordination?: AutoscalerCoordination
@@ -127,7 +119,7 @@ export interface PolicySpec {
     }
   }
   // top-level update map is also exposed by the backend (flat snapshot of spec.rightSizing.update.types)
-  update?: UpdateTypes
+  update?: Record<string, string>
   conditions?: Condition[]
   workloadCount?: number
   cpuSavingsCores?: number

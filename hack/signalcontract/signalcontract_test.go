@@ -16,13 +16,14 @@ import (
 	"github.com/prometheus/common/model"
 	"sigs.k8s.io/yaml"
 
+	"github.com/noony/k8s-sustain/hack/recordingrules"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
 const (
 	repoRoot    = "../.."
-	valuesFile  = "charts/k8s-sustain/values.yaml"
+	valuesFile  = recordingrules.ValuesFile
 	fixturesDir = "charts/k8s-sustain/tests/promtool"
 )
 
@@ -42,16 +43,6 @@ type scrapeJob struct {
 }
 
 type values struct {
-	PrometheusRule struct {
-		Groups []struct {
-			Name     string `json:"name"`
-			Interval string `json:"interval"`
-			Rules    []struct {
-				Record string `json:"record"`
-				Expr   string `json:"expr"`
-			} `json:"rules"`
-		} `json:"groups"`
-	} `json:"prometheusRule"`
 	Prometheus struct {
 		ScrapeConfigs      map[string]scrapeJob `json:"scrapeConfigs"`
 		ExtraScrapeConfigs string               `json:"extraScrapeConfigs"`
@@ -68,13 +59,6 @@ type fixture struct {
 			ExpSamples []json.RawMessage `json:"exp_samples"`
 		} `json:"promql_expr_test"`
 	} `json:"tests"`
-}
-
-// rule is one definition of a recording rule: several may record one name.
-type rule struct {
-	group    string
-	interval string
-	expr     string
 }
 
 // scrape is the bundled Prometheus job reading one exporter's metrics. found
@@ -184,7 +168,7 @@ func (s scrape) instancesApart(metric string) (bool, error) {
 // with expected samples, and, per rule a fixture evaluates alone, the labels
 // of each sample it expects.
 type chart struct {
-	rules            map[string][]rule
+	rules            map[string][]recordingrules.Rule
 	cAdvisor         scrape
 	kubeStateMetrics scrape
 	podAnnotations   []string
@@ -207,17 +191,14 @@ func labelNames(series string) []string {
 
 func loadChart(t *testing.T) chart {
 	t.Helper()
+	rules, err := recordingrules.Load(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var v values
 	readYAML(t, filepath.Join(repoRoot, valuesFile), &v)
 
-	c := chart{rules: map[string][]rule{}, fixtured: map[string]bool{}, sampleLabels: map[string][][]string{}}
-	for _, g := range v.PrometheusRule.Groups {
-		for _, r := range g.Rules {
-			if r.Record != "" {
-				c.rules[r.Record] = append(c.rules[r.Record], rule{group: g.Name, interval: g.Interval, expr: r.Expr})
-			}
-		}
-	}
+	c := chart{rules: rules, fixtured: map[string]bool{}, sampleLabels: map[string][][]string{}}
 
 	c.cAdvisor = scrape{exporter: "cAdvisor", job: "prometheus.scrapeConfigs.kubernetes-nodes-cadvisor"}
 	if job, ok := v.Prometheus.ScrapeConfigs["kubernetes-nodes-cadvisor"]; ok && (job.Enabled == nil || *job.Enabled) {
@@ -295,7 +276,7 @@ func (c chart) through(rules []string) (recorded, raw map[string]bool) {
 		}
 		seen[name] = true
 		for _, d := range c.rules[name] {
-			for _, m := range metricNames(d.expr) {
+			for _, m := range metricNames(d.Expr) {
 				if _, ok := c.rules[m]; ok {
 					recorded[m] = true
 					walk(m)
@@ -329,13 +310,13 @@ func check(c chart, contracts []recommender.PromContract) []string {
 			}
 			for _, d := range defs {
 				if k.Interval != 0 {
-					every, err := model.ParseDuration(d.interval)
+					every, err := model.ParseDuration(d.Interval)
 					if err != nil || time.Duration(every) != k.Interval {
 						report("signal %s reads %s every %s, but group %s evaluates it at interval %q",
-							k.Signal, name, model.Duration(k.Interval), d.group, d.interval)
+							k.Signal, name, model.Duration(k.Interval), d.Group, d.Interval)
 					}
 				}
-				by, ok := aggregatedBy(d.expr)
+				by, ok := aggregatedBy(d.Expr)
 				if !ok {
 					report("signal %s reads %s, whose whole expression must be one aggregation `by (%s)`",
 						k.Signal, name, strings.Join(labels, ", "))
@@ -473,7 +454,7 @@ func TestCheckReportsEachBreach(t *testing.T) {
 		t.Fatalf("cpu contract = %+v, want one rule", cpu)
 	}
 	usageRule := cpu.Rules[0]
-	editRule := func(c *chart, edit func(*rule)) {
+	editRule := func(c *chart, edit func(*recordingrules.Rule)) {
 		defs := slices.Clone(c.rules[usageRule])
 		edit(&defs[0])
 		c.rules[usageRule] = defs
@@ -492,7 +473,7 @@ func TestCheckReportsEachBreach(t *testing.T) {
 		{
 			"a raw metric the keep-list drops",
 			func(c *chart, k *recommender.PromContract) {
-				c.rules[throttleRule] = []rule{{group: "throttle", interval: "1m", expr: `
+				c.rules[throttleRule] = []recordingrules.Rule{{Group: "throttle", Interval: "1m", Expr: `
 					max by (namespace, owner_kind, owner_name, container) (
 					  rate(container_cpu_cfs_throttled_periods_total{container!=""}[5m])
 					  * on(namespace, pod) group_left(owner_kind, owner_name) k8s_sustain:pod_workload
@@ -519,8 +500,8 @@ func TestCheckReportsEachBreach(t *testing.T) {
 		{
 			"a rule aggregating by one more label",
 			func(c *chart, _ *recommender.PromContract) {
-				editRule(c, func(r *rule) {
-					r.expr = "max by (namespace, owner_kind, owner_name, container, pod) (k8s_sustain:container_cpu_usage_by_workload:rate1m)"
+				editRule(c, func(r *recordingrules.Rule) {
+					r.Expr = "max by (namespace, owner_kind, owner_name, container, pod) (k8s_sustain:container_cpu_usage_by_workload:rate1m)"
 				})
 			},
 			"aggregates by (container, namespace, owner_kind, owner_name, pod), not exactly (container, namespace, owner_kind, owner_name)",
@@ -528,14 +509,14 @@ func TestCheckReportsEachBreach(t *testing.T) {
 		{
 			"a rule that is not one aggregation",
 			func(c *chart, _ *recommender.PromContract) {
-				editRule(c, func(r *rule) { r.expr = "k8s_sustain:container_cpu_usage_by_workload:rate1m" })
+				editRule(c, func(r *recordingrules.Rule) { r.Expr = "k8s_sustain:container_cpu_usage_by_workload:rate1m" })
 			},
 			"whose whole expression must be one aggregation `by (container, namespace, owner_kind, owner_name)`",
 		},
 		{
 			"a rule evaluated at another interval",
 			func(c *chart, _ *recommender.PromContract) {
-				editRule(c, func(r *rule) { r.interval = "5m" })
+				editRule(c, func(r *recordingrules.Rule) { r.Interval = "5m" })
 			},
 			`every 1m, but group k8s_sustain.workload_max_pod evaluates it at interval "5m"`,
 		},
