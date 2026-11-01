@@ -102,8 +102,8 @@ When the window holds no usable samples, no recommendation is written and resour
 
 Setting `equalsToRequest: true` for both CPU and memory limits makes the pod [Guaranteed QoS](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/#guaranteed), which makes the pod the last candidate for node-pressure eviction.
 
-## OOM detection for one-shot pods
+## OOM detection for job pods
 
-Job pods typically run with `restartPolicy: Never` (or `backoffLimit: 0`), so an OOM kill does not increment `kube_pod_container_status_restarts_total`. The `k8s_sustain:workload_oom_24h` rule therefore also flags any container whose `kube_pod_container_status_last_terminated_reason` was `OOMKilled` in the last 24h, so the OOM-driven memory floor and the dashboard's "OOM 24h" badge work for Jobs and CronJobs too.
+An OOM kill counts when its container restarts after it: the [`k8s_sustain:workload_oom_24h`](../reference/recording-rules.md#k8s_sustainworkload_oom_24h) rule counts restarts whose last termination is `OOMKilled`, and the [Pod OOM watcher](../concepts/architecture.md#pod-oom-watcher) reads the same last termination. A Job pod with `restartPolicy: OnFailure` is restarted in place after a kill, so the OOM-driven memory floor and the dashboard's At risk state see it.
 
-This requires the failed pod to survive long enough for kube-state-metrics to scrape it. Pods removed by `failedJobsHistoryLimit` within ~30s of failing can slip through; keep `failedJobsHistoryLimit` above 0.
+A pod with `restartPolicy: Never` dies with its kill and is never restarted, and the Job's retry runs in a new pod, so no kill is counted for it. Size such Jobs from usage alone: use a window that spans several runs (see [Collecting enough history](#collecting-enough-history)), or set a memory `minAllowed`.
