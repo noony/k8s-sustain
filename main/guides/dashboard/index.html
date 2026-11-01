@@ -2541,11 +2541,11 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <ol>
 <li><strong>Conflicted</strong> — the identity's members opt into different Policies, so no Policy governs it and its recommendation is frozen (see <a href="../../concepts/workload-recommendations/#conflicted-identities">Conflicted identities</a>).</li>
 <li><strong>Blocked</strong> — the controller's last attempt to apply the identity's recommendation to a member failed, transiently (retried with backoff) or permanently (retried every reconcile, e.g. missing RBAC), and none has succeeded since.</li>
-<li><strong>At risk</strong> — an OOM kill in the last 24 hours.</li>
+<li><strong>At risk</strong> — an OOM kill in the last 24 hours. A kill counts when its container restarts after it, so the kill of a <code>restartPolicy: Never</code> container never counts.</li>
 <li><strong>Drifted</strong> — pods whose running resources still differ from the recommendation beyond the policy's <code>downsizeThreshold</code>; a decrease the policy suppresses is not drift.</li>
 <li><strong>Safe</strong> — none of the above.</li>
 </ol>
-<p>An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. Blocked, At risk and Drifted come from the controller's identity-keyed metrics and the <code>k8s_sustain:workload_oom_24h</code> rule (see <a href="../../reference/metrics/#what-owner_kind-and-owner_name-name">Metrics</a>), so an owner-name group shows its members' combined state under the group's name. Conflicted comes from the identity inventory the dashboard shares with the controller.</p>
+<p>An identity that is both Blocked and OOM-killed shows as Blocked, everywhere. Blocked, At risk and Drifted come from the controller's identity-keyed metrics and the <a href="../../reference/recording-rules/#k8s_sustainworkload_oom_24h"><code>k8s_sustain:workload_oom_24h</code></a> rule (see <a href="../../reference/metrics/#what-owner_kind-and-owner_name-name">Metrics</a>), so an owner-name group shows its members' combined state under the group's name. Conflicted comes from the identity inventory the dashboard shares with the controller.</p>
 <p>Every view counts the same identities: those of the inventory, so a signal left behind by a deleted workload counts nowhere. Each Risk-state count on the Overview equals the Workloads list filtered by that state.</p>
 <h3 id="time-range-and-auto-refresh">Time range and auto-refresh<a class="headerlink" href="#time-range-and-auto-refresh" title="Permanent link">&para;</a></h3>
 <p>Overview, Workload Detail, Policy Detail and Simulator share one <strong>time range picker</strong>.</p>
