@@ -99,9 +99,6 @@ func serve(ctx context.Context, cfg config.WebhookConfig, log logr.Logger) error
 		Client:             k8sClient,
 		RecommendOnly:      cfg.RecommendOnly,
 		ExcludedNamespaces: cfg.ExcludedNamespaces,
-		// Bounds the departed-identity path, which waives the staleness gate.
-		// Must match the controller's retention window; see config.BindWebhookFlags.
-		RecommendationRetention: cfg.RecommendationRetention,
 	}
 
 	registry := prometheus.NewRegistry()

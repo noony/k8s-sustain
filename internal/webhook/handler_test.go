@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -207,10 +209,10 @@ func wlrRec(cpu, mem string) sustainv1alpha1.ContainerRecommendation {
 	return sustainv1alpha1.ContainerRecommendation{CPURequest: qtyp(cpu), MemoryRequest: qtyp(mem)}
 }
 
-// freshWLR builds a WorkloadRecommendation for (kind, ns, name) with a fresh
-// ObservedAt, keyed exactly as the controller writes and the webhook reads it.
-// freshWLR is a just-written WorkloadRecommendation produced under policy "p",
-// the Policy the admission tests' pods opt into.
+// freshWLR is a just-written WorkloadRecommendation for (kind, ns, name),
+// keyed exactly as the controller writes and the webhook reads it, produced
+// under policy "p", the Policy the admission tests' pods opt into, and stamped
+// servable for the default staleness budget.
 func freshWLR(kind, ns, name string, containers map[string]sustainv1alpha1.ContainerRecommendation) *sustainv1alpha1.WorkloadRecommendation {
 	return &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: wlrcache.Name(kind, name)},
@@ -219,10 +221,11 @@ func freshWLR(kind, ns, name string, containers map[string]sustainv1alpha1.Conta
 			Policy:      "p",
 		},
 		Status: sustainv1alpha1.WorkloadRecommendationStatus{
-			ObservedAt: metav1.Now(),
-			Outcome:    sustainv1alpha1.OutcomeComputed,
-			ComputedBy: "p",
-			Containers: containers,
+			ObservedAt:    metav1.Now(),
+			ServableUntil: metav1.NewTime(time.Now().Add(wlrcache.MinStalenessBudget)),
+			Outcome:       sustainv1alpha1.OutcomeComputed,
+			ComputedBy:    "p",
+			Containers:    containers,
 		},
 	}
 }
@@ -454,7 +457,7 @@ func TestPolicySelectorMatchesThePodTemplateForInventoryAndWebhook(t *testing.T)
 					})).
 				WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).Build()
 
-			snap, err := inventory.Take(context.Background(), c, inventory.Options{})
+			snap, err := inventory.Take(context.Background(), c, inventory.Options{Basis: inventory.Basis{Clock: clock.RealClock{}}})
 			if err != nil {
 				t.Fatalf("Take: %v", err)
 			}

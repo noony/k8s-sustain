@@ -56,17 +56,6 @@ type Handler struct {
 
 	ExcludedNamespaces []string
 
-	// CacheStaleness bounds how old a WorkloadRecommendation may be before the
-	// webhook stops injecting from it. Zero falls back to
-	// wlrcache.DefaultStaleness.
-	CacheStaleness time.Duration
-
-	// RecommendationRetention bounds the age of a retained (Departed or
-	// Conflicted) WorkloadRecommendation, whose ObservedAt is frozen. It must
-	// mirror the controller's --recommendation-retention. Zero falls back to
-	// wlrcache.DefaultRetention.
-	RecommendationRetention time.Duration
-
 	// stubMu guards every stub field below, including stubWG.Add and
 	// stubStopping: registering a goroutine and deciding no more may start must
 	// be one atomic step or Shutdown can wait on a WaitGroup about to grow.

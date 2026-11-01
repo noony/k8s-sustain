@@ -91,7 +91,7 @@ func (h *Handler) decide(ctx context.Context, pod *corev1.Pod) admission {
 		a.reason, a.source, a.err = reasonRecommendationUnreadable, RecSourceError, err
 		return a
 	}
-	reading := wlrcache.Read(known, policy.Name, time.Now(), h.freshness())
+	reading := wlrcache.Read(known, policy.Name, time.Now())
 	a.source, a.verdict, a.held = recommendationSource(reading.Verdict), reading.Verdict.String(), reading.Recs
 	observed := wlrcache.BuildObservedResources(pod.Spec.Containers, pod.Spec.InitContainers)
 	if wlrcache.ShouldRequest(known, policy.Name, observed) {

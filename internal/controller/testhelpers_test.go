@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/clock"
 	clocktesting "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -103,6 +104,7 @@ func reconcilerOn(c client.Client, scheme *runtime.Scheme, inputs recommender.In
 		Client:                   c,
 		Scheme:                   scheme,
 		Inputs:                   inputs,
+		Clock:                    clock.RealClock{},
 		ReconcileInterval:        time.Hour,
 		WorkloadConcurrencyLimit: 1,
 		InPlaceUpdates:           inPlace,
@@ -282,7 +284,7 @@ func barePodTarget(t *testing.T, ns, ownerName string, pods ...*corev1.Pod) *wor
 		objs = append(objs, p.DeepCopy())
 	}
 	c := fake.NewClientBuilder().WithScheme(testFullScheme(t)).WithObjects(objs...).Build()
-	snap, err := inventory.Take(context.Background(), c, inventory.Options{})
+	snap, err := inventory.Take(context.Background(), c, inventory.Options{Basis: inventory.Basis{Clock: clock.RealClock{}}})
 	if err != nil {
 		t.Fatalf("inventory: %v", err)
 	}

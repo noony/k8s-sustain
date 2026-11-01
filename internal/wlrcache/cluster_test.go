@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -25,15 +26,22 @@ import (
 // because every test it had used a read-your-writes fake.
 //
 // It also counts creates and status writes, the units the lifecycle is
-// budgeted in.
+// budgeted in, and records the preconditions every delete carries.
 type cluster struct {
 	client.Client
 	store client.Client
 
-	mu           sync.Mutex
-	cold         map[client.ObjectKey]struct{}
-	creates      int
-	statusWrites int
+	mu            sync.Mutex
+	cold          map[client.ObjectKey]struct{}
+	creates       int
+	statusWrites  int
+	preconditions []metav1.Preconditions
+
+	// afterList, when set, runs against the store after a
+	// WorkloadRecommendation list is answered and before its caller judges
+	// the copies: another writer acting between a cache read and the delete
+	// decided on it.
+	afterList func(store client.Client, listed []sustainv1alpha1.WorkloadRecommendation)
 }
 
 func newCluster(t *testing.T, objs ...client.Object) *cluster {
@@ -69,6 +77,25 @@ func newCluster(t *testing.T, objs ...client.Object) *cluster {
 					key.Name)
 			}
 			return cl.Get(ctx, key, obj, opts...)
+		},
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := cl.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if wlrs, ok := list.(*sustainv1alpha1.WorkloadRecommendationList); ok && c.afterList != nil {
+				c.afterList(cl, wlrs.Items)
+			}
+			return nil
+		},
+		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			var o client.DeleteOptions
+			o.ApplyOptions(opts)
+			if o.Preconditions != nil {
+				c.mu.Lock()
+				c.preconditions = append(c.preconditions, *o.Preconditions)
+				c.mu.Unlock()
+			}
+			return cl.Delete(ctx, obj, opts...)
 		},
 		SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object,
 			patch client.Patch, opts ...client.SubResourcePatchOption,

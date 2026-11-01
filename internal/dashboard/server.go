@@ -66,7 +66,8 @@ type Server struct {
 	// and the detail page charts what its signals read, the OOM kills
 	// included.
 	Inputs recommender.InputsFetcher
-	// Clock is what a Simulation computes as of. Nil is the wall clock.
+	// Clock is what a Simulation computes as of and what dates every
+	// inventory snapshot. Required.
 	Clock  clock.PassiveClock
 	Logger logr.Logger
 	// CORSOrigins is the allowed origin allowlist: empty means same-origin
@@ -150,13 +151,6 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
-}
-
-func (s *Server) now() time.Time {
-	if s.Clock == nil {
-		return time.Now()
-	}
-	return s.Clock.Now()
 }
 
 // NewHTTPServer creates an http.Server for the dashboard bound to addr.

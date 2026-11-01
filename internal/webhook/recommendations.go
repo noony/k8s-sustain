@@ -27,12 +27,6 @@ func (h *Handler) storedRecommendation(ctx context.Context, id promclient.Worklo
 	return &wlr, nil
 }
 
-// freshness is the bound the read verdict applies, the handler's own or the
-// defaults.
-func (h *Handler) freshness() wlrcache.Freshness {
-	return wlrcache.Freshness{Staleness: h.CacheStaleness, Retention: h.RecommendationRetention}
-}
-
 // recommendationSource is the RecommendationSourceTotal label of a verdict.
 func recommendationSource(v wlrcache.Verdict) string {
 	switch v {

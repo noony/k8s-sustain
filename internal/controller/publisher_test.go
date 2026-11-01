@@ -573,7 +573,7 @@ func TestSeries_KeptRecommendationOfAnExcludedInitContainerHasNoSeries(t *testin
 	kept := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns, Name: wlrcache.Name("Deployment", "web"),
-			Labels:            map[string]string{wlrPolicyLabel: "p"},
+			Labels:            map[string]string{sustainv1alpha1.WLRPolicyLabel: "p"},
 			CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
 		},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{

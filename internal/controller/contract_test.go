@@ -31,9 +31,8 @@ import (
 // only two components in the recommendation pipeline now that the webhook
 // never queries Prometheus itself. It catches drift in:
 //   - WLR object name format (wlrcache.Name)
-//   - sweep label key (wlrPolicyLabel)
-//   - status shape (Containers map, ObservedAt, Outcome)
-//   - staleness threshold (wlrcache.DefaultStaleness)
+//   - sweep label key (sustainv1alpha1.WLRPolicyLabel)
+//   - status shape (Containers map, ObservedAt, ServableUntil, Outcome)
 //
 // The webhook reads via its real ServeHTTP entry point — the WLR is its only
 // recommendation source, so this is the primary path, not a fallback.
@@ -83,7 +82,7 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "deployment-web"}, &wlr); err != nil {
 		t.Fatalf("WLR not written by controller upsert: %v", err)
 	}
-	if got := wlr.Labels[wlrPolicyLabel]; got != policy.Name {
+	if got := wlr.Labels[sustainv1alpha1.WLRPolicyLabel]; got != policy.Name {
 		t.Errorf("WLR sweep label = %q, want %q", got, policy.Name)
 	}
 
@@ -126,8 +125,9 @@ func TestIntegration_ControllerWritesCache_WebhookReadsIt(t *testing.T) {
 	}
 }
 
-// Staleness is the webhook's only defense against injecting from a controller
-// that has stopped reconciling: an over-age WLR must yield no patch at all.
+// The servableUntil the controller stamps is the webhook's only defense
+// against injecting from a controller that has stopped reconciling: a WLR past
+// it must yield no patch at all.
 func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := sustainv1alpha1.AddToScheme(scheme); err != nil {
@@ -157,7 +157,7 @@ func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 		WithObjects(policy, rs).
 		Build()
 
-	// Backdate ObservedAt past the webhook's default staleness window.
+	// Computed two days ago, so stamped servable until long since.
 	wantCPU := resource.MustParse("250m")
 	controllerStores(t, c, policy.Name, map[string]workload.ContainerRecommendation{
 		"app": {CPURequest: &wantCPU},
@@ -187,17 +187,18 @@ func TestIntegration_StaleCache_WebhookFallsOpen(t *testing.T) {
 }
 
 // controllerStores stores recs for Deployment default/web under policy the way
-// a reconcile's pass does: its claim on the identity, then its record,
-// computed at.
+// a reconcile's pass does, on a 5m interval: its claim on the identity, then
+// its record, computed at.
 func controllerStores(t *testing.T, c client.Client, policy string, recs map[string]workload.ContainerRecommendation, at time.Time) {
 	t.Helper()
 	ref := sustainv1alpha1.WorkloadReference{Kind: "Deployment", Namespace: "default", Name: "web"}
-	known, err := wlrcache.Ensure(context.Background(), c, ref, policy, nil)
+	l := wlrcache.Lifetimes{ReconcileInterval: 5 * time.Minute, Retention: wlrcache.DefaultRetention}
+	known, err := wlrcache.Ensure(context.Background(), c, ref, policy, nil, l)
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
 	decision := wlrcache.Decision{Outcome: sustainv1alpha1.OutcomeComputed, Recs: recs}
-	if err := wlrcache.Record(context.Background(), c, known, decision, at); err != nil {
+	if err := wlrcache.Record(context.Background(), c, known, decision, at, l); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 }

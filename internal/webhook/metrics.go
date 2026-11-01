@@ -15,9 +15,9 @@ const (
 	// this admission — the normal, healthy-pipeline outcome.
 	RecSourceHit = "hit"
 	// RecSourceStale means a WorkloadRecommendation object existed but its
-	// ObservedAt was older than the staleness budget (wlrcache.DefaultStaleness
-	// or Handler.CacheStaleness) — the controller reconcile loop is falling
-	// behind, stuck, or the workload was deleted from its policy's scope.
+	// Recommendation was past the servableUntil the controller stamped — the
+	// controller reconcile loop is falling behind, stuck, or the workload was
+	// deleted from its policy's scope.
 	RecSourceStale = "stale"
 	// RecSourceMissing means no WorkloadRecommendation existed for this
 	// workload identity at all — expected transiently right after a Policy
@@ -46,9 +46,9 @@ const (
 	// is deliberately keeping for a departed identity — a completed Job, a
 	// bare-pod group between runs — or freezing for a Conflicted one. A success
 	// like "hit", but counted separately because the data is last-known-good
-	// rather than fresh: ObservedAt is frozen, so its age is bounded by
-	// --recommendation-retention (168h) rather than by the staleness budget,
-	// and past that window the read reports "stale". Steady traffic here is the
+	// rather than fresh: ObservedAt is frozen, so the controller stamps it
+	// servable for --recommendation-retention (168h) rather than for the
+	// staleness budget, and past that window the read reports "stale". Steady traffic here is the
 	// healthy shape for recurring ephemeral workloads; an identity whose gap
 	// between runs exceeds the retention window is reaped in between and moves
 	// to "missing".

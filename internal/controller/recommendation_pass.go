@@ -78,7 +78,7 @@ func (r *PolicyReconciler) recommend(ctx context.Context, policy *sustainv1alpha
 	}
 
 	// One autoscaler snapshot per pass; it lists each namespace once, lazily.
-	assembled := recommender.Assemble(ctx, r.Inputs, autoscaler.NewNamespacedSnapshot(r.Client), r.now, policy.Spec.RightSizing, ids)
+	assembled := recommender.Assemble(ctx, r.Inputs, autoscaler.NewNamespacedSnapshot(r.Client), r.Clock.Now, policy.Spec.RightSizing, ids)
 
 	var g errgroup.Group
 	g.SetLimit(r.WorkloadConcurrencyLimit)
@@ -95,13 +95,6 @@ func (r *PolicyReconciler) recommend(ctx context.Context, policy *sustainv1alpha
 	}
 	_ = g.Wait()
 	return out
-}
-
-func (r *PolicyReconciler) now() time.Time {
-	if r.Clock == nil {
-		return time.Now()
-	}
-	return r.Clock.Now()
 }
 
 // computeIdentity computes one assembled identity's verdict. It runs once per

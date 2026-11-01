@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/testr"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
@@ -175,6 +176,7 @@ func TestHandleSummaryCacheHit(t *testing.T) {
 		},
 	}
 	srv := &Server{
+		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: fp,
 		Health:     memHealthSignals{},
@@ -251,6 +253,7 @@ func TestHandleSummaryServesRecentLastGoodOnPartialError(t *testing.T) {
 	cache := NewCache(8, 60*time.Second)
 	cache.now = func() time.Time { return now }
 	srv := &Server{
+		Clock:        clock.RealClock{},
 		K8sClient:    fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient:   fp,
 		Health:       memHealthSignals{},
@@ -370,6 +373,7 @@ func TestHandleSummaryConcurrentMissesCollapseToOneRecompute(t *testing.T) {
 	allJoined := make(chan struct{})
 	bp := &blockingPromClient{fakePromClient: fp, release: allJoined}
 	srv := &Server{
+		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: bp,
 		Health:     memHealthSignals{},
@@ -493,6 +497,7 @@ func TestHandleSummaryFollowerHonoursOwnContextDeadline(t *testing.T) {
 // summaryCache is the trigger: the trailing Set dereferences it.
 func TestComputeAndCacheSummaryRecoversPanic(t *testing.T) {
 	srv := &Server{
+		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Health:     memHealthSignals{},

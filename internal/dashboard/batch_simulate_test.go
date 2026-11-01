@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -45,7 +46,7 @@ func newBatchSimulateServer(t *testing.T, inputs recommender.InputsFetcher, coun
 		objs = append(objs, d)
 	}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
-	return &Server{K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Inputs: inputs}
+	return &Server{Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Inputs: inputs}
 }
 
 func batchID(name string) promclient.WorkloadIdentity {

@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	clocktesting "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -42,8 +43,15 @@ func scheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+// basis is what the tests' snapshots are taken with: dated at base.
+func basis() inventory.Basis {
+	return inventory.Basis{Clock: clocktesting.NewFakePassiveClock(base)}
+}
+
+// take snapshots objs on opts with basis's clock.
 func take(t *testing.T, opts inventory.Options, objs ...client.Object) *inventory.Snapshot {
 	t.Helper()
+	opts.Clock = basis().Clock
 	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(objs...).Build()
 	snap, err := inventory.Take(context.Background(), c, opts)
 	if err != nil {
@@ -324,7 +332,7 @@ func TestMembersAreGovernedThroughTheirPodTemplate(t *testing.T) {
 	workloadLevel.Annotations = optIn("p")
 	team := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team", Annotations: optIn("p")}}
 
-	snap := take(t, inventory.Options{ExcludedNamespaces: []string{"kube-system"}},
+	snap := take(t, inventory.Options{Basis: inventory.Basis{ExcludedNamespaces: []string{"kube-system"}}},
 		everyKind("p"), selective, team, templateLabelled, objectLabelled, workloadLevel,
 		deployment("team", "namespace-level", base, nil),
 		deployment("kube-system", "excluded", base, optIn("p")),
@@ -390,10 +398,10 @@ func TestTakeDecidesWithTheListerItIsHanded(t *testing.T) {
 	}
 	lister := &governance.PolicyLister{}
 
-	if got := policyOfWeb(inventory.Options{Policies: lister}, "web"); got != "p" {
+	if got := policyOfWeb(inventory.Options{Basis: inventory.Basis{Policies: lister}}, "web"); got != "p" {
 		t.Fatalf("first snapshot: policy = %q, want p", got)
 	}
-	if got := policyOfWeb(inventory.Options{Policies: lister}, "api"); got != "p" {
+	if got := policyOfWeb(inventory.Options{Basis: inventory.Basis{Policies: lister}}, "api"); got != "p" {
 		t.Errorf("with the lister that compiled this version: policy = %q, want p", got)
 	}
 	if got := policyOfWeb(inventory.Options{}, "api"); got != "" {
@@ -403,7 +411,8 @@ func TestTakeDecidesWithTheListerItIsHanded(t *testing.T) {
 
 // A Policy's snapshot reads only its selector's namespaces and the kinds it
 // manages, governs nothing in an excluded namespace, and is empty for a
-// Policy managing no kind rather than reading every kind.
+// Policy managing no kind rather than reading every kind. Either is dated by
+// its clock: a sweep keeps what was created after it.
 func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
 	p := managing("p", sustainv1alpha1.UpdateTypes{Deployment: ongoing()})
 	p.Spec.Selector.Namespaces = []string{"a", "excluded"}
@@ -417,9 +426,14 @@ func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
 		deployment("a", "idle", base, optIn("none")),
 	).Build()
 
-	snap, err := inventory.TakeForPolicy(context.Background(), c, p, []string{"excluded"}, nil)
+	takenAt := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	b := inventory.Basis{ExcludedNamespaces: []string{"excluded"}, Clock: clocktesting.NewFakePassiveClock(takenAt)}
+	snap, err := inventory.TakeForPolicy(context.Background(), c, p, b)
 	if err != nil {
 		t.Fatalf("TakeForPolicy: %v", err)
+	}
+	if !snap.TakenAt.Equal(takenAt) {
+		t.Errorf("TakenAt = %v, want the clock's %v", snap.TakenAt, takenAt)
 	}
 	var governed []promclient.WorkloadIdentity
 	for _, id := range snap.GovernedBy("p") {
@@ -434,12 +448,15 @@ func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
 		}
 	}
 
-	snap, err = inventory.TakeForPolicy(context.Background(), c, none, nil, nil)
+	snap, err = inventory.TakeForPolicy(context.Background(), c, none, b)
 	if err != nil {
 		t.Fatalf("TakeForPolicy: %v", err)
 	}
 	if len(snap.Identities) != 0 {
 		t.Errorf("a Policy managing no kind read %v", keys(snap))
+	}
+	if !snap.TakenAt.Equal(takenAt) {
+		t.Errorf("TakenAt of the empty snapshot = %v, want the clock's %v", snap.TakenAt, takenAt)
 	}
 }
 
@@ -461,7 +478,7 @@ func TestUnservedKindIsEmptyButOtherErrorsFail(t *testing.T) {
 	isRollouts := func(l client.ObjectList) bool { _, ok := l.(*rolloutsv1alpha1.RolloutList); return ok }
 
 	noCRD := &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: "argoproj.io", Kind: "Rollout"}}
-	snap, err := inventory.Take(context.Background(), listErr(isRollouts, noCRD), inventory.Options{})
+	snap, err := inventory.Take(context.Background(), listErr(isRollouts, noCRD), inventory.Options{Basis: basis()})
 	if err != nil {
 		t.Fatalf("Take with no Rollout CRD: %v", err)
 	}
@@ -469,7 +486,7 @@ func TestUnservedKindIsEmptyButOtherErrorsFail(t *testing.T) {
 		t.Error("the other kinds must still be listed")
 	}
 
-	if _, err := inventory.Take(context.Background(), listErr(isRollouts, errors.New("forbidden")), inventory.Options{}); err == nil {
+	if _, err := inventory.Take(context.Background(), listErr(isRollouts, errors.New("forbidden")), inventory.Options{Basis: basis()}); err == nil {
 		t.Error("a failed read must fail the snapshot")
 	}
 }
@@ -495,12 +512,25 @@ func TestNamespaceReadOnlyWhenUndecided(t *testing.T) {
 			},
 		}).Build()
 
-	for _, opts := range []inventory.Options{{}, {Namespaces: []string{"a"}}} {
+	for _, opts := range []inventory.Options{{Basis: basis()}, {Basis: basis(), Namespaces: []string{"a"}}} {
 		if _, err := inventory.Take(context.Background(), c, opts); err != nil {
 			t.Fatalf("Take: %v", err)
 		}
 	}
 	if reads != 0 {
 		t.Errorf("Namespace reads = %d, want none for a template-level opt-in", reads)
+	}
+}
+
+// A snapshot is dated by its reader's clock, never a fallback of its own: a
+// Basis without one fails, even for a Policy that reads nothing.
+func TestABasisWithoutAClockFails(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(everyKind("p")).Build()
+	if _, err := inventory.Take(context.Background(), c, inventory.Options{}); err == nil {
+		t.Error("Take without a clock succeeded")
+	}
+	none := managing("none", sustainv1alpha1.UpdateTypes{})
+	if _, err := inventory.TakeForPolicy(context.Background(), c, none, inventory.Basis{}); err == nil {
+		t.Error("TakeForPolicy without a clock succeeded")
 	}
 }

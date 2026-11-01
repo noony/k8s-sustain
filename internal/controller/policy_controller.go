@@ -30,6 +30,7 @@ import (
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
+	"github.com/noony/k8s-sustain/internal/wlrcache"
 	"github.com/noony/k8s-sustain/internal/workload"
 )
 
@@ -66,8 +67,8 @@ type PolicyReconciler struct {
 	// Inputs fetches the recommendation inputs of a Policy's identities,
 	// live OOM kills included when it is decorated by recommender.WithLiveOOMs.
 	Inputs recommender.InputsFetcher
-	// Clock is what a pass's recommendations are computed, and its inputs
-	// fetched, as of. Nil is the wall clock.
+	// Clock dates a pass: its snapshot, the instant its recommendations are
+	// computed and its inputs fetched as of, and its records. Required.
 	Clock clock.PassiveClock
 
 	// RecycleReplacementTimeout caps how long the patcher waits for a replacement
@@ -75,8 +76,9 @@ type PolicyReconciler struct {
 	// patcher default.
 	RecycleReplacementTimeout time.Duration
 
-	// RecommendationRetention is how long a WorkloadRecommendation outlives a
-	// workload whose object is gone. Zero disables retention.
+	// RecommendationRetention is how long a Departed or Conflicted identity's
+	// Recommendation is served and its WorkloadRecommendation kept, past its
+	// last computation. The config rejects zero or less.
 	RecommendationRetention time.Duration
 
 	// OrphanReapInterval is how often orphaned WorkloadRecommendations are
@@ -124,7 +126,7 @@ func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.recorder = mgr.GetEventRecorder("k8s-sustain")
 	r.ledger = newLedger(clock.RealClock{})
 	r.applyTuningDefaults()
-	if err := mgr.Add(&orphanReaper{reconciler: r, interval: r.OrphanReapInterval}); err != nil {
+	if err := mgr.Add(&orphanReaper{client: r.Client, interval: r.OrphanReapInterval}); err != nil {
 		return err
 	}
 	b := ctrl.NewControllerManagedBy(mgr).
@@ -173,6 +175,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if r.Inputs == nil {
 		return ctrl.Result{}, fmt.Errorf("recommendation inputs fetcher not configured")
 	}
+	if r.Clock == nil {
+		return ctrl.Result{}, fmt.Errorf("clock not configured")
+	}
 
 	policy := &sustainv1alpha1.Policy{}
 	if err := r.Get(ctx, req.NamespacedName, policy); err != nil {
@@ -191,8 +196,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	const finalizerName = "k8s.sustain.io/cleanup"
 	if !policy.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(policy, finalizerName) {
-			if err := r.deleteAllRecommendationsForPolicy(ctx, policy.Name); err != nil {
-				logger.Error(err, "failed to delete WorkloadRecommendations for policy; will retry")
+			if err := deleteRecommendations(logger, "release", func() (int, error) {
+				return wlrcache.Release(ctx, r.Client, policy.Name)
+			}); err != nil {
 				return ctrl.Result{}, err
 			}
 			// Ordered after cleanup so a retried deletion re-emits nothing.
@@ -216,7 +222,11 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	start := time.Now()
 	logger.Info("starting reconcile cycle")
 
-	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, r.ExcludedNamespaces, &r.policies)
+	snap, listErr := inventory.TakeForPolicy(ctx, r.Client, policy, inventory.Basis{
+		ExcludedNamespaces: r.ExcludedNamespaces,
+		Policies:           &r.policies,
+		Clock:              r.Clock,
+	})
 	if listErr != nil {
 		logger.Error(listErr, "failed to list workloads")
 		_ = r.failCondition(ctx, policy, "ListFailed", listErr)
@@ -234,7 +244,9 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	blocked := health.blocked()
 	r.series.publish(policy.Name, report.publication(health, attempts))
 
-	r.sweepWorkloadRecommendations(ctx, policy.Name, snap)
+	_ = deleteRecommendations(logger, "sweep", func() (int, error) {
+		return wlrcache.Sweep(ctx, r.Client, policy.Name, standingIn(snap), snap.TakenAt, r.lifetimes())
+	})
 
 	processed := report.processed()
 	logger.Info("reconcile cycle complete",

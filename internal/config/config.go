@@ -223,7 +223,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 	bindString(flags, "leader-election-id", "leader-election-id", "k8s-sustain-leader-election", "Lease name for leader election. Override when running multiple operator installs in the same cluster.")
 	bindString(flags, "log-level", "log-level", "info", "Log level (debug, info, warn, error)")
 	bindString(flags, "prometheus-address", "prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
-	bindDuration(flags, "reconcile-interval", "reconcile-interval", 5*time.Minute, "How often policies are re-evaluated")
+	bindDuration(flags, "reconcile-interval", "reconcile-interval", 5*time.Minute, "How often policies are re-evaluated. A Recommendation stays servable for the larger of 30m and three intervals past its last computation, so a pass can run late without the webhook stopping injection. Must be greater than zero.")
 	bindStringSlice(flags, "excluded-namespaces", "excluded-namespaces", "Namespaces the reconciler should never touch")
 	bindInt(flags, "workload-concurrency-limit", "workload-concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
 	bindInt(flags, "policy-concurrency-limit", "policy-concurrency-limit", 10, "Maximum number of Policy objects reconciled in parallel")
@@ -232,7 +232,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 	bindDuration(flags, "recycle-replacement-timeout", "recycle-replacement-timeout", 5*time.Minute,
 		"In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) takes several minutes.")
 	bindDuration(flags, "recommendation-retention", "recommendation-retention", wlrcache.DefaultRetention,
-		"How long a WorkloadRecommendation is kept after its workload object disappears (ephemeral bare pods, deleted or terminal Jobs). Also decides whether a RECURRING ephemeral identity is rightsized at admission on its next run: the webhook's only recommendation source is this object, so an identity whose gap between runs exceeds this window cold-starts every time. Set it above the longest expected inter-run gap (the 7d default covers weekly batch). It also bounds how long a Conflicted identity's frozen recommendation is kept. The dashboard shows retained entries as inactive workloads. 0 sweeps them on the next reconcile.")
+		"How long a Departed identity's WorkloadRecommendation (ephemeral bare pods, deleted or terminal Jobs) is kept and its recommendation served, past its last computation. Also decides whether a RECURRING ephemeral identity is rightsized at admission on its next run: the webhook's only recommendation source is this object, so an identity whose gap between runs exceeds this window cold-starts every time. Set it above the longest expected inter-run gap (the 7d default covers weekly batch). It also bounds how long a Conflicted identity's frozen recommendation is kept and served. The dashboard shows retained entries as Departed workloads. Must be greater than zero.")
 	bindInt(flags, "query-shard-max-samples", "query-shard-max-samples", DefaultQueryShardMaxSamples,
 		"Projected Prometheus sample budget (containers x samples per container, summed across a shard's workloads: window-minutes for the CPU and memory queries, one per rule for the OOM query) a single batched shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own --query.max-samples (default 50,000,000): that server-side limit REJECTS an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default here leaves a 5x margin.")
 	bindPrometheusTransportFlags(flags, "")
@@ -260,11 +260,21 @@ type ControllerConfig struct {
 }
 
 // LoadControllerConfig reads the current Viper state and returns a
-// ControllerConfig. It fails only on a malformed --prometheus-headers entry.
+// ControllerConfig. It fails on a malformed --prometheus-headers entry, and on
+// a --reconcile-interval or --recommendation-retention of zero or less: the
+// controller stamps every Recommendation servable for a window derived from
+// them, so either would stop the webhook injecting anything.
 func LoadControllerConfig() (ControllerConfig, error) {
 	transport, err := loadPrometheusTransport("")
 	if err != nil {
 		return ControllerConfig{}, fmt.Errorf("invalid --prometheus-headers: %w", err)
+	}
+	if d := viper.GetDuration("reconcile-interval"); d <= 0 {
+		return ControllerConfig{}, fmt.Errorf("invalid --reconcile-interval %s: must be greater than zero", d)
+	}
+	if d := viper.GetDuration("recommendation-retention"); d <= 0 {
+		return ControllerConfig{}, fmt.Errorf("invalid --recommendation-retention %s: must be greater than zero, "+
+			"it is how long a Departed or Conflicted identity's Recommendation is served and kept", d)
 	}
 	return ControllerConfig{
 		MetricsBindAddress:        viper.GetString("metrics-bind-address"),
@@ -294,11 +304,6 @@ func BindWebhookFlags(cmd *cobra.Command) {
 	bindInt(flags, "webhook.port", "port", 9443, "Port the webhook server listens on")
 	bindString(flags, "webhook.log-level", "log-level", "info", "Log level (debug, info, warn, error)")
 	bindStringSlice(flags, "webhook.excluded-namespaces", "excluded-namespaces", "Namespaces the webhook should never mutate (mirrors the controller flag)")
-	// Prefixed key despite the shared flag name: BindPFlag maps a key to exactly
-	// one pflag, so a flat key would leave the webhook reading the controller's
-	// unset flagset. The DEFAULT is shared, which is what must not drift.
-	bindDuration(flags, "webhook.recommendation-retention", "recommendation-retention", wlrcache.DefaultRetention,
-		"Must match the controller's --recommendation-retention. It bounds the one case where the webhook injects from a WorkloadRecommendation older than the staleness budget: an identity the controller marked departed, or a Conflicted one, whose ObservedAt is frozen by design. Past this window the object is one the controller's sweep should already have deleted, so the webhook treats it as stale instead of injecting it forever. The chart renders both flags from the single controller.recommendationRetention value.")
 }
 
 // WebhookConfig holds resolved configuration for the webhook server.
@@ -309,9 +314,6 @@ type WebhookConfig struct {
 	LogLevel           string
 	RecommendOnly      bool
 	ExcludedNamespaces []string
-	// RecommendationRetention mirrors the controller flag of the same name;
-	// see BindWebhookFlags for why the webhook needs it.
-	RecommendationRetention time.Duration
 }
 
 // LoadWebhookConfig reads the current Viper state and returns a WebhookConfig.
@@ -325,8 +327,6 @@ func LoadWebhookConfig() WebhookConfig {
 		LogLevel:           viper.GetString("webhook.log-level"),
 		RecommendOnly:      RecommendOnly(),
 		ExcludedNamespaces: getStringSlice("webhook.excluded-namespaces"),
-
-		RecommendationRetention: viper.GetDuration("webhook.recommendation-retention"),
 	}
 }
 

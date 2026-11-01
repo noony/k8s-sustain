@@ -103,9 +103,11 @@ func writeSnapshot(
 // It creates the object, or adopts it (spec.policy and the policy label become
 // policy), replaces the observed snapshot when it differs (nil leaves it), and
 // clears departed: an identity with a live member is by definition not
-// departed. It never touches the Recommendation, the outcome or computedBy:
-// an adopted object keeps the previous Policy's numbers, which Read withholds
-// until policy records its own.
+// departed, so clearing it restamps the Recommendation servable for the
+// staleness budget l gives, not the retention window; an object without a
+// stamp stays without one. It never touches the Recommendation, the outcome
+// or computedBy: an adopted object keeps the previous Policy's numbers, which
+// Read withholds until policy records its own.
 //
 // It returns the object as written, for Record to record into: nothing later
 // re-reads it from a cache that may not have seen the write yet.
@@ -118,6 +120,7 @@ func Ensure(
 	ref sustainv1alpha1.WorkloadReference,
 	policy string,
 	observed map[string]sustainv1alpha1.ObservedContainerResources,
+	l Lifetimes,
 ) (*sustainv1alpha1.WorkloadRecommendation, error) {
 	key := keyOf(ref)
 	known := &sustainv1alpha1.WorkloadRecommendation{}
@@ -143,6 +146,7 @@ func Ensure(
 	if observed != nil {
 		patched.Status.ObservedResources = observed
 	}
+	patched.Status.ServableUntil = l.stamp(known, patched.Status, false)
 	if err := c.Status().Patch(ctx, patched, client.MergeFrom(known)); err != nil {
 		return nil, fmt.Errorf("patching WorkloadRecommendation %s status: %w", key, err)
 	}
@@ -221,8 +225,8 @@ type Decision struct {
 
 // Record stores d into known: the object Ensure returned or, for an identity
 // Ensure is not called for (Departed, Conflicted), the one the inventory read.
-// It is the one status write per identity per cycle and the only writer of
-// departed.
+// It is the one status write per identity per cycle, and the only writer that
+// marks an identity departed.
 //
 // A Computed decision is attributed to the Policy the object names
 // (status.computedBy). Every other outcome keeps the last Recommendation, its
@@ -230,31 +234,40 @@ type Decision struct {
 // samples age out of the query window, and clearing the Recommendation then
 // would strip exactly what retention exists to preserve.
 //
+// A record stamps servableUntil from what it stores and l: past observedAt by
+// the staleness budget for a live identity, by the retention window for a
+// departed or Conflicted one. Since only Computed moves observedAt, no other
+// outcome extends it, and only Computed gives a stamp to an object without
+// one.
+//
 // An unchanged decision costs no write, except that a Computed one rewrites
-// observedAt once it is RefreshInterval old, so a stable Recommendation never
-// reads as stale. A missing object is an error, never a silent no-op: the
-// caller must not act as if the decision were stored.
-func Record(ctx context.Context, c client.Client, known *sustainv1alpha1.WorkloadRecommendation, d Decision, now time.Time) error {
+// observedAt, and so servableUntil, once it is RefreshInterval old, so a
+// stable Recommendation never goes stale. A missing object is an error, never
+// a silent no-op: the caller must not act as if the decision were stored.
+func Record(ctx context.Context, c client.Client, known *sustainv1alpha1.WorkloadRecommendation, d Decision, now time.Time, l Lifetimes) error {
 	if known == nil {
 		return errNotEnsured
 	}
 	desired := *known.Status.DeepCopy()
 	desired.Outcome = d.Outcome
 	desired.Departed = d.Departed
-	computed := d.Outcome == sustainv1alpha1.OutcomeComputed
-	if computed {
+	if d.Outcome == sustainv1alpha1.OutcomeComputed {
 		// Only the governing Policy records, and Ensure or the departed rule
 		// made it the one the object names.
 		desired.ComputedBy = known.Spec.Policy
-		desired.ObservedAt = metav1.NewTime(now)
 		desired.Trace = d.Traces
 		desired.Containers = make(map[string]sustainv1alpha1.ContainerRecommendation, len(d.Recs))
 		for name, rec := range d.Recs {
 			desired.Containers[name] = sustainv1alpha1.ContainerRecommendation(rec)
 		}
+		if !statusEquivalent(known.Status, desired) || now.Sub(known.Status.ObservedAt.Time) >= RefreshInterval {
+			desired.ObservedAt = metav1.NewTime(now)
+		}
 	}
+	desired.ServableUntil = l.stamp(known, desired, d.Outcome == sustainv1alpha1.OutcomeComputed)
 	if statusEquivalent(known.Status, desired) &&
-		(!computed || now.Sub(known.Status.ObservedAt.Time) < RefreshInterval) {
+		desired.ObservedAt.Equal(&known.Status.ObservedAt) &&
+		desired.ServableUntil.Equal(&known.Status.ServableUntil) {
 		return nil
 	}
 	patched := known.DeepCopy()

@@ -151,7 +151,9 @@ controller:
   # installs side-by-side in the same cluster.
   leaderElectionID: ""
   # How often each matched Policy is re-evaluated (Prometheus re-queried,
-  # recommendations refreshed, stale pods recycled).
+  # recommendations refreshed, stale pods recycled). The webhook serves a
+  # recommendation for the larger of 30m and three intervals past its last
+  # computation, so a pass can run late without pods losing it. Must be > 0.
   reconcileInterval: 5m
   workloadConcurrencyLimit: 5
   policyConcurrencyLimit: 10
@@ -164,9 +166,10 @@ controller:
   # normal scale-up.
   recycleReplacementTimeout: 5m
   # How long a WorkloadRecommendation outlives a workload whose object has
-  # disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs).
-  # The dashboard keeps showing these as "inactive" rows until the window
-  # lapses. Set to 0s to sweep them on the next reconcile instead.
+  # disappeared (ephemeral bare pods, argocd-hook Jobs, TTL-deleted Jobs), and
+  # how long its recommendation is still served, past its last computation.
+  # The dashboard keeps showing these as Departed rows until the window
+  # lapses. Must be > 0.
   #
   # This is NOT only a dashboard setting. The webhook's sole recommendation
   # source is the WorkloadRecommendation object, so for a RECURRING ephemeral

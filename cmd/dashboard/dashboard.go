@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/noony/k8s-sustain/cmd/controller"
@@ -70,6 +71,7 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 		// The dashboard has no shard-budget flag of its own; the controller's
 		// default keeps a batch simulate within Prometheus's sample limit.
 		Inputs:             recommender.NewPromInputs(promClient, config.DefaultQueryShardMaxSamples),
+		Clock:              clock.RealClock{},
 		Logger:             log,
 		CORSOrigins:        cfg.CORSAllowedOrigins,
 		ExcludedNamespaces: cfg.ExcludedNamespaces,

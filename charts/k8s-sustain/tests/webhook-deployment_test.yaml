@@ -54,22 +54,6 @@ tests:
             - --tls-cert-file=/tls/tls.crt
             - --tls-key-file=/tls/tls.key
             - --excluded-namespaces=k8s-sustain,kube-system,kube-public
-            - --recommendation-retention=168h
-
-  # The webhook's --recommendation-retention is rendered from the SAME value as
-  # the controller's (deployment_test.yaml pins that one). It bounds the single
-  # path where the webhook injects from a recommendation older than its
-  # staleness budget — an identity the controller marked departed — and that
-  # bound is only meaningful if it is the window after which the controller's
-  # sweep deletes the object. One value, two flags: a webhook-specific key here
-  # could drift into serving what the controller already considers expired.
-  - it: bounds the webhook departed path with the controller's retention window
-    set:
-      controller.recommendationRetention: 24h
-    asserts:
-      - contains:
-          path: spec.template.spec.containers[0].args
-          content: --recommendation-retention=24h
 
   # The webhook no longer queries Prometheus at all: it reads recommendations
   # from WorkloadRecommendation objects. A --prometheus-address here would be

@@ -108,7 +108,7 @@ func (s *Server) runSimulation(ctx context.Context, req simulateRequest) (*simul
 		return nil, err
 	}
 
-	a := recommender.Assemble(ctx, s.Inputs, autoscaler.NewNamespacedSnapshot(s.K8sClient), s.now, settings.rightSizing(), []*inventory.Identity{id})[0]
+	a := recommender.Assemble(ctx, s.Inputs, autoscaler.NewNamespacedSnapshot(s.K8sClient), s.Clock.Now, settings.rightSizing(), []*inventory.Identity{id})[0]
 	if a.Err != nil {
 		return nil, a.Err
 	}

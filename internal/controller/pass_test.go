@@ -73,7 +73,7 @@ func TestReconcile_AdoptedRecommendationIsComputedByTheAdoptingPolicy(t *testing
 	previous := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: ns, Name: wlrcache.Name("Deployment", "web"),
-			Labels:            map[string]string{wlrPolicyLabel: "old"},
+			Labels:            map[string]string{sustainv1alpha1.WLRPolicyLabel: "old"},
 			CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
 		},
 		Spec: sustainv1alpha1.WorkloadRecommendationSpec{
@@ -213,10 +213,10 @@ func TestReconcile_RefreshesDepartedIdentity(t *testing.T) {
 }
 
 // The pass records a departed identity's decision together with the fact that
-// it has no live member left, which is what waives the webhook's staleness gate
-// for its retained Recommendation: its observedAt stops advancing once its
-// samples age out, so without the mark every run after the first would start
-// on template resources.
+// it has no live member left, which is what stamps its retained Recommendation
+// servable for the retention window rather than the staleness budget: its
+// observedAt stops advancing once its samples age out, so without the mark
+// every run after the first would start on template resources.
 func TestReconcile_MarksDepartedIdentity(t *testing.T) {
 	const ns = "airflow-departs"
 	wlr := departedWLR(ns)
