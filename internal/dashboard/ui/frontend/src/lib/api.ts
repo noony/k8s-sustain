@@ -219,10 +219,10 @@ export interface TimeValue {
   value: number
 }
 
-export interface OOMEvent {
+/** One OOM kill, dated at the end of the chart step it fell in. */
+export interface OOMKill {
   timestamp: string
   container: string
-  pod: string
 }
 
 export interface ContainerResources {
@@ -233,15 +233,47 @@ export interface ContainerResources {
 }
 
 export interface MetricsData {
+  /** Usage averaged over the replicas, per container. */
   cpu: Record<string, TimeValue[]>
   memory: Record<string, TimeValue[]>
   resources?: Record<string, ContainerResources>
-  cpuRequests?: Record<string, TimeValue[]>
-  memoryRequests?: Record<string, TimeValue[]>
-  cpuLimits?: Record<string, TimeValue[]>
-  memoryLimits?: Record<string, TimeValue[]>
-  oomEvents?: OOMEvent[]
+  /** What the pods ran with, per resource. */
+  running?: Partial<Record<Resource, RunningSeries>>
+  /** Read with the signal's history, under the recommender defaults when no Policy governs the identity; absent when it could not be read. */
+  oomKills?: OOMKill[]
   initContainers?: string[]
+  /** What the usage signals read; null when no Policy governs the identity or it could not be read. */
+  signal?: UsageSignal | null
+  /** Why the signal could not be read; the rest of the page stands without it. */
+  signalError?: string
+}
+
+/** One resource's requests and limits the pods ran with, per container. */
+export interface RunningSeries {
+  requests?: Record<string, TimeValue[]>
+  limits?: Record<string, TimeValue[]>
+}
+
+/** What an identity's usage signals read over the chart range under its governing Policy's settings: what the recommender sizes each request from. */
+export interface UsageSignal {
+  policy: string
+  /** The step between its instants: the server derives it from the range, the requested step is only the finest. */
+  stepSeconds: number
+  cpu: UsageSignalSettings
+  memory: UsageSignalSettings
+  /** The Policy recommends no init container, so none has a series. */
+  excludeInitContainers?: boolean
+  /** Per container the Policy recommends, in cores or bytes. */
+  containers: Record<string, { cpu?: TimeValue[]; memory?: TimeValue[] }>
+}
+
+/** What one resource's usage signal read under, every default explicit. */
+export interface UsageSignalSettings {
+  /** Absent when the request is kept. */
+  percentile?: number
+  window: string
+  /** The Policy keeps the request: no signal sizes it, so it has no series. */
+  keepRequest?: boolean
 }
 
 export interface RecommendationContainer {
@@ -316,6 +348,7 @@ export interface SimulateRequest {
   window?: string
   fromTs?: number
   toTs?: number
+  /** The finest step the history may use; the server coarsens it to fit the range. */
   step: string
   /** The Policy to start from; omit for the identity's governing Policy. */
   policy?: string
@@ -336,15 +369,33 @@ export interface SimulationResult {
   /** How each container's values were derived, stage by stage. */
   trace?: Record<string, ContainerTrace>
   initContainers?: string[]
-  cpuSeries: Record<string, TimeValue[]>
-  memorySeries: Record<string, TimeValue[]>
   resources?: Record<string, ContainerResources>
-  cpuRequests?: Record<string, TimeValue[]>
-  memoryRequests?: Record<string, TimeValue[]>
-  cpuRecommendations?: Record<string, TimeValue[]>
-  memoryRecommendations?: Record<string, TimeValue[]>
+  /** The Simulation at each instant of its chart range; absent when it could not be read. */
+  history?: SimulationHistory
+  /** Why the history could not be read; the numbers above stand without it. */
+  historyError?: string
   /** How long a kill the controller's OOM watcher saw counts, which a Simulation cannot see. */
   liveOOMWindowSeconds: number
+}
+
+/** A Simulation at each instant of its chart range. */
+export interface SimulationHistory {
+  /** The step between its instants: the server derives it from the range, the requested step is only the finest. */
+  stepSeconds: number
+  containers: Record<string, { cpu: ResourceHistory; memory: ResourceHistory }>
+  oomKills?: OOMKill[]
+}
+
+/** One resource of one container at each instant, in cores or bytes; a series has no point where it has no value. */
+export interface ResourceHistory {
+  /** What the usage signal read: the busiest replica's percentile over the Policy's window. */
+  usage?: TimeValue[]
+  /** What the Simulation computes as of each instant; no limit point where the container would run without one. */
+  recommendedRequest?: TimeValue[]
+  recommendedLimit?: TimeValue[]
+  /** What the pods ran with. */
+  runningRequest?: TimeValue[]
+  runningLimit?: TimeValue[]
 }
 
 export interface BatchSimulateData {

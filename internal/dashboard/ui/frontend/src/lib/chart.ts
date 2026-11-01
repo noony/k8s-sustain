@@ -7,6 +7,7 @@ import {
   TimeScale,
   Filler,
   Legend,
+  SubTitle,
   Tooltip,
   type Plugin,
   type ChartConfiguration,
@@ -23,6 +24,7 @@ Chart.register(
   TimeScale,
   Filler,
   Legend,
+  SubTitle,
   Tooltip,
   zoomPlugin,
 )
@@ -136,11 +138,11 @@ function themeColors() {
 }
 
 const OOM_MARKER_LIMIT = 50
-const oomEventPlugin: Plugin = {
-  id: 'oomEvents',
+const oomKillPlugin: Plugin = {
+  id: 'oomKills',
   afterDraw(chart) {
-    const events = (chart.options.plugins as any)?.oomEvents
-    if (!events || events.length === 0) return
+    const kills = (chart.options.plugins as any)?.oomKills
+    if (!kills || kills.length === 0) return
     const ctx = chart.ctx
     const xScale = chart.scales.x
     const yScale = chart.scales.y
@@ -150,10 +152,10 @@ const oomEventPlugin: Plugin = {
     // Defensive cap: if dedup at the API layer fails for some reason, stop
     // drawing markers past the limit to keep the chart legible. The badge in
     // the UI shows the true count.
-    const limited = events.length > OOM_MARKER_LIMIT ? events.slice(0, OOM_MARKER_LIMIT) : events
+    const limited = kills.length > OOM_MARKER_LIMIT ? kills.slice(0, OOM_MARKER_LIMIT) : kills
 
-    limited.forEach((ev: { x: Date }) => {
-      const x = xScale.getPixelForValue(ev.x as any)
+    limited.forEach((kill: { x: Date }) => {
+      const x = xScale.getPixelForValue(kill.x as any)
       if (!Number.isFinite(x) || x < xScale.left || x > xScale.right) return
 
       ctx.save()
@@ -183,7 +185,7 @@ const oomEventPlugin: Plugin = {
     })
   },
 }
-Chart.register(oomEventPlugin)
+Chart.register(oomKillPlugin)
 
 export interface ExtraSeries {
   data: TimeValue[]
@@ -191,6 +193,9 @@ export interface ExtraSeries {
   color?: string
   dash?: number[]
   stepped?: boolean | 'before'
+  // The series' own step, when it is read at a step other than the chart's,
+  // so its line breaks only across its own gaps.
+  stepMs?: number
 }
 
 export interface ChartAnnotation {
@@ -212,7 +217,10 @@ export interface ChartOpts {
   // comparison charts (e.g. the overview Savings trend) where a shaded
   // background under the baseline series adds noise rather than meaning.
   fill?: boolean
-  oomEvents?: { timestamp: string; pod?: string }[]
+  oomKills?: { timestamp: string }[]
+  // What the chart's reader needs to know about what it draws, or why a line
+  // is missing, drawn in the chart as its subtitle.
+  notes?: string[]
   onZoomComplete?: (chart: Chart) => void
   // When set, breaks the line at gaps wider than ~1.5× this step. Used to
   // avoid drawing a continuous line across periods where the workload had no
@@ -270,6 +278,22 @@ function withGaps(
     prevT = t
   }
   return out
+}
+
+// Chart.js draws a subtitle line as it is, however narrow the chart.
+function wrapped(note: string, width = 72): string[] {
+  const lines: string[] = []
+  let line = ''
+  for (const word of note.split(' ')) {
+    if (line && line.length + 1 + word.length > width) {
+      lines.push(line)
+      line = word
+    } else {
+      line = line ? line + ' ' + word : word
+    }
+  }
+  if (line) lines.push(line)
+  return lines
 }
 
 const chartInstances: Record<string, Chart> = {}
@@ -335,7 +359,7 @@ export function createTimeSeriesChart(
 
   ;(opts.extraSeries || []).forEach((s) => {
     if (!s.data || !s.data.length) return
-    const seriesData = withGaps(s.data, transform, opts.stepMs)
+    const seriesData = withGaps(s.data, transform, s.stepMs ?? opts.stepMs)
     const ds: any = {
       label: s.label,
       data: seriesData,
@@ -368,10 +392,7 @@ export function createTimeSeriesChart(
     })
   })
 
-  const oomMarkers = (opts.oomEvents || []).map((ev) => ({
-    x: new Date(ev.timestamp),
-    pod: ev.pod || '',
-  }))
+  const oomMarkers = (opts.oomKills || []).map((kill) => ({ x: new Date(kill.timestamp) }))
 
   const colors = themeColors()
   const config: ChartConfiguration = {
@@ -382,6 +403,14 @@ export function createTimeSeriesChart(
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
+        subtitle: {
+          display: !!opts.notes?.length,
+          text: (opts.notes ?? []).flatMap((note) => wrapped(note)),
+          align: 'start',
+          color: colors.tick,
+          font: { size: 11 },
+          padding: { bottom: 6 },
+        },
         legend: {
           display: datasets.length > 1,
           align: 'end',
@@ -452,7 +481,7 @@ export function createTimeSeriesChart(
             },
           },
         } as any,
-        oomEvents: oomMarkers,
+        oomKills: oomMarkers,
       } as any,
       scales: {
         x: {
@@ -509,6 +538,9 @@ export function applyThemeToAllCharts() {
     }
     if (plugins.legend?.labels) {
       plugins.legend.labels.color = colors.tick
+    }
+    if (plugins.subtitle) {
+      plugins.subtitle.color = colors.tick
     }
     if (plugins.zoom?.zoom?.drag) {
       plugins.zoom.zoom.drag.backgroundColor = colors.accentSoft
@@ -568,14 +600,14 @@ export function resetZoom(canvasId: string) {
   }
 }
 
-export function groupOOMEventsByContainer(
-  events?: { container: string; timestamp: string; pod: string }[],
-): Record<string, { timestamp: string; pod: string }[]> {
-  const byContainer: Record<string, { timestamp: string; pod: string }[]> = {}
-  if (!events || !events.length) return byContainer
-  events.forEach((ev) => {
-    if (!byContainer[ev.container]) byContainer[ev.container] = []
-    byContainer[ev.container].push(ev)
+export function groupOOMKillsByContainer(
+  kills?: { container: string; timestamp: string }[],
+): Record<string, { timestamp: string }[]> {
+  const byContainer: Record<string, { timestamp: string }[]> = {}
+  if (!kills || !kills.length) return byContainer
+  kills.forEach((kill) => {
+    if (!byContainer[kill.container]) byContainer[kill.container] = []
+    byContainer[kill.container].push(kill)
   })
   return byContainer
 }

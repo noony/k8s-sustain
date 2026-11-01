@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -329,6 +330,29 @@ func TestSimulateRejectsInvalidAbsoluteRange(t *testing.T) {
 			t.Errorf("valid range: got 400, body=%s", rec.Body.String())
 		}
 	})
+}
+
+// Over an absolute range, a Simulation's history ends at the range's end,
+// not at the instant the Simulation computes as of.
+func TestHandleSimulate_AnAbsoluteRangesHistoryEndsAtItsEnd(t *testing.T) {
+	inputs := recommendertest.NewStaticInputs()
+	srv := &Server{
+		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
+		PromClient: &fakePromClient{},
+		Inputs:     inputs,
+		Logger:     testLogger(t),
+	}
+	rec := httptest.NewRecorder()
+
+	srv.handleSimulate(rec, httptest.NewRequest(http.MethodPost, "/api/simulate", mustJSON(t, simulateRequest{
+		Namespace: "default", OwnerKind: "Deployment", OwnerName: "web",
+		FromTs: 1718000000, ToTs: 1718003600,
+	})))
+
+	calls := inputs.HistoryCalls()
+	if rec.Code != http.StatusOK || len(calls) != 1 || !calls[0].Span.End.Equal(time.Unix(1718003600, 0)) {
+		t.Errorf("status %d, history calls %+v; want one ending at toTs", rec.Code, calls)
+	}
 }
 
 func mustJSON(t *testing.T, v any) *bytes.Reader {

@@ -23,18 +23,42 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// recordedInputs serves canned inputs by identity, fails those in failed,
-// gives every other identity empty inputs, and records each call. A fetch
-// takes a minute of clock, when it is set.
+// recordedInputs serves canned inputs and histories by identity, fails those
+// in failed, gives every other identity empty ones, and records each call and
+// the instant it fetched as of. A fetch takes a minute of clock, when it is
+// set.
 type recordedInputs struct {
-	inputs map[promclient.WorkloadIdentity]*WorkloadInputs
-	failed map[promclient.WorkloadIdentity]error
-	cfgs   []sustainv1alpha1.ResourcesConfigs
-	calls  [][]InputsRequest
-	clock  *clocktesting.FakePassiveClock
+	inputs    map[promclient.WorkloadIdentity]*WorkloadInputs
+	histories map[promclient.WorkloadIdentity]*History
+	failed    map[promclient.WorkloadIdentity]error
+	ats       []time.Time
+	cfgs      []sustainv1alpha1.ResourcesConfigs
+	calls     [][]InputsRequest
+	spans     []Span
+	clock     *clocktesting.FakePassiveClock
 }
 
-func (f *recordedInputs) FetchInputs(_ context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
+func (f *recordedInputs) FetchHistory(_ context.Context, span Span, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]HistoryResult {
+	f.spans = append(f.spans, span)
+	f.cfgs = append(f.cfgs, cfg)
+	f.calls = append(f.calls, slices.Clone(reqs))
+	out := make(map[promclient.WorkloadIdentity]HistoryResult, len(reqs))
+	for _, r := range reqs {
+		if err := f.failed[r.Identity]; err != nil {
+			out[r.Identity] = HistoryResult{Err: err}
+			continue
+		}
+		h := f.histories[r.Identity]
+		if h == nil {
+			h = NewHistory(nil)
+		}
+		out[r.Identity] = HistoryResult{History: h}
+	}
+	return out
+}
+
+func (f *recordedInputs) FetchInputs(_ context.Context, at time.Time, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
+	f.ats = append(f.ats, at)
 	f.cfgs = append(f.cfgs, cfg)
 	f.calls = append(f.calls, slices.Clone(reqs))
 	out := make(map[promclient.WorkloadIdentity]InputsResult, len(reqs))
@@ -117,7 +141,8 @@ var hpa = autoscaler.Info{Kind: autoscaler.KindHPA, Name: "api-green", Configure
 // What the assembly makes of one identity: the containers it is recommended
 // for and the fetch is sized by, the autoscaler of the members its Policy
 // governs, its age, the instant it computes as of, read from the clock once
-// the fetch returned, and why it has no Request.
+// before the fetch, which reads its inputs as of it, and why it has no
+// Request.
 func TestAssemble(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -239,8 +264,8 @@ func TestAssemble(t *testing.T) {
 			if req.autoInfo.Kind != tc.wantAuto || !req.since.Equal(tc.id.Since) || req.inputs == nil {
 				t.Errorf("request = %+v, want the %s autoscaler, the identity's age and its inputs", req, tc.wantAuto)
 			}
-			if fetched := now.Add(time.Minute); !req.now.Equal(fetched) {
-				t.Errorf("Now = %v, want %v: the clock once the fetch returned", req.now, fetched)
+			if !req.now.Equal(now) || len(tc.inputs.ats) != 1 || !tc.inputs.ats[0].Equal(now) {
+				t.Errorf("Now = %v, fetched as of %v; want both %v: the clock before the fetch", req.now, tc.inputs.ats, now)
 			}
 		})
 	}
@@ -304,9 +329,9 @@ type startingInputs struct {
 	fetching chan struct{}
 }
 
-func (f *startingInputs) FetchInputs(ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
+func (f *startingInputs) FetchInputs(ctx context.Context, at time.Time, cfg sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
 	close(f.fetching)
-	return f.recordedInputs.FetchInputs(ctx, cfg, reqs)
+	return f.recordedInputs.FetchInputs(ctx, at, cfg, reqs)
 }
 
 // The autoscalers of every namespace are read at once, while the inputs are
@@ -362,8 +387,11 @@ func TestAssemble_OneBatchUnderThePolicysResources(t *testing.T) {
 			t.Errorf("identity %d computes with %+v, want the fetch's resources and the Policy's coordination", i, a.Request)
 		}
 	}
-	if !got[0].Request.now.Equal(got[1].Request.now) || !got[0].Request.now.Equal(got[2].Request.now) {
-		t.Error("one batch must be computed as of one instant")
+	at := inputs.ats[0]
+	for i, a := range got {
+		if !a.Request.now.Equal(at) {
+			t.Errorf("identity %d computes as of %v, the batch was fetched as of %v: one batch is one instant", i, a.Request.now, at)
+		}
 	}
 }
 

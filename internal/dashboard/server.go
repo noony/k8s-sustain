@@ -27,24 +27,20 @@ import (
 	"github.com/noony/k8s-sustain/internal/recommender"
 )
 
-// PromQuerier is the subset of the Prometheus client the dashboard uses;
-// tests inject fakes.
+// PromQuerier is the subset of the Prometheus client the dashboard reads
+// series through; tests inject fakes. What a recommendation is computed from,
+// a Simulation's history and the detail page's signal line included, is
+// read through Inputs instead.
 type PromQuerier interface {
 	Ping(ctx context.Context) error
 
 	QueryInstant(ctx context.Context, expr string) (float64, error)
-	QueryRange(ctx context.Context, expr string, r promclient.TimeRange, step string) ([]promclient.TimeValue, error)
+	QueryRange(ctx context.Context, expr string, r promclient.TimeRange, step time.Duration) ([]promclient.TimeValue, error)
 	QueryByLabel(ctx context.Context, expr, label string) (map[string]float64, error)
-
-	QueryCPURangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryMemoryRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryCPURequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryMemoryRequestRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryCPULimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryMemoryLimitRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryWorkloadCPURecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryWorkloadMemoryRecommendationRangeByContainer(ctx context.Context, namespace, ownerKind, ownerName string, quantile float64, recWindow string, r promclient.TimeRange, step string) (promclient.ContainerTimeSeries, error)
-	QueryOOMKillEvents(ctx context.Context, namespace, ownerKind, ownerName string, r promclient.TimeRange, step string) ([]promclient.OOMKill, error)
+	// QueryRangeByLabel is QueryRange for an expression with one series per
+	// value of label, keyed by it: an identity's running requests and limits,
+	// and the replica-averaged usage its detail page charts, per container.
+	QueryRangeByLabel(ctx context.Context, expr, label string, r promclient.TimeRange, step time.Duration) (map[string][]promclient.TimeValue, error)
 }
 
 var dashboardScheme = runtime.NewScheme()
@@ -66,7 +62,9 @@ type Server struct {
 	// wires NewPrometheusHealthSignals.
 	Health HealthSignals
 	// Inputs fetches recommendation inputs through the same port the
-	// controller uses, so a Simulation computes from what the controller sees.
+	// controller uses, so a Simulation computes from what the controller sees
+	// and the detail page charts what its signals read, the OOM kills
+	// included.
 	Inputs recommender.InputsFetcher
 	// Clock is what a Simulation computes as of. Nil is the wall clock.
 	Clock  clock.PassiveClock

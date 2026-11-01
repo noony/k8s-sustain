@@ -239,10 +239,10 @@ func TestConflictedIdentityIsListedOnceUnderNoPolicy(t *testing.T) {
 }
 
 // The detail page shows the Recommendation the WorkloadRecommendation stores,
-// how it was derived and the outcome of the controller's last pass; it
-// computes nothing.
+// its limits next to its requests, how it was derived and the outcome of the
+// controller's last pass; it computes nothing.
 func TestWorkloadDetailShowsStoredRecommendation(t *testing.T) {
-	cpu, mem := resource.MustParse("250m"), resource.MustParse("128Mi")
+	cpu, mem, memLimit := resource.MustParse("250m"), resource.MustParse("128Mi"), resource.MustParse("256Mi")
 	percentile := resource.MustParse("227500u")
 	stored := &sustainv1alpha1.WorkloadRecommendation{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "prod", Name: wlrcache.Name("Deployment", "web")},
@@ -254,7 +254,7 @@ func TestWorkloadDetailShowsStoredRecommendation(t *testing.T) {
 			ObservedAt: metav1.NewTime(time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)),
 			Outcome:    sustainv1alpha1.OutcomeNoData,
 			Containers: map[string]sustainv1alpha1.ContainerRecommendation{
-				"web": {CPURequest: &cpu, MemoryRequest: &mem, RemoveCPULimit: true},
+				"web": {CPURequest: &cpu, MemoryRequest: &mem, RemoveCPULimit: true, MemoryLimit: &memLimit},
 			},
 			Trace: map[string]sustainv1alpha1.ContainerTrace{
 				"web": {CPU: &sustainv1alpha1.ResourceTrace{
@@ -279,8 +279,8 @@ func TestWorkloadDetailShowsStoredRecommendation(t *testing.T) {
 	if rec.Outcome != sustainv1alpha1.OutcomeNoData || rec.ObservedAt != "2026-10-01T12:00:00Z" {
 		t.Errorf("outcome/observedAt = %q/%q, want NoData/2026-10-01T12:00:00Z", rec.Outcome, rec.ObservedAt)
 	}
-	if c := rec.Containers["web"]; c.CPURequest != "250m" || c.MemoryRequest != "128Mi" || !c.CPULimitRemoved {
-		t.Errorf("web = %+v, want the stored 250m/128Mi with the CPU limit removed", c)
+	if c := rec.Containers["web"]; c.CPURequest != "250m" || c.MemoryRequest != "128Mi" || !c.CPULimitRemoved || c.MemoryLimit != "256Mi" {
+		t.Errorf("web = %+v, want the stored 250m/128Mi with the CPU limit removed and the memory limit at 256Mi", c)
 	}
 	if tr := rec.Trace["web"]; !equality.Semantic.DeepEqual(tr, stored.Status.Trace["web"]) {
 		t.Errorf("web trace = %+v, want the stored one", tr)

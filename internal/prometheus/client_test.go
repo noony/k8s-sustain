@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -92,7 +93,7 @@ func TestQueryRangeReturnsTimeValues(t *testing.T) {
 	now := time.Now()
 	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
 	c, _ := New(server.URL)
-	out, err := c.QueryRange(context.Background(), "anything", tr, "1m")
+	out, err := c.QueryRange(context.Background(), "anything", tr, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,205 +138,50 @@ func TestQueryByLabels_JoinsMultipleLabelsWithPipe(t *testing.T) {
 	}
 }
 
-func TestQueryCPURangeByContainer_ReturnsTimeSeries(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
-			{"metric":{"container":"app"},"values":[[1700000000,"0.1"],[1700000060,"0.2"]]},
-			{"metric":{"container":""},"values":[[1700000000,"99"]]}
-		]}}`))
-	}))
-	defer server.Close()
-
-	now := time.Now()
-	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
-	c, _ := New(server.URL)
-	got, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
-	if err != nil {
-		t.Fatalf("QueryCPURangeByContainer: %v", err)
-	}
-	if _, ok := got[""]; ok {
-		t.Error("series with empty container label must be dropped")
-	}
-	if len(got["app"]) != 2 {
-		t.Fatalf("expected 2 points for 'app', got %d", len(got["app"]))
-	}
-	if got["app"][0].Value != 0.1 || got["app"][1].Value != 0.2 {
-		t.Errorf("unexpected values: %+v", got["app"])
-	}
-}
-
-func TestQueryCPURangeByContainer_BadStep(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
-	}))
-	defer server.Close()
-
-	now := time.Now()
-	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
-	c, _ := New(server.URL)
-	if _, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "nope"); err == nil {
-		t.Fatal("expected error for malformed step")
-	}
-}
-
-func TestQueryMemoryRangeByContainer_HappyPath(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		q := r.Form.Get("query")
-		if !strings.Contains(q, "container_memory_by_workload") {
-			t.Errorf("expected memory rule in query, got %q", q)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
-			{"metric":{"container":"app"},"values":[[1700000000,"1024"]]}
-		]}}`))
-	}))
-	defer server.Close()
-	now := time.Now()
-	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
-	c, _ := New(server.URL)
-	got, err := c.QueryMemoryRangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
-	if err != nil {
-		t.Fatalf("QueryMemoryRangeByContainer: %v", err)
-	}
-	if got["app"][0].Value != 1024 {
-		t.Errorf("got %v want 1024", got["app"][0].Value)
-	}
-}
-
-func TestQueryRequestRange_UsesMaxByContainer(t *testing.T) {
-	now := time.Now()
-	tr := TimeRange{Start: now.Add(-5 * time.Minute), End: now}
-	for _, fn := range []func(server string) error{
-		func(addr string) error {
-			c, _ := New(addr)
-			_, err := c.QueryCPURequestRangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
-			return err
-		},
-		func(addr string) error {
-			c, _ := New(addr)
-			_, err := c.QueryMemoryRequestRangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
-			return err
-		},
-	} {
-		var query string
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_ = r.ParseForm()
-			query = r.Form.Get("query")
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
-		}))
-		if err := fn(server.URL); err != nil {
-			t.Errorf("query: %v", err)
-		}
-		if !strings.Contains(query, "max by (container)") {
-			t.Errorf("expected 'max by (container)' aggregator in query, got %q", query)
-		}
-		server.Close()
-	}
-}
-
-func TestQueryRecommendationRange_AppliesQuantileOverWindow(t *testing.T) {
+// A per-label range read keys each series by the label's value and skips a
+// series without it.
+func TestQueryRangeByLabel_KeysEachSeriesByTheLabel(t *testing.T) {
 	var query string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		query = r.Form.Get("query")
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
+			{"metric":{"container":"app"},"values":[[1700000000,"0.5"],[1700000060,"0.75"]]},
+			{"metric":{"container":"sidecar"},"values":[[1700000000,"0.1"]]},
+			{"metric":{},"values":[[1700000000,"9"]]}
+		]}}`))
 	}))
 	defer server.Close()
 
 	now := time.Now()
-	tr := TimeRange{Start: now.Add(-24 * time.Hour), End: now}
 	c, _ := New(server.URL)
-	if _, err := c.QueryWorkloadCPURecommendationRangeByContainer(context.Background(), "ns", "Deployment", "web", 0.95, "168h", tr, "1h"); err != nil {
-		t.Fatalf("QueryWorkloadCPURecommendationRangeByContainer: %v", err)
+	got, err := c.QueryRangeByLabel(context.Background(), "max by (container) (x)", "container", TimeRange{Start: now.Add(-5 * time.Minute), End: now}, time.Minute)
+	if err != nil {
+		t.Fatalf("QueryRangeByLabel: %v", err)
 	}
-	if !strings.Contains(query, "quantile_over_time(0.95") {
-		t.Errorf("expected quantile_over_time(0.95) in query, got %q", query)
+
+	if query != "max by (container) (x)" {
+		t.Errorf("query = %q, want it as given", query)
 	}
-	if !strings.Contains(query, "[168h]") {
-		t.Errorf("expected window [168h] in query, got %q", query)
+	want := map[string][]TimeValue{
+		"app":     {{Timestamp: time.Unix(1700000000, 0).UTC(), Value: 0.5}, {Timestamp: time.Unix(1700000060, 0).UTC(), Value: 0.75}},
+		"sidecar": {{Timestamp: time.Unix(1700000000, 0).UTC(), Value: 0.1}},
 	}
-	if strings.Contains(query, "[168h:1m]") {
-		t.Errorf("expected range vector, got subquery form: %q", query)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
 
 // The markers read the kill rule, never kube-state-metrics, summed over a
-// window of exactly one step so each kill lands in one point.
-func TestQueryOOMKillEvents_ReadsTheKillRuleOverOneStep(t *testing.T) {
-	var query string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		query = r.Form.Get("query")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
-	}))
-	defer server.Close()
+// window of exactly one step so each kill lands in one point, per identity
+// and container, and named after the rule.
+func TestOOMKillsPerStep_ReadsTheKillRuleOverOneStep(t *testing.T) {
+	got := OOMKillsPerStep(WorkloadSelector("ns", "Deployment", "web"), 5*time.Minute)
 
-	c, _ := New(server.URL)
-	if _, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", TimeRange{Start: time.Now().Add(-time.Hour), End: time.Now()}, "5m"); err != nil {
-		t.Fatalf("QueryOOMKillEvents: %v", err)
-	}
-	want := `sum by (pod, container) (sum_over_time(k8s_sustain:container_oom_kills{namespace="ns",owner_kind="Deployment",owner_name="web"}[5m]))`
-	if query != want {
-		t.Errorf("query = %q, want %q", query, want)
-	}
-}
-
-// Each kill in a step is one event at that step, per pod and container; a
-// series without a container is not a container's kill.
-func TestQueryOOMKillEvents_OneEventPerKill(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[
-			{"metric":{"container":"app","pod":"pod-1"},"values":[[1700000000,"1"],[1700000300,"2"]]},
-			{"metric":{"container":"app","pod":"pod-2"},"values":[[1700000000,"1"]]},
-			{"metric":{"container":"","pod":"pod-x"},"values":[[1700000000,"5"]]}
-		]}}`))
-	}))
-	defer server.Close()
-
-	c, _ := New(server.URL)
-	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", TimeRange{Start: time.Now().Add(-time.Hour), End: time.Now()}, "5m")
-	if err != nil {
-		t.Fatalf("QueryOOMKillEvents: %v", err)
-	}
-	at := func(sec int64) time.Time { return time.Unix(sec, 0) }
-	want := []OOMKill{
-		{Timestamp: at(1700000000), Container: "app", Pod: "pod-1"},
-		{Timestamp: at(1700000300), Container: "app", Pod: "pod-1"},
-		{Timestamp: at(1700000300), Container: "app", Pod: "pod-1"},
-		{Timestamp: at(1700000000), Container: "app", Pod: "pod-2"},
-	}
-	if len(events) != len(want) {
-		t.Fatalf("events = %+v, want %+v", events, want)
-	}
-	for i := range want {
-		if !events[i].Timestamp.Equal(want[i].Timestamp) || events[i].Container != want[i].Container || events[i].Pod != want[i].Pod {
-			t.Errorf("events[%d] = %+v, want %+v", i, events[i], want[i])
-		}
-	}
-}
-
-func TestQueryOOMKillEvents_ServerErrorIsNonFatal(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.Error(w, "boom", http.StatusInternalServerError)
-	}))
-	defer server.Close()
-
-	c, _ := New(server.URL)
-	events, err := c.QueryOOMKillEvents(context.Background(), "ns", "Deployment", "web", TimeRange{Start: time.Now().Add(-time.Hour), End: time.Now()}, "1m")
-	// Documented contract: this method returns (nil, nil) on error so a missing
-	// kube-state-metrics doesn't break dashboard rendering.
-	if err != nil {
-		t.Errorf("expected nil error on backend failure, got %v", err)
-	}
-	if events != nil {
-		t.Errorf("expected nil events, got %v", events)
+	want := `label_replace(sum by (namespace, owner_kind, owner_name, container) (sum_over_time(k8s_sustain:container_oom_kills{namespace="ns",owner_kind="Deployment",owner_name="web"}[5m])), "__name__", "k8s_sustain:container_oom_kills", "", "")`
+	if got != want {
+		t.Errorf("query = %q, want %q", got, want)
 	}
 }
 
@@ -379,7 +225,7 @@ func TestExecInstant_GenuineErrorCountsOne(t *testing.T) {
 	c, _ := New(server.URL)
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryShard(context.Background(), webShardQuery)
+	_, err := c.QueryShard(context.Background(), webShardQuery, time.Now())
 	if err == nil {
 		t.Fatal("expected an error from the failing query")
 	}
@@ -400,7 +246,7 @@ func TestExecInstant_PerCallTimeoutCountsOne(t *testing.T) {
 	c, _ := New(server.URL, WithQueryTimeout(50*time.Millisecond))
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryShard(context.Background(), webShardQuery)
+	_, err := c.QueryShard(context.Background(), webShardQuery, time.Now())
 	if err == nil {
 		t.Fatal("expected an error from the per-call timeout")
 	}
@@ -445,7 +291,7 @@ func TestExecInstant_ParentCancelCountsOne(t *testing.T) {
 		cancel()
 	}()
 
-	_, err := c.QueryShard(ctx, webShardQuery)
+	_, err := c.QueryShard(ctx, webShardQuery, time.Now())
 	if err == nil {
 		t.Fatal("expected an error from the parent-context cancellation")
 	}
@@ -476,7 +322,7 @@ func TestExecInstant_OuterSiblingCancelCountsZero(t *testing.T) {
 	}()
 	defer cancelCause(nil)
 
-	_, err := c.QueryShard(ctx, webShardQuery)
+	_, err := c.QueryShard(ctx, webShardQuery, time.Now())
 	if err == nil {
 		t.Fatal("expected an error from the sibling cancellation")
 	}
@@ -499,7 +345,7 @@ func TestRunRange_GenuineErrorCountsOne(t *testing.T) {
 	c, _ := New(server.URL)
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
+	_, err := c.QueryShardRange(context.Background(), webShardQuery, tr, time.Minute)
 	if err == nil {
 		t.Fatal("expected an error from the failing range query")
 	}
@@ -520,7 +366,7 @@ func TestRunRange_PerCallTimeoutCountsOne(t *testing.T) {
 	c, _ := New(server.URL, WithQueryTimeout(50*time.Millisecond))
 	c.breaker = newBreaker(10, time.Minute)
 
-	_, err := c.QueryCPURangeByContainer(context.Background(), "ns", "Deployment", "web", tr, "1m")
+	_, err := c.QueryShardRange(context.Background(), webShardQuery, tr, time.Minute)
 	if err == nil {
 		t.Fatal("expected an error from the per-call timeout")
 	}
@@ -549,7 +395,7 @@ func TestRunRange_OuterSiblingCancelCountsZero(t *testing.T) {
 
 	now := time.Now()
 	tr := TimeRange{Start: now.Add(-time.Hour), End: now}
-	_, err := c.QueryCPURangeByContainer(ctx, "ns", "Deployment", "web", tr, "1m")
+	_, err := c.QueryShardRange(ctx, webShardQuery, tr, time.Minute)
 	if err == nil {
 		t.Fatal("expected an error from the sibling cancellation")
 	}
@@ -583,11 +429,11 @@ func TestErrgroupSiblings_SingleOutageCountsOnce(t *testing.T) {
 
 	g, gctx := errgroup.WithContext(context.Background())
 	g.Go(func() error {
-		_, err := c.QueryShard(gctx, webShardQuery)
+		_, err := c.QueryShard(gctx, webShardQuery, time.Now())
 		return err
 	})
 	g.Go(func() error {
-		_, err := c.QueryShard(gctx, `k8s_sustain:workload_max_pod_memory:bytes{namespace="ns"}`)
+		_, err := c.QueryShard(gctx, `k8s_sustain:workload_max_pod_memory:bytes{namespace="ns"}`, time.Now())
 		return err
 	})
 	if err := g.Wait(); err == nil {

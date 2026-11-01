@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
@@ -40,6 +41,8 @@ func (listedSignal) samplesPerContainer(sustainv1alpha1.ResourcesConfigs) int { 
 func (listedSignal) query(_ sustainv1alpha1.ResourcesConfigs, shard promclient.Shard) string {
 	return listedSignalRule + shard.Selector()
 }
+
+func (listedSignal) historyQuery(promclient.Shard, time.Duration) string { return "" }
 
 func (listedSignal) contract() PromContract {
 	return PromContract{Rules: []string{listedSignalRule}, Labels: shardLabels}
@@ -106,7 +109,7 @@ func TestSignals_AListedSignalIsFetchedAndComputed(t *testing.T) {
 	cfg := promInputsCfg()
 	cfg.Memory.Limits.EqualsToRequest = true
 
-	got := NewPromInputs(c, 100).FetchInputs(context.Background(), cfg, reqsFor(1, "api", "bad", "web"))
+	got := NewPromInputs(c, 100).FetchInputs(context.Background(), now, cfg, reqsFor(1, "api", "bad", "web"))
 
 	if n := prom.count("cpu", 1); n != 3 {
 		t.Errorf("cpu: %d one-identity queries, want 3 at 60 samples each against a budget of 100", n)
@@ -163,6 +166,7 @@ func (p probe) name() string                                                  { 
 func (probe) required() bool                                                  { return false }
 func (probe) samplesPerContainer(sustainv1alpha1.ResourcesConfigs) int        { return 0 }
 func (probe) query(sustainv1alpha1.ResourcesConfigs, promclient.Shard) string { return "" }
+func (probe) historyQuery(promclient.Shard, time.Duration) string             { return "" }
 func (probe) contract() PromContract                                          { return PromContract{} }
 func (probe) collect([]promclient.ShardSample) signalValues                   { return noValues{} }
 func (p probe) slot() slot                                                    { return p.at }
@@ -232,6 +236,7 @@ func (f fixedBase) name() string                                                
 func (fixedBase) required() bool                                                  { return false }
 func (fixedBase) samplesPerContainer(sustainv1alpha1.ResourcesConfigs) int        { return 0 }
 func (fixedBase) query(sustainv1alpha1.ResourcesConfigs, promclient.Shard) string { return "" }
+func (fixedBase) historyQuery(promclient.Shard, time.Duration) string             { return "" }
 func (fixedBase) contract() PromContract                                          { return PromContract{} }
 
 func (fixedBase) collect([]promclient.ShardSample) signalValues { return noValues{} }
@@ -284,9 +289,14 @@ func TestSignals_BaseSignalsCombineByMax(t *testing.T) {
 
 var ruleRef = regexp.MustCompile(`k8s_sustain:[a-z0-9_:]+`)
 
+// rulesIn lists, sorted, every rule query names.
+func rulesIn(query string) []string {
+	return slices.Compact(slices.Sorted(slices.Values(ruleRef.FindAllString(query, -1))))
+}
+
 // Listing a signal is enough for its contract to be checked against the
 // chart, and each contract declares exactly the rules its signal's query
-// reads.
+// reads, and as history rules exactly those its history read alone reads.
 func TestSignals_ContractDeclaresTheRulesItsQueryReads(t *testing.T) {
 	withSignals(t, append(slices.Clone(signals), listedSignal{})...)
 
@@ -300,19 +310,24 @@ func TestSignals_ContractDeclaresTheRulesItsQueryReads(t *testing.T) {
 		if c.Signal != s.name() {
 			t.Errorf("contract %d is %q's, want %q's", i, c.Signal, s.name())
 		}
-		read := ruleRef.FindAllString(s.query(sustainv1alpha1.ResourcesConfigs{}, dottedShard), -1)
-		if got, want := slices.Sorted(slices.Values(read)), slices.Sorted(slices.Values(c.Rules)); !slices.Equal(got, want) {
-			t.Errorf("%s reads %v, its contract declares %v", s.name(), got, want)
+		read := rulesIn(s.query(sustainv1alpha1.ResourcesConfigs{}, dottedShard))
+		if want := slices.Sorted(slices.Values(c.Rules)); !slices.Equal(read, want) {
+			t.Errorf("%s reads %v, its contract declares %v", s.name(), read, want)
+		}
+		history := rulesIn(s.historyQuery(dottedShard, time.Minute))
+		if want := slices.Sorted(slices.Values(c.HistoryRules)); !slices.Equal(history, want) {
+			t.Errorf("%s's history reads %v, its contract declares %v", s.name(), history, want)
 		}
 	}
 }
 
 // Each signal's collect reads a sample of every rule its contract declares,
-// named as Prometheus returns it: with the test above, a series its query can
-// return is never dropped for a metric name its collect does not handle.
+// history rules included, named as Prometheus returns it: with the test
+// above, a series its queries can return is never dropped for a metric name
+// its collect does not handle.
 func TestSignals_CollectReadsEveryRuleItsContractDeclares(t *testing.T) {
 	for _, s := range signals {
-		for _, rule := range s.contract().Rules {
+		for _, rule := range slices.Concat(s.contract().Rules, s.contract().HistoryRules) {
 			t.Run(s.name()+"/"+rule, func(t *testing.T) {
 				none := s.collect(nil)
 

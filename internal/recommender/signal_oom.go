@@ -3,6 +3,8 @@ package recommender
 import (
 	"context"
 	"maps"
+	"math"
+	"slices"
 	"strconv"
 	"time"
 
@@ -85,6 +87,10 @@ type OOM struct {
 	// LiveAt is when the OOM Pod watcher's kill happened, zero when it saw
 	// none within LiveOOMWindow.
 	LiveAt time.Time
+	// KillsInStep counts the kills the kill rule recorded in the step of a
+	// history that ends at the instant the values are read as of: what a
+	// chart marks (OOMKills). Zero outside a history.
+	KillsInStep float64
 }
 
 // recent reports whether the container was OOM-killed recently: in the
@@ -128,12 +134,20 @@ func (oomFloor) query(_ sustainv1alpha1.ResourcesConfigs, shard promclient.Shard
 	return shard.MetricsSelector(oomRules...)
 }
 
+// historyQuery counts, per step, the kills of the kill rule the 24h rules
+// derive from: no instant of the 24h rules can date a kill a chart marks.
+func (oomFloor) historyQuery(shard promclient.Shard, step time.Duration) string {
+	return promclient.OOMKillsPerStep(shard.Selector(), step)
+}
+
 // contract: the rules are read as an instant vector, so the cost does not
-// depend on their evaluation interval.
+// depend on their evaluation interval. The history read also reads the kill
+// rule they derive from, for the kills a chart marks.
 func (oomFloor) contract() PromContract {
 	return PromContract{
-		Rules:  oomRules,
-		Labels: shardLabels,
+		Rules:        oomRules,
+		Labels:       shardLabels,
+		HistoryRules: []string{promclient.MetricContainerOOMKills},
 		CAdvisor: []string{
 			"container_memory_max_usage_bytes",
 			"container_memory_peak_working_set_bytes",
@@ -192,6 +206,8 @@ func (oomFloor) collect(samples []promclient.ShardSample) signalValues {
 		switch s.Metric {
 		case promclient.MetricWorkloadOOM24h:
 			o.Kills += s.Value
+		case promclient.MetricContainerOOMKills:
+			o.KillsInStep += s.Value
 		case promclient.MetricContainerPeakMemory24hBytes:
 			if !o.HasPeak || s.Value > o.PeakBytes {
 				o.PeakBytes, o.HasPeak = s.Value, true
@@ -263,45 +279,88 @@ func TracedOOMFloor(t sustainv1alpha1.ContainerTrace) (TracedOOM, bool) {
 	return out, true
 }
 
+// OOMKills are the kills the history r was computed or read from recorded,
+// one per kill, each dated at the end of the step it fell in, the earliest
+// first: the markers a chart of r draws.
+func OOMKills(r RangeResult) []promclient.OOMKill {
+	if r.history == nil {
+		return nil
+	}
+	var out []promclient.OOMKill
+	for _, p := range r.history.points {
+		ooms := valuesOf[oomValues](p.Inputs, oomFloor{})
+		for _, name := range slices.Sorted(maps.Keys(ooms)) {
+			for range int(math.Round(ooms[name].KillsInStep)) {
+				out = append(out, promclient.OOMKill{Timestamp: p.At, Container: name})
+			}
+		}
+	}
+	return out
+}
+
 // liveOOMInputs is an InputsFetcher that merges the kills the OOM Pod watcher
 // saw into the inputs another fetcher read, so the floor does not wait for the
 // recording rules to surface a kill.
 type liveOOMInputs struct {
 	inputs InputsFetcher
 	source oomwatch.Source
-	now    func() time.Time
 }
 
-// WithLiveOOMs decorates inputs with the kills source holds. A kill counts
-// while the watcher saw it within LiveOOMWindow of now.
-func WithLiveOOMs(inputs InputsFetcher, source oomwatch.Source, now func() time.Time) InputsFetcher {
-	return &liveOOMInputs{inputs: inputs, source: source, now: now}
+// WithLiveOOMs decorates inputs with the kills source holds. A kill counts as
+// of an instant when it happened at or before it and the watcher saw it within
+// LiveOOMWindow of it.
+func WithLiveOOMs(inputs InputsFetcher, source oomwatch.Source) InputsFetcher {
+	return &liveOOMInputs{inputs: inputs, source: source}
 }
 
-// FetchInputs merges every fetched identity's kills into its inputs, read
-// after the fetch so a kill seen while it ran counts. An identity whose
-// inputs could not be read stays failed.
+// FetchInputs merges every fetched identity's kills as of at into its inputs.
+// An identity whose inputs could not be read stays failed.
 func (l *liveOOMInputs) FetchInputs(
 	ctx context.Context,
+	at time.Time,
 	cfg sustainv1alpha1.ResourcesConfigs,
 	reqs []InputsRequest,
 ) map[promclient.WorkloadIdentity]InputsResult {
-	out := l.inputs.FetchInputs(ctx, cfg, reqs)
-	now := l.now()
+	out := l.inputs.FetchInputs(ctx, at, cfg, reqs)
 	for id, r := range out {
 		if r.Inputs == nil {
 			continue
 		}
-		r.Inputs = withLiveOOMs(r.Inputs, l.source.ByWorkload(id), now)
+		r.Inputs = withLiveOOMs(r.Inputs, l.source.ByWorkload(id), at)
 		out[id] = r
 	}
 	return out
 }
 
-// withLiveOOMs returns in with the watcher's kills merged into its OOM kills.
-// Kills the watcher saw longer than LiveOOMWindow before now are ignored. in
-// itself is left untouched: the decorated fetcher may still hold it.
-func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord, now time.Time) *WorkloadInputs {
+// FetchHistory merges, at every instant of every fetched identity's history,
+// the identity's kills as of that instant, as FetchInputs would as of it.
+func (l *liveOOMInputs) FetchHistory(
+	ctx context.Context,
+	span Span,
+	cfg sustainv1alpha1.ResourcesConfigs,
+	reqs []InputsRequest,
+) map[promclient.WorkloadIdentity]HistoryResult {
+	out := l.inputs.FetchHistory(ctx, span, cfg, reqs)
+	for id, r := range out {
+		if r.History == nil {
+			continue
+		}
+		live := l.source.ByWorkload(id)
+		points := slices.Clone(r.History.points)
+		for i, p := range points {
+			points[i].Inputs = withLiveOOMs(p.Inputs, live, p.At)
+		}
+		r.History = NewHistory(points)
+		out[id] = r
+	}
+	return out
+}
+
+// withLiveOOMs returns in with the watcher's kills as of at merged into its
+// OOM kills: a kill after at, or one the watcher saw longer than
+// LiveOOMWindow before it, is ignored. in itself is left untouched: the
+// decorated fetcher may still hold it.
+func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord, at time.Time) *WorkloadInputs {
 	if len(live) == 0 {
 		return in
 	}
@@ -310,16 +369,20 @@ func withLiveOOMs(in *WorkloadInputs, live map[string]*oomwatch.OOMRecord, now t
 		merged = make(oomValues, len(live))
 	}
 	for container, rec := range live {
-		if rec == nil || now.Sub(rec.ObservedAt) > LiveOOMWindow {
+		if rec == nil || at.Sub(rec.ObservedAt) > LiveOOMWindow {
+			continue
+		}
+		// FinishedAt dates the kill but the kubelet may leave it unset; the
+		// watcher seeing an OOMKilled termination is still a kill.
+		killedAt := rec.TerminatedAt
+		if killedAt.IsZero() {
+			killedAt = rec.ObservedAt
+		}
+		if killedAt.After(at) {
 			continue
 		}
 		o := merged[container]
-		// FinishedAt dates the kill but the kubelet may leave it unset; the
-		// watcher seeing an OOMKilled termination is still a kill.
-		o.LiveAt = rec.TerminatedAt
-		if o.LiveAt.IsZero() {
-			o.LiveAt = rec.ObservedAt
-		}
+		o.LiveAt = killedAt
 		o.LimitBytes = max(o.LimitBytes, float64(rec.OOMLimitBytes))
 		merged[container] = o
 	}

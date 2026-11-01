@@ -57,6 +57,9 @@ const (
 	memoryResource resourceKind = autoscaler.ResourceMemory
 )
 
+// resourceKinds are both resources, in the order a container's are sized.
+var resourceKinds = []resourceKind{cpuResource, memoryResource}
+
 // config is the Policy's configuration of the resource.
 func (r resourceKind) config(cfg sustainv1alpha1.ResourcesConfigs) sustainv1alpha1.ResourceConfig {
 	if r == cpuResource {

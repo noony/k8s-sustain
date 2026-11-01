@@ -53,6 +53,15 @@ func (s Shard) MetricsSelector(metrics ...string) string {
 		literalAlternation(metrics), s.Namespace, s.OwnerKind, literalAlternation(s.Names))
 }
 
+// Identities lists the identities the shard selects, in Names' order.
+func (s Shard) Identities() []WorkloadIdentity {
+	out := make([]WorkloadIdentity, len(s.Names))
+	for i, name := range s.Names {
+		out[i] = WorkloadIdentity{Namespace: s.Namespace, OwnerKind: s.OwnerKind, OwnerName: name}
+	}
+	return out
+}
+
 // shardGroupKey identifies one (namespace, owner_kind) group. Shards never
 // span groups: label matchers combine as a cross-product, so a wider shard
 // would load and discard unrequested series.

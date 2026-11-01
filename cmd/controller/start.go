@@ -115,7 +115,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 	reconciler := &controller.PolicyReconciler{
 		Client:                    mgr.GetClient(),
 		Scheme:                    mgr.GetScheme(),
-		Inputs:                    recommender.WithLiveOOMs(recommender.NewPromInputs(promClient, shardMaxSamples), oomCache, clk.Now),
+		Inputs:                    recommender.WithLiveOOMs(recommender.NewPromInputs(promClient, shardMaxSamples), oomCache),
 		Clock:                     clk,
 		ReconcileInterval:         cfg.ReconcileInterval,
 		InPlaceUpdates:            inPlaceUpdates,

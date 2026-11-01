@@ -264,10 +264,10 @@ type shutdownDuringFetch struct {
 }
 
 func (s shutdownDuringFetch) FetchInputs(
-	ctx context.Context, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest,
+	ctx context.Context, at time.Time, cfg sustainv1alpha1.ResourcesConfigs, reqs []recommender.InputsRequest,
 ) map[promclient.WorkloadIdentity]recommender.InputsResult {
 	s.cancel()
-	return s.StaticInputs.FetchInputs(ctx, cfg, reqs)
+	return s.StaticInputs.FetchInputs(ctx, at, cfg, reqs)
 }
 
 // As for a live member, a departed identity's failed fetch is a failure,

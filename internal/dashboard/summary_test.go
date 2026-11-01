@@ -24,16 +24,18 @@ func testLogger(t *testing.T) logr.Logger { return testr.New(t) }
 
 // fakePromClient satisfies PromQuerier with canned values keyed by expression.
 type fakePromClient struct {
-	instant    map[string]float64
-	byLabel    map[string]map[string]float64
-	instantErr map[string]error
-	byLabelErr map[string]error
+	instant         map[string]float64
+	byLabel         map[string]map[string]float64
+	rangeByLabel    map[string]map[string][]promclient.TimeValue
+	instantErr      map[string]error
+	byLabelErr      map[string]error
+	rangeByLabelErr map[string]error
 
 	// mu guards the captured* fields; handleSummary queries from several
 	// goroutines at once.
-	mu               sync.Mutex
-	capturedCPURange promclient.TimeRange
-	capturedRange    promclient.TimeRange
+	mu             sync.Mutex
+	capturedRange  promclient.TimeRange
+	capturedRanges []promclient.TimeRange
 }
 
 func (f *fakePromClient) QueryInstant(_ context.Context, expr string) (float64, error) {
@@ -53,7 +55,7 @@ func (f *fakePromClient) QueryByLabel(_ context.Context, expr, _ string) (map[st
 	return map[string]float64{}, nil
 }
 
-func (f *fakePromClient) QueryRange(_ context.Context, _ string, tr promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
+func (f *fakePromClient) QueryRange(_ context.Context, _ string, tr promclient.TimeRange, _ time.Duration) ([]promclient.TimeValue, error) {
 	f.mu.Lock()
 	f.capturedRange = tr
 	f.mu.Unlock()
@@ -62,43 +64,14 @@ func (f *fakePromClient) QueryRange(_ context.Context, _ string, tr promclient.T
 
 func (f *fakePromClient) Ping(_ context.Context) error { return nil }
 
-func (f *fakePromClient) QueryCPURangeByContainer(_ context.Context, _, _, _ string, r promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
+func (f *fakePromClient) QueryRangeByLabel(_ context.Context, expr, _ string, r promclient.TimeRange, _ time.Duration) (map[string][]promclient.TimeValue, error) {
 	f.mu.Lock()
-	f.capturedCPURange = r
-	f.mu.Unlock()
-	return promclient.ContainerTimeSeries{}, nil
-}
-
-func (f *fakePromClient) QueryMemoryRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
-	return promclient.ContainerTimeSeries{}, nil
-}
-
-func (f *fakePromClient) QueryCPURequestRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
-	return promclient.ContainerTimeSeries{}, nil
-}
-
-func (f *fakePromClient) QueryMemoryRequestRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
-	return promclient.ContainerTimeSeries{}, nil
-}
-
-func (f *fakePromClient) QueryCPULimitRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
-	return promclient.ContainerTimeSeries{}, nil
-}
-
-func (f *fakePromClient) QueryMemoryLimitRangeByContainer(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
-	return promclient.ContainerTimeSeries{}, nil
-}
-
-func (f *fakePromClient) QueryWorkloadCPURecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
-	return promclient.ContainerTimeSeries{}, nil
-}
-
-func (f *fakePromClient) QueryWorkloadMemoryRecommendationRangeByContainer(_ context.Context, _, _, _ string, _ float64, _ string, _ promclient.TimeRange, _ string) (promclient.ContainerTimeSeries, error) {
-	return promclient.ContainerTimeSeries{}, nil
-}
-
-func (f *fakePromClient) QueryOOMKillEvents(_ context.Context, _, _, _ string, _ promclient.TimeRange, _ string) ([]promclient.OOMKill, error) {
-	return nil, nil
+	defer f.mu.Unlock()
+	f.capturedRanges = append(f.capturedRanges, r)
+	if err, ok := f.rangeByLabelErr[expr]; ok {
+		return nil, err
+	}
+	return f.rangeByLabel[expr], nil
 }
 
 func TestHandleSummaryShape(t *testing.T) {

@@ -53,7 +53,7 @@ _Avoid_: breakdown, explanation, debug info
 The requests and limits a pod is actually running with.
 
 **Simulation**:
-A recommendation recomputed on demand by the dashboard: the computation the controller would run for an identity, from its governing Policy's settings or another Policy's, with any what-if changes merged in. With none, it differs from the controller's only by the OOM kills the controller has seen live and Prometheus does not hold yet. It is never what gets applied.
+A recommendation recomputed on demand by the dashboard: the computation the controller would run for an identity, from its governing Policy's settings or another Policy's, with any what-if changes merged in. With none, it differs from the controller's only by the OOM kills the controller has seen live and Prometheus does not hold yet. Its history is the same computation at each past instant of a range, request and limit, from what every signal read as of that instant; only what has no history, the autoscaler it coordinates with and the containers' own requests and limits, is today's. It is never what gets applied.
 _Avoid_: preview, dry-run (dry-run means recommend-only)
 
 ### Health

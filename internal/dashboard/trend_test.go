@@ -28,7 +28,7 @@ type failingRangePromClient struct {
 	failSubstrings []string
 }
 
-func (f *failingRangePromClient) QueryRange(_ context.Context, expr string, _ promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
+func (f *failingRangePromClient) QueryRange(_ context.Context, expr string, _ promclient.TimeRange, _ time.Duration) ([]promclient.TimeValue, error) {
 	if len(f.failSubstrings) == 0 {
 		return nil, errors.New("prom unreachable")
 	}
@@ -40,7 +40,7 @@ func (f *failingRangePromClient) QueryRange(_ context.Context, expr string, _ pr
 	return []promclient.TimeValue{{Timestamp: time.Unix(1, 0), Value: 1}}, nil
 }
 
-func (r *recordingPromClient) QueryRange(_ context.Context, expr string, _ promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
+func (r *recordingPromClient) QueryRange(_ context.Context, expr string, _ promclient.TimeRange, _ time.Duration) ([]promclient.TimeValue, error) {
 	r.mu.Lock()
 	r.exprs = append(r.exprs, expr)
 	r.mu.Unlock()
@@ -142,7 +142,7 @@ type recordingCapturingPromClient struct {
 	onQueryRange func(promclient.TimeRange)
 }
 
-func (r *recordingCapturingPromClient) QueryRange(_ context.Context, expr string, tr promclient.TimeRange, _ string) ([]promclient.TimeValue, error) {
+func (r *recordingCapturingPromClient) QueryRange(_ context.Context, expr string, tr promclient.TimeRange, _ time.Duration) ([]promclient.TimeValue, error) {
 	r.mu.Lock()
 	r.exprs = append(r.exprs, expr)
 	r.mu.Unlock()

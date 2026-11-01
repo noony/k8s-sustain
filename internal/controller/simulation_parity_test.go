@@ -65,7 +65,8 @@ func parityDeployment(name, ownerName string, created time.Time) *appsv1.Deploym
 }
 
 // parityCluster holds Policy p, coordinating with autoscalers, excluding init
-// containers or not, and fetching at windows and percentiles of its own; the
+// containers or not, fetching at windows and percentiles of its own and
+// setting memory limits at 1.5 times the request; the
 // owner-name identity Deployment/web of members web-blue and web-green, an
 // hour old; and Deployment/fresh, half the minimum age old, Too young. Only
 // web-green runs the init container migrate, and an HPA at 50% CPU targets
@@ -81,6 +82,7 @@ func parityCluster(t *testing.T, excludeInit bool) client.Client {
 	resources.CPU.Window, resources.CPU.Requests.Percentile = "24h", ptr.To[int32](90)
 	resources.Memory.Window, resources.Memory.Requests.Percentile = "72h", ptr.To[int32](99)
 	resources.Memory.Requests.Headroom = ptr.To[int32](20)
+	resources.Memory.Limits.RequestsLimitsRatio = ptr.To(1.5)
 
 	green := parityDeployment("web-green", "web", parityInstant.Add(-time.Hour))
 	green.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "migrate"}}
@@ -111,31 +113,11 @@ func parityCluster(t *testing.T, excludeInit bool) client.Client {
 		Build()
 }
 
-// noCharts is a Prometheus with no series to chart: a Simulation's values
-// come from its Inputs alone.
-type noCharts struct{ dashboard.PromQuerier }
+// noRunning is a Prometheus that knows nothing of what pods ran with: a
+// Simulation's numbers and history come from its Inputs alone.
+type noRunning struct{ dashboard.PromQuerier }
 
-func (noCharts) QueryCPURangeByContainer(context.Context, string, string, string, promclient.TimeRange, string) (promclient.ContainerTimeSeries, error) {
-	return nil, nil
-}
-
-func (noCharts) QueryMemoryRangeByContainer(context.Context, string, string, string, promclient.TimeRange, string) (promclient.ContainerTimeSeries, error) {
-	return nil, nil
-}
-
-func (noCharts) QueryCPURequestRangeByContainer(context.Context, string, string, string, promclient.TimeRange, string) (promclient.ContainerTimeSeries, error) {
-	return nil, nil
-}
-
-func (noCharts) QueryMemoryRequestRangeByContainer(context.Context, string, string, string, promclient.TimeRange, string) (promclient.ContainerTimeSeries, error) {
-	return nil, nil
-}
-
-func (noCharts) QueryWorkloadCPURecommendationRangeByContainer(context.Context, string, string, string, float64, string, promclient.TimeRange, string) (promclient.ContainerTimeSeries, error) {
-	return nil, nil
-}
-
-func (noCharts) QueryWorkloadMemoryRecommendationRangeByContainer(context.Context, string, string, string, float64, string, promclient.TimeRange, string) (promclient.ContainerTimeSeries, error) {
+func (noRunning) QueryRangeByLabel(context.Context, string, string, promclient.TimeRange, time.Duration) (map[string][]promclient.TimeValue, error) {
 	return nil, nil
 }
 
@@ -199,7 +181,32 @@ type simulation struct {
 	Outcome    sustainv1alpha1.RecommendationOutcome     `json:"outcome"`
 	Containers map[string]recommended                    `json:"containers"`
 	Trace      map[string]sustainv1alpha1.ContainerTrace `json:"trace"`
+	History    struct {
+		Containers map[string]struct {
+			CPU    computedHistory `json:"cpu"`
+			Memory computedHistory `json:"memory"`
+		} `json:"containers"`
+	} `json:"history"`
 }
+
+// computedHistory is what a Simulation's history computed for one resource.
+type computedHistory struct {
+	Request []promclient.TimeValue `json:"recommendedRequest"`
+	Limit   []promclient.TimeValue `json:"recommendedLimit"`
+}
+
+// endsAt reports whether the last point of series is q at at, in cores or
+// bytes; a nil q wants no point at at.
+func endsAt(series []promclient.TimeValue, at time.Time, q *resource.Quantity, value func(resource.Quantity) float64) bool {
+	ends := len(series) > 0 && series[len(series)-1].Timestamp.Equal(at)
+	if q == nil {
+		return !ends
+	}
+	return ends && series[len(series)-1].Value == value(*q)
+}
+
+func inCores(q resource.Quantity) float64 { return float64(q.MilliValue()) / 1000 }
+func inBytes(q resource.Quantity) float64 { return float64(q.Value()) }
 
 func simulate(t *testing.T, srv *dashboard.Server, name string) simulation {
 	t.Helper()
@@ -214,18 +221,25 @@ func simulate(t *testing.T, srv *dashboard.Server, name string) simulation {
 // WorkloadRecommendation, from the same objects and inputs at the same
 // instant: with init containers excluded or not, for an owner-name group
 // coordinated against the HPA of one of its members, and for an identity Too
-// young at that instant. Every fetch either side makes is under the settings
-// and for the containers the controller's is.
+// young at that instant. Every fetch either side makes is as of that instant,
+// under the settings and for the containers the controller's is, and the last
+// instant of a Simulation's history computes the stored Recommendation.
 func TestSimulationRecommendsWhatTheControllerStores(t *testing.T) {
 	for _, excludeInit := range []bool{false, true} {
 		t.Run("excludeInitContainers="+strconv.FormatBool(excludeInit), func(t *testing.T) {
 			ctx := context.Background()
 			c := parityCluster(t, excludeInit)
 			clock := clocktesting.NewFakePassiveClock(parityInstant)
+			webValues := []recommender.InputsOption{
+				recommender.WithCPUUsage(promclient.ContainerValues{"main": 1, "migrate": 0.5}),
+				recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 << 20, "migrate": 32 << 20}),
+			}
 			inputs := recommendertest.NewStaticInputs().
-				Set(webKey,
-					recommender.WithCPUUsage(promclient.ContainerValues{"main": 1, "migrate": 0.5}),
-					recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 << 20, "migrate": 32 << 20})).
+				Set(webKey, webValues...).
+				SetHistory(webKey, recommender.NewHistory([]recommender.HistoryPoint{
+					{At: parityInstant.Add(-time.Hour), Inputs: recommender.NewInputs(recommender.WithCPUUsage(promclient.ContainerValues{"main": 3}))},
+					{At: parityInstant, Inputs: recommender.NewInputs(webValues...)},
+				})).
 				Set(freshKey,
 					recommender.WithCPUUsage(promclient.ContainerValues{"main": 1}),
 					recommender.WithMemoryUsage(promclient.ContainerValues{"main": 64 << 20}))
@@ -246,7 +260,7 @@ func TestSimulationRecommendsWhatTheControllerStores(t *testing.T) {
 			stored, storedFresh := statuses["web"], statuses["fresh"]
 			want := renderStored(stored.Containers)
 
-			srv := &dashboard.Server{K8sClient: c, PromClient: noCharts{}, Inputs: inputs, Clock: clock, Logger: logr.Discard()}
+			srv := &dashboard.Server{K8sClient: c, PromClient: noRunning{}, Inputs: inputs, Clock: clock, Logger: logr.Discard()}
 			sim, simFresh := simulate(t, srv, "web"), simulate(t, srv, "fresh")
 			var batch struct {
 				Workloads []struct {
@@ -269,6 +283,16 @@ func TestSimulationRecommendsWhatTheControllerStores(t *testing.T) {
 			}
 			if sim.Outcome != stored.Outcome || !maps.Equal(sim.Containers, want) || !equality.Semantic.DeepEqual(sim.Trace, stored.Trace) {
 				t.Errorf("simulation = %s %+v, want the stored %s %+v with its trace", sim.Outcome, sim.Containers, stored.Outcome, want)
+			}
+			if got := slices.Sorted(maps.Keys(sim.History.Containers)); !slices.Equal(got, slices.Sorted(maps.Keys(want))) {
+				t.Errorf("history of %v, want the stored containers' %v", got, slices.Sorted(maps.Keys(want)))
+			}
+			for name, rec := range stored.Containers {
+				h := sim.History.Containers[name]
+				if !endsAt(h.CPU.Request, parityInstant, rec.CPURequest, inCores) || !endsAt(h.CPU.Limit, parityInstant, rec.CPULimit, inCores) ||
+					!endsAt(h.Memory.Request, parityInstant, rec.MemoryRequest, inBytes) || !endsAt(h.Memory.Limit, parityInstant, rec.MemoryLimit, inBytes) {
+					t.Errorf("%s history = %+v, want it to end at the parity instant on the stored %+v", name, h, renderStored(stored.Containers)[name])
+				}
 			}
 			if storedFresh.Outcome != sustainv1alpha1.OutcomeTooYoung || simFresh.Outcome != storedFresh.Outcome {
 				t.Errorf("fresh: stored %s, simulated %s; want both Too young", storedFresh.Outcome, simFresh.Outcome)
@@ -301,6 +325,17 @@ func TestSimulationRecommendsWhatTheControllerStores(t *testing.T) {
 			sized := map[promclient.WorkloadIdentity]int{}
 			for _, req := range calls[0].Requests {
 				sized[req.Identity] = req.Containers
+			}
+			for i, call := range calls {
+				if !call.At.Equal(parityInstant) {
+					t.Errorf("fetch %d as of %v, want the parity instant %v", i, call.At, parityInstant)
+				}
+			}
+			for _, call := range inputs.HistoryCalls() {
+				if !call.Span.End.Equal(parityInstant) || !equality.Semantic.DeepEqual(call.Resources, calls[0].Resources) {
+					t.Errorf("history fetched to %v under %s, want to the parity instant under the controller's %s",
+						call.Span.End, jsonOf(call.Resources), jsonOf(calls[0].Resources))
+				}
 			}
 			for _, call := range calls[1:] {
 				if !equality.Semantic.DeepEqual(call.Resources, calls[0].Resources) {

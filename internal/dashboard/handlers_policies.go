@@ -117,7 +117,7 @@ func (s *Server) handlePolicyDetail(w http.ResponseWriter, r *http.Request, name
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return
 	}
-	step, perr := parseStepParam(q, "1h")
+	step, perr := parseStepParam(q, time.Hour)
 	if perr != nil {
 		writeFieldError(w, http.StatusBadRequest, perr.Msg, perr.Field)
 		return

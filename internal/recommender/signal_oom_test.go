@@ -28,14 +28,27 @@ type oomSource map[string]*oomwatch.OOMRecord
 
 func (s oomSource) ByWorkload(promclient.WorkloadIdentity) map[string]*oomwatch.OOMRecord { return s }
 
-// fixedInputs is an InputsFetcher serving the same inputs to every identity,
-// and failing those in failed.
+// fixedInputs is an InputsFetcher serving the same inputs and history to
+// every identity, and failing those in failed.
 type fixedInputs struct {
-	in     *WorkloadInputs
-	failed promclient.WorkloadIdentity
+	in      *WorkloadInputs
+	history *History
+	failed  promclient.WorkloadIdentity
 }
 
-func (f fixedInputs) FetchInputs(_ context.Context, _ sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
+func (f fixedInputs) FetchHistory(_ context.Context, _ Span, _ sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]HistoryResult {
+	out := make(map[promclient.WorkloadIdentity]HistoryResult, len(reqs))
+	for _, r := range reqs {
+		if r.Identity == f.failed {
+			out[r.Identity] = HistoryResult{Err: errors.New("unreadable")}
+			continue
+		}
+		out[r.Identity] = HistoryResult{History: f.history}
+	}
+	return out
+}
+
+func (f fixedInputs) FetchInputs(_ context.Context, _ time.Time, _ sustainv1alpha1.ResourcesConfigs, reqs []InputsRequest) map[promclient.WorkloadIdentity]InputsResult {
 	out := make(map[promclient.WorkloadIdentity]InputsResult, len(reqs))
 	for _, r := range reqs {
 		if r.Identity == f.failed {
@@ -52,29 +65,31 @@ var liveID = promclient.WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployme
 // fetchLive reads in through the live-OOM decorator holding live, at now.
 func fetchLive(t *testing.T, in *WorkloadInputs, live oomSource) *WorkloadInputs {
 	t.Helper()
-	got := WithLiveOOMs(fixedInputs{in: in}, live, func() time.Time { return now }).
-		FetchInputs(context.Background(), sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}})[liveID]
+	got := WithLiveOOMs(fixedInputs{in: in}, live).
+		FetchInputs(context.Background(), now, sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}})[liveID]
 	if got.Err != nil {
 		t.Fatalf("fetch: %v", got.Err)
 	}
 	return got.Inputs
 }
 
-// The decorator merges a kill the watcher saw within LiveOOMWindow of its
-// clock into the fetched OOMs, anchoring on the higher of the two limits, and
-// ignores an older one. The decorated fetcher's inputs are left as they were,
-// and an identity whose inputs could not be read stays failed.
+// The decorator merges a kill the watcher saw within LiveOOMWindow of the
+// instant fetched as of into the fetched OOMs, anchoring on the higher of the
+// two limits, and ignores an older one and one after the instant. The
+// decorated fetcher's inputs are left as they were, and an identity whose
+// inputs could not be read stays failed.
 func TestWithLiveOOMs_MergesKillsSeenWithinTheWindow(t *testing.T) {
 	prom := NewInputs(WithOOMKills(map[string]OOM{"app": {Kills: 1, LimitBytes: 96 * mib}}))
 	live := oomSource{
 		"app":   liveKill("app", 10*time.Second, 184<<20),
 		"side":  liveKill("side", LiveOOMWindow, 50<<20),
 		"stale": liveKill("stale", LiveOOMWindow+time.Second, 50<<20),
+		"later": liveKill("later", -time.Second, 50<<20),
 	}
 	failed := promclient.WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: "down"}
 
-	got := WithLiveOOMs(fixedInputs{in: prom, failed: failed}, live, func() time.Time { return now }).
-		FetchInputs(context.Background(), sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}, {Identity: failed}})
+	got := WithLiveOOMs(fixedInputs{in: prom, failed: failed}, live).
+		FetchInputs(context.Background(), now, sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}, {Identity: failed}})
 
 	want := NewInputs(WithOOMKills(map[string]OOM{
 		"app":  {Kills: 1, LimitBytes: 184 << 20, LiveAt: now.Add(-10 * time.Second)},
@@ -484,5 +499,60 @@ func TestOOMFloor_TracesThroughCoordination(t *testing.T) {
 				t.Errorf("determined = %v, want %v", floor.Determined, tc.wantDetermined)
 			}
 		})
+	}
+}
+
+// At each instant of a history, the decorator merges the kills as of that
+// instant, as an instant read as of it would: a kill after an earlier instant
+// stays out of it. The decorated history is left as it was.
+func TestWithLiveOOMs_MergesKillsAsOfEachInstantOfAHistory(t *testing.T) {
+	earlier := now.Add(-time.Hour)
+	killed := WithOOMKills(map[string]OOM{"app": {Kills: 1, KillsInStep: 1}})
+	history := func() *History {
+		return NewHistory([]HistoryPoint{{At: earlier, Inputs: NewInputs()}, {At: now, Inputs: NewInputs(killed)}})
+	}
+	decorated := history()
+	live := oomSource{"app": liveKill("app", 10*time.Second, 184<<20)}
+
+	got := WithLiveOOMs(fixedInputs{history: decorated}, live).
+		FetchHistory(context.Background(), SpanOf(earlier, now, time.Hour), sustainv1alpha1.ResourcesConfigs{}, []InputsRequest{{Identity: liveID}})[liveID]
+
+	want := NewHistory([]HistoryPoint{
+		{At: earlier, Inputs: NewInputs()},
+		{At: now, Inputs: NewInputs(WithOOMKills(map[string]OOM{"app": {Kills: 1, KillsInStep: 1, LimitBytes: 184 << 20, LiveAt: now.Add(-10 * time.Second)}}))},
+	})
+	if got.Err != nil || !reflect.DeepEqual(got.History, want) {
+		t.Errorf("history = %+v (%v), want %+v", got.History, got.Err, want)
+	}
+	if !reflect.DeepEqual(decorated, history()) {
+		t.Errorf("decorated history = %+v, want it untouched", decorated)
+	}
+}
+
+// A chart marks each kill a history counted, at the end of the step it fell
+// in, the earliest first.
+func TestOOMKills_OnePerKillAtTheEndOfItsStep(t *testing.T) {
+	earlier := now.Add(-time.Hour)
+	killed := func(kills map[string]float64) *WorkloadInputs {
+		ooms := map[string]OOM{}
+		for name, n := range kills {
+			ooms[name] = OOM{Kills: n, KillsInStep: n}
+		}
+		return NewInputs(WithOOMKills(ooms))
+	}
+	r := RangeResult{history: NewHistory([]HistoryPoint{
+		{At: earlier, Inputs: killed(map[string]float64{"sidecar": 1, "app": 2})},
+		{At: now, Inputs: killed(map[string]float64{"app": 0})},
+	})}
+
+	got := OOMKills(r)
+
+	want := []promclient.OOMKill{
+		{Timestamp: earlier, Container: "app"},
+		{Timestamp: earlier, Container: "app"},
+		{Timestamp: earlier, Container: "sidecar"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("kills = %+v, want %+v", got, want)
 	}
 }

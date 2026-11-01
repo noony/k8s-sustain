@@ -7,17 +7,22 @@ import {
   type WorkloadDetailSnapshot,
   type CoordinationFactors,
 } from '../lib/api'
-import { parseCPUQuantity, parseMemoryQuantity, parseStepToMs, timeAgo } from '../lib/format'
+import { parseStepToMs, timeAgo } from '../lib/format'
 import { outcomeLabel } from '../lib/outcomes'
 import { attentionStateMetaOf } from '../lib/risk'
+import {
+  chartResources,
+  runningLines,
+  storedLines,
+  type ChartResource,
+} from '../lib/resourceCharts'
 import type { Chart } from 'chart.js'
 import {
   createTimeSeriesChart,
   destroyAllCharts,
   zoomedRangeSeconds,
-  groupOOMEventsByContainer,
+  groupOOMKillsByContainer,
   type ExtraSeries,
-  type ChartAnnotation,
 } from '../lib/chart'
 import { useAutoRefresh } from '../composables/useAutoRefresh'
 import { useApi } from '../composables/useApi'
@@ -54,6 +59,7 @@ const stored = computed(() => snapshot.data.value?.recommendation)
 
 const conflictedState = attentionStateMetaOf('conflicted')
 const blockedState = attentionStateMetaOf('blocked')
+const conflicted = computed(() => snapshot.data.value?.riskState === conflictedState.state)
 
 async function load() {
   const p = new URLSearchParams(rangeQueryParams(range.value, Date.now()))
@@ -110,8 +116,7 @@ function resetRange() {
 
 function containers(): string[] {
   const s = new Set<string>()
-  if (metrics.value?.cpu) Object.keys(metrics.value.cpu).forEach((k) => s.add(k))
-  if (metrics.value?.memory) Object.keys(metrics.value.memory).forEach((k) => s.add(k))
+  for (const r of chartResources) Object.keys(metrics.value?.[r.key] ?? {}).forEach((k) => s.add(k))
   return Array.from(s)
 }
 
@@ -149,138 +154,83 @@ function allRecContainers(): { name: string; rec: RecommendationContainer; isIni
 }
 
 function oomByContainer() {
-  return groupOOMEventsByContainer(metrics.value?.oomEvents)
+  return groupOOMKillsByContainer(metrics.value?.oomKills)
+}
+
+function signalSeries(r: ChartResource, cname: string): ExtraSeries[] {
+  const signal = metrics.value?.signal
+  const data = signal?.containers[cname]?.[r.key]
+  const percentile = signal?.[r.key].percentile
+  if (!signal || !data?.length || !percentile) return []
+  return [
+    {
+      data,
+      label: `Busiest replica, p${percentile} over ${signal[r.key].window}: what the recommender reads`,
+      color: r.color,
+      dash: [6, 3],
+      stepped: false,
+      stepMs: signal.stepSeconds * 1000,
+    },
+  ]
+}
+
+function signalNote(r: ChartResource, cname: string): string {
+  const m = metrics.value
+  if (!m) return ''
+  if (m.signalError) return 'Signal history unavailable: ' + m.signalError
+  if (!m.signal) {
+    return conflicted.value
+      ? `No signal line: ${conflictedState.label}, no Policy governs this workload.`
+      : 'No signal line: no Policy governs this workload.'
+  }
+  if (m.signal[r.key].keepRequest) {
+    return `No signal line: the Policy keeps the ${r.noun} request.`
+  }
+  if (m.signal.excludeInitContainers && initContainerSet().has(cname)) {
+    return 'No signal line: the Policy excludes init containers.'
+  }
+  return ''
 }
 
 function renderCharts() {
   destroyAllCharts()
-  if (!metrics.value) return
+  const m = metrics.value
+  if (!m) return
 
-  const resources = metrics.value.resources || {}
-  const cpuRequests = metrics.value.cpuRequests || {}
-  const memoryRequests = metrics.value.memoryRequests || {}
-  const cpuLimits = metrics.value.cpuLimits || {}
-  const memoryLimits = metrics.value.memoryLimits || {}
+  const resources = m.resources || {}
+  const running = m.running || {}
   const storedRecs = stored.value?.containers || {}
   const ooms = oomByContainer()
   const stepMs = parseStepToMs(rangeQueryParams(range.value, Date.now()).step)
   const chartWindow = resolveRange(range.value, Date.now())
 
-  containers().forEach((cname) => {
-    const res = resources[cname] || {}
-
-    if (metrics.value!.cpu?.[cname]) {
-      const cpuAnnotations: ChartAnnotation[] = []
-      const cpuExtra: ExtraSeries[] = []
-      if (cpuRequests[cname]?.length) {
-        cpuExtra.push({
-          data: cpuRequests[cname],
-          label: 'Request',
-          color: 'config',
-          dash: [4, 4],
-        })
-      } else if (res.cpuRequest) {
-        cpuAnnotations.push({
-          value: parseCPUQuantity(res.cpuRequest),
-          label: 'Request: ' + res.cpuRequest,
-          color: 'config',
-          dash: [4, 4],
-        })
-      }
-      if (cpuLimits[cname]?.length) {
-        cpuExtra.push({
-          data: cpuLimits[cname],
-          label: 'Limit',
-          color: 'config',
-          dash: [1, 4],
-        })
-      } else if (res.cpuLimit) {
-        cpuAnnotations.push({
-          value: parseCPUQuantity(res.cpuLimit),
-          label: 'Limit: ' + res.cpuLimit,
-          color: 'config',
-          dash: [1, 4],
-        })
-      }
-      const cpuRec = storedRecs[cname]?.cpuRequest
-      if (cpuRec) {
-        cpuAnnotations.push({
-          value: parseCPUQuantity(cpuRec),
-          label: 'Recommendation: ' + cpuRec,
-          color: 'rec',
-          dash: [8, 4],
-        })
-      }
-      createTimeSeriesChart('cpu-' + cname, metrics.value!.cpu[cname], {
-        label: 'CPU Usage',
-        color: 'cpu',
-        unit: 'cores',
-        yFormat: (v) => v.toFixed(3),
-        annotations: cpuAnnotations,
-        extraSeries: cpuExtra,
+  for (const cname of containers()) {
+    for (const r of chartResources) {
+      const usage = m[r.key]?.[cname]
+      if (!usage) continue
+      const { extra, annotations } = runningLines(
+        r,
+        running[r.key]?.requests?.[cname],
+        running[r.key]?.limits?.[cname],
+        resources[cname] || {},
+      )
+      const note = signalNote(r, cname)
+      createTimeSeriesChart(r.canvas + '-' + cname, usage, {
+        label: 'Usage (replica average)',
+        color: r.color,
+        unit: r.unit,
+        transform: r.transform,
+        yFormat: r.yFormat,
+        annotations: [...annotations, ...storedLines(r, storedRecs[cname])],
+        extraSeries: [...signalSeries(r, cname), ...extra],
+        oomKills: r.marksOOMKills ? ooms[cname] || [] : undefined,
+        notes: note ? [note] : undefined,
         onZoomComplete: onChartZoom,
         stepMs,
         window: chartWindow,
       })
     }
-
-    if (metrics.value!.memory?.[cname]) {
-      const memAnnotations: ChartAnnotation[] = []
-      const memExtra: ExtraSeries[] = []
-      if (memoryRequests[cname]?.length) {
-        memExtra.push({
-          data: memoryRequests[cname],
-          label: 'Request',
-          color: 'config',
-          dash: [4, 4],
-        })
-      } else if (res.memoryRequest) {
-        memAnnotations.push({
-          value: parseMemoryQuantity(res.memoryRequest),
-          label: 'Request: ' + res.memoryRequest,
-          color: 'config',
-          dash: [4, 4],
-        })
-      }
-      if (memoryLimits[cname]?.length) {
-        memExtra.push({
-          data: memoryLimits[cname],
-          label: 'Limit',
-          color: 'config',
-          dash: [1, 4],
-        })
-      } else if (res.memoryLimit) {
-        memAnnotations.push({
-          value: parseMemoryQuantity(res.memoryLimit),
-          label: 'Limit: ' + res.memoryLimit,
-          color: 'config',
-          dash: [1, 4],
-        })
-      }
-      const memRec = storedRecs[cname]?.memoryRequest
-      if (memRec) {
-        memAnnotations.push({
-          value: parseMemoryQuantity(memRec),
-          label: 'Recommendation: ' + memRec,
-          color: 'rec',
-          dash: [8, 4],
-        })
-      }
-      createTimeSeriesChart('mem-' + cname, metrics.value!.memory[cname], {
-        label: 'Memory Usage',
-        color: 'mem',
-        unit: 'MiB',
-        transform: (v) => v / (1024 * 1024),
-        yFormat: (v) => v.toFixed(0),
-        annotations: memAnnotations,
-        extraSeries: memExtra,
-        oomEvents: ooms[cname] || [],
-        onZoomComplete: onChartZoom,
-        stepMs,
-        window: chartWindow,
-      })
-    }
-  })
+  }
 }
 
 function driftLabel(): string {
@@ -328,11 +278,13 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
             >
           </template>
           <span
-            v-else-if="snapshot.data.value.conflictingPolicies?.length"
+            v-else-if="conflicted"
             class="badge badge-red"
-            :title="'Members opt into ' + snapshot.data.value.conflictingPolicies.join(', ')"
+            :title="
+              'Members opt into ' + (snapshot.data.value.conflictingPolicies ?? []).join(', ')
+            "
             >{{ conflictedState.label }}:
-            {{ snapshot.data.value.conflictingPolicies.join(' / ') }}</span
+            {{ (snapshot.data.value.conflictingPolicies ?? []).join(' / ') }}</span
           >
           <span v-else class="badge badge-dim">Manual</span>
           <span v-if="snapshot.data.value.departed" class="badge badge-dim">Departed</span>
@@ -364,7 +316,6 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       </template>
     </PageHeader>
 
-    <!-- Status snapshot -->
     <div class="card">
       <div class="card-header"><h2>Status</h2></div>
       <div class="stats-row">
@@ -382,7 +333,6 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       </div>
     </div>
 
-    <!-- Blocked band -->
     <div v-if="snapshot.data.value?.blocked" class="card card-danger">
       <div class="card-header">
         <h2 class="text-error">{{ blockedState.label }}</h2>
@@ -396,7 +346,6 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       </p>
     </div>
 
-    <!-- Stored Recommendation -->
     <div v-if="stored" class="card">
       <div class="card-header">
         <h2>Recommendation</h2>
@@ -427,10 +376,30 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
             />
           </div>
           <div class="resource-row">
+            <span class="label">CPU Limit</span>
+            <span v-if="rec.cpuLimitRemoved" class="recommended">— removed —</span>
+            <ResourceDiff
+              v-else
+              :current="(metrics.resources || {})[cname]?.cpuLimit"
+              :recommended="rec.cpuLimit"
+              resource-type="cpu"
+            />
+          </div>
+          <div class="resource-row">
             <span class="label">Memory Request</span>
             <ResourceDiff
               :current="(metrics.resources || {})[cname]?.memoryRequest"
               :recommended="rec.memoryRequest"
+              resource-type="memory"
+            />
+          </div>
+          <div class="resource-row">
+            <span class="label">Memory Limit</span>
+            <span v-if="rec.memoryLimitRemoved" class="recommended">— removed —</span>
+            <ResourceDiff
+              v-else
+              :current="(metrics.resources || {})[cname]?.memoryLimit"
+              :recommended="rec.memoryLimit"
               resource-type="memory"
             />
           </div>
@@ -439,7 +408,6 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
       </div>
     </div>
 
-    <!-- Charts per container -->
     <template v-if="regularContainers().length > 0">
       <h2 v-if="initContainers().length > 0" class="mt-3">Containers</h2>
     </template>
@@ -450,22 +418,14 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
         </h2>
       </div>
       <div class="chart-grid">
-        <div>
-          <div class="chart-head">
-            <div class="section-label">CPU Usage (cores)</div>
-            <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
-              Reset zoom
-            </button>
-          </div>
-          <div class="chart-wrapper">
-            <div class="chart-container"><canvas :id="'cpu-' + cname"></canvas></div>
-          </div>
-        </div>
-        <div>
+        <div v-for="r in chartResources" :key="r.key">
           <div class="chart-head">
             <div class="section-label" style="display: inline-flex; align-items: center">
-              Memory Usage (MiB)
-              <span v-if="(oomByContainer()[cname] || []).length > 0" class="oom-legend">
+              {{ r.label }} Usage ({{ r.unit }})
+              <span
+                v-if="r.marksOOMKills && (oomByContainer()[cname] || []).length > 0"
+                class="oom-legend"
+              >
                 <span class="oom-marker"></span>
                 {{ oomByContainer()[cname].length }} OOM kill{{
                   oomByContainer()[cname].length > 1 ? 's' : ''
@@ -477,13 +437,12 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
             </button>
           </div>
           <div class="chart-wrapper">
-            <div class="chart-container"><canvas :id="'mem-' + cname"></canvas></div>
+            <div class="chart-container"><canvas :id="r.canvas + '-' + cname"></canvas></div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Init container charts -->
     <template v-if="initContainers().length > 0">
       <h2 class="mt-3">Init containers</h2>
       <div v-for="cname in initContainers()" :key="cname" class="card">
@@ -494,22 +453,14 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
           <span class="badge">init</span>
         </div>
         <div class="chart-grid">
-          <div>
-            <div class="chart-head">
-              <div class="section-label">CPU Usage (cores)</div>
-              <button v-if="range.kind === 'absolute'" class="reset-zoom-btn" @click="resetRange">
-                Reset zoom
-              </button>
-            </div>
-            <div class="chart-wrapper">
-              <div class="chart-container"><canvas :id="'cpu-' + cname"></canvas></div>
-            </div>
-          </div>
-          <div>
+          <div v-for="r in chartResources" :key="r.key">
             <div class="chart-head">
               <div class="section-label" style="display: inline-flex; align-items: center">
-                Memory Usage (MiB)
-                <span v-if="(oomByContainer()[cname] || []).length > 0" class="oom-legend">
+                {{ r.label }} Usage ({{ r.unit }})
+                <span
+                  v-if="r.marksOOMKills && (oomByContainer()[cname] || []).length > 0"
+                  class="oom-legend"
+                >
                   <span class="oom-marker"></span>
                   {{ oomByContainer()[cname].length }} OOM kill{{
                     oomByContainer()[cname].length > 1 ? 's' : ''
@@ -521,7 +472,7 @@ function hasCoordinationFactors(cf?: CoordinationFactors): boolean {
               </button>
             </div>
             <div class="chart-wrapper">
-              <div class="chart-container"><canvas :id="'mem-' + cname"></canvas></div>
+              <div class="chart-container"><canvas :id="r.canvas + '-' + cname"></canvas></div>
             </div>
           </div>
         </div>

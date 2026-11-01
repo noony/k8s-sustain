@@ -47,6 +47,9 @@ inputs := recommendertest.NewStaticInputs().
         recommender.WithCPUUsage(promclient.ContainerValues{"app": 0.1}),
         recommender.WithOOMKills(map[string]recommender.OOM{"app": {Kills: 1, PeakBytes: 300 << 20, HasPeak: true}}),
     ).
+    SetHistory(id, recommender.NewHistory([]recommender.HistoryPoint{
+        {At: earlier, Inputs: recommender.NewInputs(recommender.WithCPUUsage(promclient.ContainerValues{"app": 0.05}))},
+    })).
     Fail(otherID, errors.New("prometheus down"))
 ```
 
@@ -54,16 +57,19 @@ Each signal's module exports the option that sets its values
 (`WithCPUUsage`, `WithMemoryUsage`, `WithOOMKills`). `Set` builds the
 identity's inputs with `recommender.NewInputs`, which gives every signal it
 is not given its values from no samples, so they read exactly as the inputs
-`PromInputs` fetches. An identity with neither gets empty inputs, whatever
-the settings it is fetched under, as Prometheus answers for one with no
-samples. `Calls()`
-reports every fetch, the settings it ran under and its requests, and
-`Requested(id)` whether an identity was part of any, so a test can assert
-what was fetched and how. Prefer driving
+`PromInputs` fetches. `SetHistory` serves a history built with
+`recommender.NewHistory`, each instant's inputs built with `NewInputs`, and
+`FailHistory` fails only the history. An identity with neither gets empty
+inputs, at every instant of a history, whatever the settings it is fetched
+under, as Prometheus answers for one with no samples. `Calls()` reports every
+fetch, the instant it was evaluated as of, the settings it ran under and its
+requests, `HistoryCalls()` every history fetch and its span, and
+`Requested(id)` whether an identity was part of any fetch, so a test can
+assert what was fetched and how. Prefer driving
 `PolicyReconciler.Reconcile` end to end with the fake client and
 `StaticInputs`. The Prometheus adapter, `recommender.PromInputs`, is the only
 code tested against a fake PromQL server: sharding, retry, the one-identity
-fallback and each signal's failure policy. A signal's own query and parsing
+fallback, each signal's failure policy, and the range read of a history. A signal's own query and parsing
 are tested without a server, from its query text and from `ShardSample`s.
 
 ## Lint
@@ -344,7 +350,8 @@ kind (say `Rollout` from Argo) is mostly a matter of registering it there:
 A [signal](concepts/recommendation-pipeline.md#signals) is one module of
 `internal/recommender` (`signal_usage.go` holds the CPU and memory usage
 signals, `signal_oom.go` the OOM floor) implementing the `signal` interface in
-`signal.go`: its query and shard cost, its Prometheus contract (`contract`),
+`signal.go`: its query and shard cost, what its history reads besides
+(`historyQuery`), its Prometheus contract (`contract`),
 how it collects samples into its values (`collect`), its failure policy, where
 its stage runs (`slot`: base, adjuster or limit adjuster, CPU or memory), its
 contribution to a container's request or limit, and its trace stage. Its
@@ -355,7 +362,9 @@ values are a type of its own behind the `signalValues` interface
 signal, and a signal reads its own back with `valuesOf`, so a new signal adds
 no field to any shared type.
 
-`PromInputs` fetches every signal in the `signals` list, and `Compute` runs
+`PromInputs` fetches every signal in the `signals` list, as of the instant
+the caller gives (`FetchInputs`) or at every instant of a span
+(`FetchHistory`), and `Compute` runs
 one chain per resource in a fixed order: on the request side base signals,
 adjusters, headroom, clamp and coordination; on the limit side the Policy's
 limit strategy, limit adjusters and the guard (`limit.go`, whose
@@ -380,7 +389,26 @@ Outside the recommender, inputs answer only the questions every reader
 shares: `Resolved` (whether any container's usage was observed, the
 controller's coverage count) and `Usage` (a container's usage of a resource,
 which a Simulation shows). Add another only when a reader needs it, never a
-signal's values. To add a signal:
+signal's values.
+
+A signal's range form comes for free from its query. `FetchHistory` runs each
+signal's own `query` as a Prometheus range query (`Client.QueryShardRange`)
+over a `Span`, under the same sharding, retries and fallback, with shards
+planned on the signal's samples per container times the span's instants, and
+collects each instant's samples with the signal's own `collect`. Only the OOM
+signal adds anything: its `historyQuery`, run in the same shard, counts per
+step the kills a chart marks, read from the kill rule its contract declares
+as a history rule, which no instant of its 24h rules can date. Its `collect`
+keeps them in its own values, at the instant ending their step, and a chart
+reads them back through `OOMKills`, so no shared type holds them.
+`ComputeRange` then runs the whole chain at each instant on that
+instant's values, the instant in the `stageContext`, without reading anything
+else; it is what a Simulation's charts draw. `ReadRange` makes the same read
+for an identity under a Policy's spec, every default explicit, and computes
+nothing: it returns, for each container the assembly would size, what the
+usage signals read at each instant, and its kills come through `OOMKills` as a
+Simulation's do. It is what the workload detail page draws next to the replica
+average: the signal line and the OOM markers. To add a signal:
 
 1. Write `internal/recommender/signal_<name>.go`. Build its PromQL from the
    `internal/prometheus` primitives (`Shard.Selector`, `Shard.MetricsSelector`,
@@ -389,7 +417,12 @@ signal's values. To add a signal:
    every signal shares. Give its values a type of their own implementing
    `signalValues`, whose zero value holds nothing, and export the
    `InputsOption` that sets them (`WithOOMKills` does, through `setting`):
-   it is how `recommendertest.StaticInputs` serves them
+   it is how `recommendertest.StaticInputs` serves them, at one instant
+   (`Set`) or at each instant of a history (`SetHistory`). There is nothing
+   to do for the Simulator's charts: the signal's history is its query run
+   over a range, and its stage runs at every instant of it. Its
+   `historyQuery` returns nothing unless that history must date something no
+   instant of its query can, as the OOM floor's kill markers
 2. List it in `signals` (`internal/recommender/signal.go`). Within a role,
    stages run in list order, which settles a tie between base signals. A base
    signal or adjuster shapes the request; a limit adjuster may only raise the
@@ -407,7 +440,8 @@ signal's values. To add a signal:
 4. Declare its Prometheus contract next to its query, in its `contract`
    method: the recording rules the query reads, the labels each aggregates by
    (`shardLabels`, the identity and the container), the evaluation interval
-   its shard cost assumes (zero if none), the cAdvisor and
+   its shard cost assumes (zero if none), any rule only its history read
+   reads (`HistoryRules`, as the OOM floor's kill rule), the cAdvisor and
    kube-state-metrics series those rules compute from, through every rule
    they read in turn, and the cAdvisor series a rule reads per container
    instance (`CAdvisorPerInstance`, as the OOM floor's memory limit). Then run
@@ -476,7 +510,14 @@ Every endpoint builds its identities from `internal/inventory`
 count and the controller agree on members, containers, age, Departed and the
 governing Policy. The detail page shows the Recommendation stored in the
 identity's `WorkloadRecommendation`, its `status.outcome` and its
-`status.trace`; only the Simulator recomputes. Coordination factors are not a
+`status.trace`; only the Simulator recomputes. Its charts draw two usage lines
+per resource: the replica average, read through `PromQuerier`, and what the
+usage signals read over the chart range under the governing Policy's spec,
+read through the `Inputs` port with `recommender.ReadRange` (no PromQL in the
+dashboard, nothing computed from it), and the OOM markers come from that same
+read (`recommender.OOMKills`). An identity no Policy governs has no signal
+line, and its history is read under the recommender defaults for its kills
+alone; a read that fails leaves the page standing with a `signalError`. Coordination factors are not a
 health signal: the board reads them from the coordination stage of the stored
 trace (`coordinationFactorsOf`, through `recommender.TracedCoordination`).
 
@@ -503,6 +544,23 @@ port is undecorated. It returns the effective settings (`Request.Resources`,
 every default explicit), the outcome and the trace, so the Simulator shows
 the Policy's values and the recommender's defaults without holding either.
 
+Its charts are its history: `recommender.ComputeRange` over a `Span` that
+ends where the chart range does, its step derived from the range (`SpanOf`, at
+most about 300 instants, the requested step only the finest), returns per container and resource the usage the signal read and the
+request and limit the full chain computed at each instant, with the OOM kills.
+A range back from now (`window`) ends at the instant the Simulation computes
+as of, so its last point is the Simulation itself; an absolute range ends at
+its `toTs`. The dashboard only renders them, next to the requests and limits the pods ran
+with, which it reads through `PromQuerier`. A history that cannot be read
+leaves the Simulation's numbers standing with a `historyError`.
+
+`PromQuerier` (`server.go`) is the dashboard's other Prometheus seam: the
+Overview's generic reads (`QueryInstant`, `QueryRange`, `QueryByLabel`) and
+`QueryRangeByLabel`, a range read keyed by a label, through which the
+dashboard reads per container an identity's running requests and limits
+(`running`) and the replica-averaged usage the detail page charts. Nothing a
+recommendation is computed from, and no OOM kill, goes through it.
+
 `TestSimulationRecommendsWhatTheControllerStores` holds that parity end to
 end. It lives in `internal/controller` as the external `controller_test`
 package, which can import the dashboard and reach `Reconcile` through
@@ -515,8 +573,11 @@ the stored `WorkloadRecommendation`'s, for an owner-name group coordinated
 against one member's HPA and for an identity Too young at that instant, with
 init containers excluded and not. It also compares every fetch the dashboard
 made with the controller's: the settings (windows, percentiles, every default
-explicit) and each identity's container count. A change to how either side
-builds the identity, picks the spec or dates the computation fails it.
+explicit), each identity's container count and the instant every fetch was
+evaluated as of, and checks that the last instant of each Simulation's
+history computes the stored Recommendation, request and limit. A change to
+how either side builds the identity, picks the spec or dates the computation
+fails it.
 
 The override is validated once, on the server, after the merge
 (`simulationSettings.violations`, `simulation_settings.go`): it is rejected
@@ -745,9 +806,9 @@ The computation unit is the identity, not the workload object: a group of worklo
 - the containers recommended (`ContainersOf`, where the controller and Simulations apply `excludeInitContainers`): the identity's, its init containers too unless the spec excludes them, which also sizes the fetch; an identity with no containers at all (one the inventory has not seen) is recommended for every container its inputs report;
 - the autoscaler: each member the identity's containers come from (`Identity.Contributors`) is looked up under its own name, and the first in name order that has one shapes the Recommendation (`ForIdentity`); a departed identity has none. The reads run while the inputs are fetched, each namespace's in order in a goroutine of its own, a few namespaces at once (`autoscalerReadConcurrency`), and the assembly waits for them before it returns. `NamespacedSnapshot` caches no failed read, so the assembly stops reading a namespace once a read of it failed: every identity of that namespace is recommended uncoordinated, at the cost of one failed read and one log line per namespace;
 - the spec's resources with every default explicit (`WithDefaults`: the window, the percentile and headroom unless the request is kept, `keepLimit` when no strategy is set), which the fetch and the computation both use and a Simulation returns as its effective settings;
-- one batch fetch, and one instant per batch read from `now` once it returns: kills the live decorator merged in never postdate it. The caller owns the clock: the controller passes `PolicyReconciler.Clock`, the one `start` also gives `WithLiveOOMs`, so the age gate and the live OOM window are judged by one clock; the dashboard passes `Server.Clock`. Nil is the wall clock on both, and a test fixes the instant with a fake one.
+- one instant per batch, read from `now` once, before the fetch, and handed to it: every query is evaluated as of it, and the live decorator merges only the kills at or before it, so the age gate, the inputs and the live OOM window are judged as of one instant. The caller owns the clock: the controller passes `PolicyReconciler.Clock`, the dashboard `Server.Clock`. Nil is the wall clock on both, and a test fixes the instant with a fake one.
 
-`Request` has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). `Request.RequestAt` is the request a Request computes for one of its containers had its usage percentile of one resource been a given value, every other signal as observed: a Simulation's recommendation chart computes each past percentile point with it (`recommendationSeries`), so a point costs one resource of one container, and the dashboard never reads a signal's values itself.
+`Request` has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young) and the identity it fetches for, which `ComputeRange` reads the identity's history with. The dashboard never reads a signal's values itself.
 
 #### The Policy pass
 
@@ -755,7 +816,7 @@ The computation unit is the identity, not the workload object: a group of worklo
 
 - **Work-list.** The identities the Policy governs, taken from the inventory as they are: a departed one's containers come from its stored snapshot, and one without a snapshot is on it but not fetched (counted as `no-snapshot` in `wlr_refresh_total`), so it keeps its series, as every departed identity does, until its `WorkloadRecommendation` is swept. Each live member is a `workloadTarget` (`targetsOf`; a bare-pod identity's governed pods form one), and the [ledger](#apply-results-and-the-ledger) is asked once, before the fetch, which members may run: backoff is time-based and the fetch can take minutes, so asking again at apply time could process a member the fetch left out.
 - **Claim.** `wlrcache.Ensure` for every live identity, with its members' container union as the observed snapshot. It returns the object each decision is recorded into: the one `Ensure` wrote, or the one the inventory read for a departed identity. A failed claim is logged and kept for that identity alone.
-- **Recommend** (`recommendation_pass.go`). One [assembly](#the-request-assembly) of every identity not wholly in backoff, under the Policy's right-sizing spec: one `InputsFetcher` call per policy, so the pass never sees shards, retries or the fallback. The controller's fetcher is `PromInputs` decorated by `recommender.WithLiveOOMs`, which merges the kills the OOM watcher's cache holds into each identity's OOM inputs after the fetch; the dashboard uses the undecorated port. Then `computeIdentity` per fetched identity, in parallel: it keeps, for the [series publisher](#metric-series), the autoscaler the assembly's `autoscaler.Group` shaped the identity with and whether the group's members disagree on theirs, and `recommender.Compute` decides everything about one identity from its Request: the age gate, then every container through the chain of stages of every [signal](#adding-a-recommendation-signal). The OOM floor signal is the one place that decides whether a kill is recent, for both its answer to the age gate and the memory floor; the decorator decides whether a live record is still within `LiveOOMWindow`. The dashboard's simulations assemble and compute the same way, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the list of stages that ran on the request and the limit; the record stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read its OOM floor stage (`recommender.TracedOOMFloor`). Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new stage or fact. Every identity leaves with one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). Each but the last is the `status.outcome` the record stores; `recommender.Outcome.Recorded` names a computed one that way, for the controller and the dashboard's Simulations alike.
+- **Recommend** (`recommendation_pass.go`). One [assembly](#the-request-assembly) of every identity not wholly in backoff, under the Policy's right-sizing spec: one `InputsFetcher` call per policy, so the pass never sees shards, retries or the fallback. The controller's fetcher is `PromInputs` decorated by `recommender.WithLiveOOMs`, which merges the kills the OOM watcher's cache holds as of the pass's instant into each identity's OOM inputs; the dashboard uses the undecorated port. Then `computeIdentity` per fetched identity, in parallel: it keeps, for the [series publisher](#metric-series), the autoscaler the assembly's `autoscaler.Group` shaped the identity with and whether the group's members disagree on theirs, and `recommender.Compute` decides everything about one identity from its Request: the age gate, then every container through the chain of stages of every [signal](#adding-a-recommendation-signal). The OOM floor signal is the one place that decides whether a kill is recent, for both its answer to the age gate and the memory floor; the decorator decides whether a live record is still within `LiveOOMWindow`. The dashboard's simulations assemble and compute the same way, so what they show is what the controller would apply. Alongside each container's values it returns their [trace](concepts/recommendation-pipeline.md#trace), the list of stages that ran on the request and the limit; the record stores it with the values, and the controller's computation metrics (`k8s_sustain_oom_floor_applied_total`, `…_oom_reaction_latency_seconds`) read its OOM floor stage (`recommender.TracedOOMFloor`). Nothing outside the recommender re-runs a stage to find out what it did: a new question about the computation is a new stage or fact. Every identity leaves with one outcome: a recommendation, too young, no data, fetch failed, or not fetched (every member in backoff). Each but the last is the `status.outcome` the record stores; `recommender.Outcome.Recorded` names a computed one that way, for the controller and the dashboard's Simulations alike.
 - **Record.** `wlrcache.Record` of every outcome but "not fetched", into the object the claim returned, before anything is applied, so the webhook serves the new value by the time a replacement pod is admitted. It keeps the last Recommendation for every outcome but `Computed`, and marks a departed identity departed. Because the record takes the claim's object as an argument, it cannot record into a copy read before the claim, which would attribute an adopting Policy's numbers to the previous one.
 - **Apply** (`workload_reconcile.go`). One task per live member not in backoff. A live identity whose decision could not be stored — its claim failed, or the record was rejected — is not applied that cycle, and each of its members fails on the `store` step: the replacement pods of an eviction would read the old value. That is the one count the failure gets.
 

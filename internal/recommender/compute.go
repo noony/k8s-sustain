@@ -113,6 +113,9 @@ type Request struct {
 	// now is the instant the computation runs as of: the age gate measures
 	// since against it.
 	now time.Time
+	// fetch asks for the identity's inputs, sized by containers: what
+	// ComputeRange reads the identity's history with.
+	fetch InputsRequest
 }
 
 func (r Request) Now() time.Time { return r.now }
@@ -122,27 +125,6 @@ func (r Request) Inputs() *WorkloadInputs { return r.inputs }
 // Resources are the Policy's resources the Request computes with, every
 // default explicit (WithDefaults).
 func (r Request) Resources() sustainv1alpha1.ResourcesConfigs { return r.resources }
-
-// RequestAt is the request of res, in cores or bytes, that the Request
-// computes for the container named name had its usage percentile of res been
-// usage, every other signal as observed: one past point of a Simulation's
-// recommendation chart. Zero when the Request does not recommend that
-// container or res, or keeps its request. A point costs one resource of one
-// container, not a whole computation.
-func (r Request) RequestAt(name string, res corev1.ResourceName, usage float64) float64 {
-	kind := resourceKind(res)
-	u, ok := usageOf(kind)
-	i := slices.IndexFunc(r.containers, func(c corev1.Container) bool { return c.Name == name })
-	if i < 0 || !ok {
-		return 0
-	}
-	r.inputs = r.inputs.with(u, usageValues{name: usage})
-	sized, _ := size(kind, r.containers[i], r)
-	if sized == nil {
-		return 0
-	}
-	return kind.value(sized.request)
-}
 
 // Result is Compute's answer for one identity.
 type Result struct {

@@ -53,7 +53,7 @@ func TestReconcile_LiveOOMRaisesTheFloorAndIsCounted(t *testing.T) {
 		recommender.WithMemoryUsage(promclient.ContainerValues{"app": 100 << 20, "side": 100 << 20}))
 	r := reconcilerWithInputs(t, recommender.WithLiveOOMs(static, &fakeOOMSource{records: map[string]*oomwatch.OOMRecord{
 		"app": {Container: "app", ObservedAt: time.Now(), TerminatedAt: time.Now().Add(-10 * time.Second), OOMLimitBytes: 200 << 20},
-	}}, time.Now), true, ongoingDeployments("p"), dep)
+	}}), true, ongoingDeployments("p"), dep)
 	floorBefore := testutilCounterValue(t, oomFloorApplied, ns, "Deployment", "web", "app")
 	latencyBefore := histogramCount(t, oomReactionLatencySeconds, ns, "Deployment", "web")
 

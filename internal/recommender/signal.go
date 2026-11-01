@@ -31,11 +31,18 @@ type signal interface {
 	samplesPerContainer(cfg sustainv1alpha1.ResourcesConfigs) int
 	// query is the PromQL reading the signal for every identity in shard.
 	query(cfg sustainv1alpha1.ResourcesConfigs, shard promclient.Shard) string
+	// historyQuery is the PromQL a history read runs besides query, for every
+	// identity in shard over a range stepping by step, and empty when it runs
+	// none: what a history dates that no instant of query can, from the
+	// rules contract names HistoryRules. It costs a shard no more than query
+	// does, so shards planned on query's cost hold it, and its samples reach
+	// collect with query's, at the instant that ends their step.
+	historyQuery(shard promclient.Shard, step time.Duration) string
 	// contract is what query reads from Prometheus and what that rests on.
 	contract() PromContract
 	// collect is the signal's values from one identity's samples, empty
 	// values from none. It reads a sample of every rule contract declares,
-	// named as the query returns it.
+	// history rules included, named as its query returns it.
 	collect(samples []promclient.ShardSample) signalValues
 	// slot is where the signal's stage runs.
 	slot() slot
@@ -73,9 +80,10 @@ var signals = []signal{cpuUsage, memoryUsage, oomFloor{}}
 // PromContract is what one signal needs from Prometheus. The chart must
 // provide it: hack/signalcontract fails when a rule is missing, aggregates by
 // other labels or evaluates at another interval, when it or a rule it computes
-// through has no promtool fixture, when a raw metric it rests on is dropped
-// by the bundled scrape keep-lists, and when the bundled cAdvisor scrape
-// merges the instances of a container in a metric read per instance.
+// through has no promtool fixture, when a history rule's fixture shows it
+// losing one of Labels, when a raw metric it rests on is dropped by the
+// bundled scrape keep-lists, and when the bundled cAdvisor scrape merges the
+// instances of a container in a metric read per instance.
 type PromContract struct {
 	Signal string
 	// Rules are the recording rules the signal's query reads.
@@ -85,6 +93,10 @@ type PromContract struct {
 	// Interval is the evaluation interval of Rules the signal's sample cost
 	// assumes; zero when the cost does not depend on it.
 	Interval time.Duration
+	// HistoryRules are the recording rules only the signal's history read
+	// reads. That read sums each by Labels, so a history rule must keep every
+	// one of them and may keep more; it is not held to one aggregation.
+	HistoryRules []string
 	// CAdvisor and KubeStateMetrics are the raw metrics Rules compute from,
 	// through every rule they read in turn.
 	CAdvisor         []string
@@ -107,6 +119,7 @@ func PromContracts() []PromContract {
 			Rules:               slices.Clone(c.Rules),
 			Labels:              slices.Clone(c.Labels),
 			Interval:            c.Interval,
+			HistoryRules:        slices.Clone(c.HistoryRules),
 			CAdvisor:            slices.Clone(c.CAdvisor),
 			KubeStateMetrics:    slices.Clone(c.KubeStateMetrics),
 			CAdvisorPerInstance: slices.Clone(c.CAdvisorPerInstance),

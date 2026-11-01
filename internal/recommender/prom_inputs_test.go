@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -19,18 +22,25 @@ import (
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
-// shardQuery is one PromQL request the fake Prometheus received: which signal
-// it read and which owner names its alternation selected.
+// shardQuery is one PromQL request the fake Prometheus received: its
+// expression, which signal it read, which owner names its alternation
+// selected, and the instant it was evaluated as of or, for a range query, its
+// start, end and step.
 type shardQuery struct {
-	signal string
-	names  []string
+	expr             string
+	signal           string
+	names            []string
+	at               string
+	start, end, step string
 }
 
 var ownerAlternationRE = regexp.MustCompile(`owner_name=~"([^"]*)"`)
 
 func parseShardQuery(q string) shardQuery {
-	var sq shardQuery
+	sq := shardQuery{expr: q}
 	switch {
+	case strings.Contains(q, promclient.MetricContainerOOMKills):
+		sq.signal = "kills"
 	case strings.Contains(q, "__name__"):
 		sq.signal = "oom"
 	case strings.Contains(q, "workload_max_pod_cpu"):
@@ -49,8 +59,8 @@ func parseShardQuery(q string) shardQuery {
 }
 
 // fakeShardProm is a Prometheus that answers shard queries through respond and
-// records every query it received. respond returns the vector's samples, or
-// ok=false to fail the query with a 500.
+// records every query it received. respond returns the vector's samples, or a
+// range query's matrix's series, or ok=false to fail the query with a 500.
 type fakeShardProm struct {
 	mu      sync.Mutex
 	queries []shardQuery
@@ -62,6 +72,7 @@ func startFakeShardProm(t *testing.T, respond func(shardQuery) (samples []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
 		q := parseShardQuery(r.Form.Get("query"))
+		q.at, q.start, q.end, q.step = r.Form.Get("time"), r.Form.Get("start"), r.Form.Get("end"), r.Form.Get("step")
 		f.mu.Lock()
 		f.queries = append(f.queries, q)
 		f.mu.Unlock()
@@ -72,7 +83,11 @@ func startFakeShardProm(t *testing.T, respond func(shardQuery) (samples []string
 			_, _ = w.Write([]byte(`{"status":"error","errorType":"internal","error":"forced failure"}`))
 			return
 		}
-		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[%s]}}`, strings.Join(samples, ","))
+		resultType := "vector"
+		if strings.HasSuffix(r.URL.Path, "/query_range") {
+			resultType = "matrix"
+		}
+		_, _ = fmt.Fprintf(w, `{"status":"success","data":{"resultType":%q,"result":[%s]}}`, resultType, strings.Join(samples, ","))
 	}))
 	t.Cleanup(server.Close)
 	c, err := promclient.New(server.URL, opts...)
@@ -115,6 +130,17 @@ func sample(name, owner, container string, v float64) string {
 		name, owner, container, v)
 }
 
+// series renders one matrix series for identity prod/Deployment/owner, valued
+// at each instant of values.
+func series(name, owner, container string, values map[time.Time]float64) string {
+	var pts []string
+	for _, at := range slices.SortedFunc(maps.Keys(values), time.Time.Compare) {
+		pts = append(pts, fmt.Sprintf(`[%d,"%g"]`, at.Unix(), values[at]))
+	}
+	return fmt.Sprintf(`{"metric":{"__name__":%q,"namespace":"prod","owner_kind":"Deployment","owner_name":%q,"container":%q},"values":[%s]}`,
+		name, owner, container, strings.Join(pts, ","))
+}
+
 func prodID(name string) promclient.WorkloadIdentity {
 	return promclient.WorkloadIdentity{Namespace: "prod", OwnerKind: "Deployment", OwnerName: name}
 }
@@ -140,8 +166,9 @@ func promInputsCfg() sustainv1alpha1.ResourcesConfigs {
 func emptyAnswer(shardQuery) ([]string, bool) { return nil, true }
 
 // Two identities in one namespace and kind must cost one query per signal, not
-// one per identity, and each value must land on its own identity. An identity
-// with no OOM series still gets inputs, with an empty OOM signal.
+// one per identity, each evaluated as of the instant fetched as of, and each
+// value must land on its own identity. An identity with no OOM series still
+// gets inputs, with an empty OOM signal.
 func TestPromInputs_BatchesIdentitiesIntoOneShardPerSignal(t *testing.T) {
 	prom, c := startFakeShardProm(t, func(q shardQuery) ([]string, bool) {
 		switch q.signal {
@@ -154,7 +181,7 @@ func TestPromInputs_BatchesIdentitiesIntoOneShardPerSignal(t *testing.T) {
 		}
 	})
 
-	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), promInputsCfg(), reqsFor(1, "api", "web"))
+	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), now, promInputsCfg(), reqsFor(1, "api", "web"))
 
 	for _, signal := range []string{"cpu", "memory", "oom"} {
 		if n := prom.count(signal, 2); n != 1 {
@@ -162,6 +189,11 @@ func TestPromInputs_BatchesIdentitiesIntoOneShardPerSignal(t *testing.T) {
 		}
 		if n := len(prom.shardsFor(signal)); n != 1 {
 			t.Errorf("%s: %d queries in total, want 1", signal, n)
+		}
+	}
+	for _, q := range prom.queries {
+		if want := strconv.FormatInt(now.Unix(), 10); q.at != want {
+			t.Errorf("%s evaluated as of %q, want %q", q.signal, q.at, want)
 		}
 	}
 	api, web := got[prodID("api")], got[prodID("web")]
@@ -187,7 +219,7 @@ func TestPromInputs_BatchesIdentitiesIntoOneShardPerSignal(t *testing.T) {
 func TestPromInputs_SplitsShardsAtTheSampleBudget(t *testing.T) {
 	prom, c := startFakeShardProm(t, emptyAnswer)
 
-	NewPromInputs(c, 100).FetchInputs(context.Background(), promInputsCfg(), reqsFor(1, "api", "web"))
+	NewPromInputs(c, 100).FetchInputs(context.Background(), now, promInputsCfg(), reqsFor(1, "api", "web"))
 
 	if n := prom.count("cpu", 1); n != 2 {
 		t.Errorf("cpu: %d one-identity queries, want 2 (shards: %v)", n, prom.shardsFor("cpu"))
@@ -203,7 +235,7 @@ func TestPromInputs_UnknownSizeIdentityGetsItsOwnShard(t *testing.T) {
 		{Identity: prodID("web"), Containers: 1},
 	}
 
-	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), promInputsCfg(), reqs)
+	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), now, promInputsCfg(), reqs)
 
 	shards := prom.shardsFor("cpu")
 	if len(shards) != 2 {
@@ -240,7 +272,7 @@ func TestPromInputs_RetriesAFailedShardOnce(t *testing.T) {
 		return nil, true
 	})
 
-	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), promInputsCfg(), reqsFor(1, "api", "web"))
+	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), now, promInputsCfg(), reqsFor(1, "api", "web"))
 
 	if r := got[prodID("api")]; r.Err != nil || r.Inputs.Usage("app", corev1.ResourceCPU) != 0.5 {
 		t.Errorf("api = %+v, want the retried shard's 0.5", r)
@@ -273,7 +305,7 @@ func TestPromInputs_FailedShardFallsBackToOneIdentityShards(t *testing.T) {
 		return []string{sample(q.signal, q.names[0], "app", v)}, true
 	})
 
-	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), promInputsCfg(), reqsFor(1, "api", "web"))
+	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), now, promInputsCfg(), reqsFor(1, "api", "web"))
 
 	for _, signal := range []string{"cpu", "memory", "oom"} {
 		if n := prom.count(signal, 2); n != 2 {
@@ -307,7 +339,7 @@ func TestPromInputs_RequiredSignalFailureIsThatIdentitysError(t *testing.T) {
 				return []string{sample(q.signal, "good", "app", 1)}, true
 			})
 
-			got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), promInputsCfg(), reqsFor(1, "bad", "good"))
+			got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), now, promInputsCfg(), reqsFor(1, "bad", "good"))
 
 			if r := got[prodID("bad")]; r.Err == nil || r.Inputs != nil {
 				t.Errorf("bad = %+v, want an error and no inputs", r)
@@ -335,7 +367,7 @@ func TestPromInputs_OOMFailureIsBestEffort(t *testing.T) {
 		}
 	})
 
-	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), promInputsCfg(), reqsFor(1, "api"))
+	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), now, promInputsCfg(), reqsFor(1, "api"))
 
 	r := got[prodID("api")]
 	if r.Err != nil {
@@ -356,7 +388,7 @@ func TestPromInputs_EmptyResponseYieldsEmptyInputs(t *testing.T) {
 	reqs := append(reqsFor(1, "api", "web"),
 		InputsRequest{Identity: promclient.WorkloadIdentity{Namespace: "staging", OwnerKind: "StatefulSet", OwnerName: "db"}, Containers: 2})
 
-	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), promInputsCfg(), reqs)
+	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), now, promInputsCfg(), reqs)
 
 	if len(got) != len(reqs) {
 		t.Fatalf("got %d results, want one per request (%d)", len(got), len(reqs))
@@ -405,7 +437,7 @@ func TestPromInputs_FallbackOverlapsWithinBound(t *testing.T) {
 	for i := range names {
 		names[i] = fmt.Sprintf("app-%02d", i)
 	}
-	NewPromInputs(c, 1_000_000_000).FetchInputs(context.Background(), promInputsCfg(), reqsFor(1, names...))
+	NewPromInputs(c, 1_000_000_000).FetchInputs(context.Background(), now, promInputsCfg(), reqsFor(1, names...))
 
 	mu.Lock()
 	got := peak
@@ -425,7 +457,7 @@ func TestPromInputs_CancelledContextFailsEveryIdentity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	got := NewPromInputs(c, 1_000_000).FetchInputs(ctx, promInputsCfg(), reqsFor(1, "api", "web"))
+	got := NewPromInputs(c, 1_000_000).FetchInputs(ctx, now, promInputsCfg(), reqsFor(1, "api", "web"))
 
 	for _, n := range []string{"api", "web"} {
 		if r := got[prodID(n)]; !errors.Is(r.Err, context.Canceled) {
@@ -445,7 +477,7 @@ func TestPromInputs_CircuitOpenSurvivesInTheError(t *testing.T) {
 		names[i] = fmt.Sprintf("app-%02d", i)
 	}
 
-	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), promInputsCfg(), reqsFor(1, names...))
+	got := NewPromInputs(c, 1_000_000).FetchInputs(context.Background(), now, promInputsCfg(), reqsFor(1, names...))
 
 	for _, n := range names {
 		if errors.Is(got[prodID(n)].Err, promclient.ErrCircuitOpen) {
@@ -453,4 +485,100 @@ func TestPromInputs_CircuitOpenSurvivesInTheError(t *testing.T) {
 		}
 	}
 	t.Errorf("no identity's error matches promclient.ErrCircuitOpen: %+v", got)
+}
+
+// A history is each signal's own shard query, the one an instant read runs,
+// run over the span as a range query, in shards planned on its samples at
+// every instant: at 60 samples over three instants, a 300-sample budget that
+// packs both identities into one instant query splits them. Each instant's
+// values land on their own identity, and the OOM signal's history query,
+// run in the same shard, counts the kills in the step they fell in.
+func TestPromInputs_FetchHistoryRunsEachSignalsQueryOverTheSpan(t *testing.T) {
+	span := SpanOf(now.Add(-2*time.Minute), now, time.Minute)
+	t0, t1, t2 := span.Start, span.Start.Add(time.Minute), now
+	prom, c := startFakeShardProm(t, func(q shardQuery) ([]string, bool) {
+		switch {
+		case q.signal == "cpu" && slices.Equal(q.names, []string{"api"}):
+			return []string{series("", "api", "app", map[time.Time]float64{t0: 0.1, t1: 0.2, t2: 0.3})}, true
+		case q.signal == "cpu":
+			return []string{series("", "web", "app", map[time.Time]float64{t2: 1.5})}, true
+		case q.signal == "memory" && slices.Equal(q.names, []string{"api"}):
+			return []string{series("", "api", "app", map[time.Time]float64{t0: 100, t1: 100, t2: 100})}, true
+		case q.signal == "oom":
+			return []string{series(promclient.MetricWorkloadOOM24h, "api", "app", map[time.Time]float64{t2: 1})}, true
+		case q.signal == "kills":
+			return []string{series(promclient.MetricContainerOOMKills, "api", "app", map[time.Time]float64{t1: 0, t2: 2})}, true
+		}
+		return nil, true
+	})
+	cfg := promInputsCfg()
+
+	got := NewPromInputs(c, 300).FetchHistory(context.Background(), span, cfg, reqsFor(1, "api", "web"))
+
+	if n := prom.count("cpu", 1); n != 2 {
+		t.Errorf("cpu: %d one-identity queries, want 2 (shards: %v)", n, prom.shardsFor("cpu"))
+	}
+	start, end := strconv.FormatInt(t0.Unix(), 10), strconv.FormatInt(t2.Unix(), 10)
+	for _, q := range prom.queries {
+		if q.start != start || q.end != end || q.step != "60" {
+			t.Errorf("%s ran over %s..%s every %s, want %s..%s every 60", q.signal, q.start, q.end, q.step, start, end)
+		}
+		single := promclient.Shard{Namespace: "prod", OwnerKind: "Deployment", Names: q.names}
+		if q.signal == "cpu" && q.expr != cpuUsage.query(cfg, single) {
+			t.Errorf("cpu ran %q, want the instant read's own query %q", q.expr, cpuUsage.query(cfg, single))
+		}
+		if q.signal == "kills" && q.expr != (oomFloor{}).historyQuery(single, span.Step) {
+			t.Errorf("kills ran %q, want the OOM signal's history query %q", q.expr, (oomFloor{}).historyQuery(single, span.Step))
+		}
+	}
+	if kills, oom := prom.shardsFor("kills"), prom.shardsFor("oom"); !reflect.DeepEqual(kills, oom) {
+		t.Errorf("kills read in shards %v, want the OOM signal's %v", kills, oom)
+	}
+	empty := func(at time.Time) HistoryPoint { return HistoryPoint{At: at, Inputs: NewInputs()} }
+	wantAPI := NewHistory([]HistoryPoint{
+		{At: t0, Inputs: NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.1}), WithMemoryUsage(promclient.ContainerValues{"app": 100}))},
+		{At: t1, Inputs: NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.2}), WithMemoryUsage(promclient.ContainerValues{"app": 100}),
+			WithOOMKills(map[string]OOM{"app": {}}))},
+		{At: t2, Inputs: NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.3}), WithMemoryUsage(promclient.ContainerValues{"app": 100}),
+			WithOOMKills(map[string]OOM{"app": {Kills: 1, KillsInStep: 2}}))},
+	})
+	if r := got[prodID("api")]; r.Err != nil || !reflect.DeepEqual(r.History, wantAPI) {
+		t.Errorf("api = %+v (%v), want %+v", r.History, r.Err, wantAPI)
+	}
+	wantWeb := NewHistory([]HistoryPoint{
+		empty(t0), empty(t1),
+		{At: t2, Inputs: NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 1.5}))},
+	})
+	if r := got[prodID("web")]; r.Err != nil || !reflect.DeepEqual(r.History, wantWeb) {
+		t.Errorf("web = %+v (%v), want %+v", r.History, r.Err, wantWeb)
+	}
+}
+
+// A history fails as inputs do: an identity whose required signal cannot be
+// read even on its own has no history, and one whose best-effort signal
+// cannot be read, its history query included, holds none of its values.
+func TestPromInputs_FetchHistoryFailsAsInputsDo(t *testing.T) {
+	span := SpanOf(now.Add(-time.Minute), now, time.Minute)
+	_, c := startFakeShardProm(t, func(q shardQuery) ([]string, bool) {
+		switch q.signal {
+		case "cpu":
+			return []string{series("", "good", "app", map[time.Time]float64{now: 0.5})}, !slices.Contains(q.names, "bad")
+		case "kills":
+			return nil, false
+		}
+		return nil, true
+	})
+
+	got := NewPromInputs(c, 1_000_000).FetchHistory(context.Background(), span, promInputsCfg(), reqsFor(1, "bad", "good"))
+
+	if r := got[prodID("bad")]; r.Err == nil || r.History != nil {
+		t.Errorf("bad = %+v, want its cpu error", r)
+	}
+	want := NewHistory([]HistoryPoint{
+		{At: span.Start, Inputs: NewInputs()},
+		{At: now, Inputs: NewInputs(WithCPUUsage(promclient.ContainerValues{"app": 0.5}))},
+	})
+	if r := got[prodID("good")]; r.Err != nil || !reflect.DeepEqual(r.History, want) {
+		t.Errorf("good = %+v (%v), want its history without OOM values", r.History, r.Err)
+	}
 }
