@@ -148,3 +148,24 @@ tests:
             value: 1
           - labels: 'k8s_sustain:pod_workload{namespace="ops",pod="etl-run-7",annotation_k8s_sustain_io_owner_name="etl",owner_kind="Pod",owner_name="etl"}'
             value: 1
+      # The kind each pod's controller resolves to, override or not; the
+      # ownerless pods have no row.
+      - expr: k8s_sustain:pod_owner_kind_internal
+        eval_time: 2m
+        exp_samples:
+          - labels: 'k8s_sustain:pod_owner_kind_internal{namespace="ops",pod="orphan-5c9-a",owner_kind="ReplicaSet"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_owner_kind_internal{namespace="ops",pod="orphan-5c9-b",owner_kind="ReplicaSet"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_owner_kind_internal{namespace="ops",pod="legacy-x1",owner_kind="ReplicationController"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_owner_kind_internal{namespace="ops",pod="legacy-x2",owner_kind="ReplicationController"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_owner_kind_internal{namespace="ops",pod="wf-1-step",owner_kind="Workflow"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_owner_kind_internal{namespace="ops",pod="batch-abc",owner_kind="Job"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_owner_kind_internal{namespace="ops",pod="nightly-29100-q",owner_kind="CronJob"}'
+            value: 1
+          - labels: 'k8s_sustain:pod_owner_kind_internal{namespace="ops",pod="canary-6f8-z",owner_kind="Rollout"}'
+            value: 1

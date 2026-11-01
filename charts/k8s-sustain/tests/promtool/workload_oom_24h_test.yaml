@@ -1,27 +1,28 @@
-# Unit test for k8s_sustain:workload_oom_24h, the OOM floor's recency signal.
+# Unit test for k8s_sustain:workload_oom_24h, the OOM floor's recency signal
+# and the dashboard's At risk state.
 #
-# It counts OOM kills per container, so a sibling restarted for another reason
-# is never floored, and it counts a kill only while the restart that followed
-# it is in the window: last_terminated_reason stays OOMKilled for the rest of
-# the container's life.
+# It counts, per container, the kills k8s_sustain:container_oom_kills recorded
+# in the last 24h, so a sibling restarted for another reason is never floored,
+# and a kill stops counting 24h after it happened, whatever the container's
+# status reports since.
 rule_files:
   - rules-only.yaml
 
 evaluation_interval: 1m
 
 tests:
+  # app is OOM-killed and restarted twice; its sidecar is restarted once, for
+  # another reason.
   - interval: 1m
     input_series:
       - series: 'kube_pod_owner{namespace="shop",pod="api-6f9-a",owner_kind="ReplicaSet",owner_name="api-6f9",owner_is_controller="true"}'
         values: '1x10'
       - series: 'kube_replicaset_owner{namespace="shop",replicaset="api-6f9",owner_kind="Deployment",owner_name="api",owner_is_controller="true"}'
         values: '1x10'
-      # app is OOM-killed and restarted twice.
       - series: 'kube_pod_container_status_restarts_total{namespace="shop",pod="api-6f9-a",container="app"}'
         values: '0x1 1x2 2x5'
       - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="api-6f9-a",container="app",reason="OOMKilled"}'
         values: '_x2 1x8'
-      # Its sidecar is restarted once, for another reason.
       - series: 'kube_pod_container_status_restarts_total{namespace="shop",pod="api-6f9-a",container="sidecar"}'
         values: '0x1 1x8'
       - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="api-6f9-a",container="sidecar",reason="Error"}'
@@ -36,8 +37,7 @@ tests:
 
   # A container OOM-killed once at 5m and restarted, then running clean for over
   # a day: kube-state-metrics keeps reporting that kill as its last termination
-  # the whole time. The kill counts until its restart leaves the 24h window,
-  # and then the container has no series.
+  # the whole time. The kill counts for 24h.
   - interval: 1m
     input_series:
       - series: 'kube_pod_owner{namespace="shop",pod="db-0",owner_kind="StatefulSet",owner_name="db",owner_is_controller="true"}'
@@ -45,7 +45,7 @@ tests:
       - series: 'kube_pod_container_status_restarts_total{namespace="shop",pod="db-0",container="postgres"}'
         values: '0x4 1x1595'
       - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="db-0",container="postgres",reason="OOMKilled"}'
-        values: '_x4 1x1595'
+        values: '_x5 1x1594'
 
     promql_expr_test:
       - expr: k8s_sustain:workload_oom_24h
@@ -55,4 +55,50 @@ tests:
             value: 1
       - expr: k8s_sustain:workload_oom_24h
         eval_time: 26h
+        exp_samples: []
+
+  # A container OOM-killed at 5m, then restarted for another reason at 20m: its
+  # last termination is no longer OOMKilled, but the kill was recorded when it
+  # happened and still counts.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_owner{namespace="shop",pod="db-0",owner_kind="StatefulSet",owner_name="db",owner_is_controller="true"}'
+        values: '1x40'
+      - series: 'kube_pod_container_status_restarts_total{namespace="shop",pod="db-0",container="postgres"}'
+        values: '0x4 1x14 2x21'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="db-0",container="postgres",reason="OOMKilled"}'
+        values: '_x5 1x14 stale'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="shop",pod="db-0",container="postgres",reason="Error"}'
+        values: '_x20 1x20'
+
+    promql_expr_test:
+      - expr: k8s_sustain:workload_oom_24h
+        eval_time: 40m
+        exp_samples:
+          - labels: 'k8s_sustain:workload_oom_24h{container="postgres",namespace="shop",owner_kind="StatefulSet",owner_name="db"}'
+            value: 1
+
+  # A CronJob's pod with restartPolicy Never is OOM-killed at 3m and kept for
+  # over a day: the kill counts once, for 24h.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_owner{namespace="batch",pod="nightly-29000-x7k",owner_kind="Job",owner_name="nightly-29000",owner_is_controller="true"}'
+        values: '1x1600'
+      - series: 'kube_job_owner{namespace="batch",job_name="nightly-29000",owner_kind="CronJob",owner_name="nightly",owner_is_controller="true"}'
+        values: '1x1600'
+      - series: 'kube_pod_restart_policy{namespace="batch",pod="nightly-29000-x7k",type="Never"}'
+        values: '1x1600'
+      - series: 'kube_pod_container_status_restarts_total{namespace="batch",pod="nightly-29000-x7k",container="main"}'
+        values: '0x1600'
+      - series: 'kube_pod_container_status_terminated_reason{namespace="batch",pod="nightly-29000-x7k",container="main",reason="OOMKilled"}'
+        values: '_x3 1x1597'
+
+    promql_expr_test:
+      - expr: k8s_sustain:workload_oom_24h
+        eval_time: 1h
+        exp_samples:
+          - labels: 'k8s_sustain:workload_oom_24h{container="main",namespace="batch",owner_kind="CronJob",owner_name="nightly"}'
+            value: 1
+      - expr: k8s_sustain:workload_oom_24h
+        eval_time: 25h
         exp_samples: []

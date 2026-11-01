@@ -1,10 +1,12 @@
 package oomwatch
 
 import (
+	"cmp"
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
-	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,8 +30,12 @@ const oomKilledReason = "OOMKilled"
 // the "as it happens" SLO.
 const maxConcurrentReconciles = 4
 
-// Watcher reacts to Pod status changes and, on a fresh OOMKill of a pod a
-// Policy governs (governance.Decide), persists it into the Sink and optionally
+// minOwnerRetry is the soonest an owner chain that could not be read is read
+// again.
+const minOwnerRetry = 5 * time.Second
+
+// Watcher reacts to Pod status changes and, on an OOM kill of a pod a Policy
+// governs (governance.Decide), persists it into the Sink and optionally
 // notifies an EventHandler so the governing Policy's reconciler re-triggers
 // immediately.
 //
@@ -44,6 +50,11 @@ type Watcher struct {
 	// Now is injectable so tests get stable ObservedAt values. Defaults to
 	// time.Now when nil.
 	Now func() time.Time
+	// Window is how long after a kill an owner chain that could not be read
+	// is still retried: the recommender's LiveOOMWindow, past which a kill
+	// adds nothing to what the recording rules counted. Zero means the
+	// cache's default TTL.
+	Window time.Duration
 
 	policies governance.PolicyLister
 }
@@ -61,7 +72,7 @@ func (w *Watcher) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // admitPodEventPredicate drops pod events carrying neither the policy
-// annotation nor a fresh OOMKill. Deletes are dropped too: an OOM kill never
+// annotation nor an OOM kill. Deletes are dropped too: an OOM kill never
 // surfaces as a Pod delete, and chasing a deleted pod only races the GC.
 //
 // The OOM-status arm is required because pods inherit only the pod-template
@@ -81,7 +92,7 @@ func admitPodEventPredicate() predicate.Predicate {
 		if !ok {
 			return false
 		}
-		return hasFreshOOM(pod)
+		return len(oomKills(pod)) > 0
 	}
 	return predicate.Funcs{
 		CreateFunc:  func(e event.CreateEvent) bool { return admits(e.Object) },
@@ -91,13 +102,12 @@ func admitPodEventPredicate() predicate.Predicate {
 	}
 }
 
-// Reconcile fetches the pod, skips it fast if it carries no fresh OOMKill,
-// otherwise decides which Policy governs it and scans its container statuses
-// for the kill to record.
+// Reconcile fetches the pod, skips it fast if it shows no OOM kill, otherwise
+// decides which Policy governs it and records its kills.
 //
-// We always return a zero Result: nothing here benefits from requeue, because
-// the Pod informer will fire again on the next status change (e.g. the next
-// restart) and the Sink's dedup keeps replays cheap.
+// Only an owner chain it could not read is requeued: otherwise the Pod
+// informer fires again on the next status change (e.g. the next restart) and
+// the Sink's dedup keeps replays cheap.
 func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("pod", req.NamespacedName)
 
@@ -106,52 +116,55 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	terms := oomTerminations(pod)
-	if len(terms) == 0 {
+	kills := oomKills(pod)
+	if len(kills) == 0 {
 		// Deliberately first, and before any API call: most pod transitions
 		// are not OOM kills, so this keeps the owner/Namespace walk below off
 		// the common path.
 		return ctrl.Result{}, nil
 	}
 
-	// LastTerminationState stays OOMKilled for the rest of the pod's life, so
-	// a chronically OOM-restarting pod re-triggers Reconcile on every status
-	// write. If every termination it reports was already resolved on an
-	// earlier pass, the owner/Namespace walk has nothing new to learn. This
-	// cannot reuse Sink.Record's dedup — that key needs the resolved workload
-	// this walk would first have to produce.
-	allResolved := true
-	for _, t := range terms {
-		if !w.Sink.AlreadyResolved(pod.UID, t.Container, t.RestartCount, t.TerminatedAt) {
-			allResolved = false
-			break
+	// A kill stays in the pod's status for the rest of its life, so every
+	// later status write re-triggers Reconcile. If every kill it shows was
+	// already resolved on an earlier pass, the owner/Namespace walk has
+	// nothing new to learn. This cannot reuse Sink.Record's dedup — that key
+	// needs the resolved workload this walk would first have to produce.
+	var unresolved []oomKill
+	for _, k := range kills {
+		if !w.Sink.AlreadyResolved(pod.UID, k.Container, k.RestartCount, k.TerminatedAt) {
+			unresolved = append(unresolved, k)
 		}
 	}
-	if allResolved {
+	if len(unresolved) == 0 {
 		return ctrl.Result{}, nil
 	}
 
-	// Unlike the owner fallback (podReader.PodOwner), a failure reading the
-	// Policies or an annotation level is returned rather than degraded to
-	// "absent": degrading would resolve to a less specific level and silently
-	// un-manage the workload for as long as the read keeps failing (RBAC gap,
-	// apiserver outage). Returning makes controller-runtime requeue with
-	// backoff instead.
-	reader := &podReader{client: w.Client, policies: &w.policies, excluded: w.ExcludedNamespaces, logger: logger}
+	reader := &podReader{client: w.Client, policies: &w.policies, excluded: w.ExcludedNamespaces}
 	decision, err := governance.Decide(ctx, governance.Pod(pod), reader)
+	if errors.Is(err, errOwnerUnresolved) {
+		// Nothing is recorded and nothing marked resolved, so the walk is
+		// retried, on the requeue or on the pod's next status event, whichever
+		// comes first: a terminated Never pod may get no further event. The
+		// pod's immediate controller is no substitute: a CronJob's Job or a
+		// Deployment's ReplicaSet is an identity the inventory never holds,
+		// so the kill would reach no recommendation and give
+		// k8s_sustain_oom_observed_total a series per run.
+		retry := w.ownerRetryAfter(unresolved)
+		logger.V(1).Info("owner resolution failed; leaving the OOM kill unresolved", "err", err, "retryAfter", retry)
+		return ctrl.Result{RequeueAfter: retry}, nil
+	}
 	if err != nil {
+		// A failure reading the Policies or an annotation level is returned
+		// rather than degraded to "absent": degrading would resolve to a less
+		// specific level and silently un-manage the workload for as long as
+		// the read keeps failing (RBAC gap, apiserver outage). Returning makes
+		// controller-runtime requeue with backoff instead.
 		return ctrl.Result{}, err
 	}
-	// Every read this pass needed has now succeeded, so this is the place to
-	// mark — except on a degraded owner resolution, which no later read of
-	// this pass retries. Marking anyway would suppress the walk for the whole
-	// cache TTL, permanently pinning the OOM under the degraded owner (e.g. a
-	// ReplicaSet, which no Policy governs) instead of self-healing to the real
-	// one.
-	if !reader.degraded {
-		for _, t := range terms {
-			w.Sink.MarkResolved(pod.UID, t.Container, t.RestartCount, t.TerminatedAt)
-		}
+	// Marked only now that every read this pass needed has succeeded: marking
+	// a failed pass would suppress the walk for the whole cache TTL.
+	for _, k := range kills {
+		w.Sink.MarkResolved(pod.UID, k.Container, k.RestartCount, k.TerminatedAt)
 	}
 
 	if !decision.Governed() {
@@ -168,24 +181,18 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 
 	now := w.now()
 
-	for i := range pod.Status.ContainerStatuses {
-		cs := &pod.Status.ContainerStatuses[i]
-		term := cs.LastTerminationState.Terminated
-		if term == nil || term.Reason != oomKilledReason {
-			continue
-		}
-
-		key := Key{WorkloadIdentity: id, Container: cs.Name}
+	for _, k := range kills {
+		key := Key{WorkloadIdentity: id, Container: k.Container}
 
 		record := OOMRecord{
-			Container:     cs.Name,
+			Container:     k.Container,
 			PolicyName:    policyName,
 			ObservedAt:    now,
-			TerminatedAt:  term.FinishedAt.Time,
-			RestartCount:  cs.RestartCount,
+			TerminatedAt:  k.TerminatedAt,
+			RestartCount:  k.RestartCount,
 			PodName:       pod.Name,
 			PodUID:        string(pod.UID),
-			OOMLimitBytes: containerMemLimitBytes(pod, cs.Name),
+			OOMLimitBytes: k.LimitBytes,
 		}
 
 		// Sink.Record is the single source of truth for dedup; fanning out on
@@ -196,8 +203,9 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 				"OOM detected",
 				"ownerKind", id.OwnerKind,
 				"ownerName", id.OwnerName,
-				"container", cs.Name,
-				"restartCount", cs.RestartCount,
+				"container", k.Container,
+				"restarted", k.Restarted,
+				"restartCount", k.RestartCount,
 				"limitBytes", record.OOMLimitBytes,
 			)
 			if w.Handler != nil {
@@ -209,36 +217,46 @@ func (w *Watcher) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result,
 	return ctrl.Result{}, nil
 }
 
+// ownerRetryAfter is when to read again the owner chain of a pod showing
+// kills: after as long as the newest of them has waited so far, so retries
+// back off geometrically without counting attempts, and never once it is
+// older than the window.
+func (w *Watcher) ownerRetryAfter(kills []oomKill) time.Duration {
+	var newest time.Time
+	for _, k := range kills {
+		if k.TerminatedAt.After(newest) {
+			newest = k.TerminatedAt
+		}
+	}
+	window := cmp.Or(w.Window, defaultTTL)
+	age := w.now().Sub(newest)
+	if age >= window {
+		return 0
+	}
+	return min(max(age, minOwnerRetry), window-age)
+}
+
 // podReader is the governance.Reader of one Reconcile, reading straight
 // through the manager's client.
 type podReader struct {
 	client   client.Client
 	policies *governance.PolicyLister
 	excluded []string
-	logger   logr.Logger
-	// degraded records that the owner fell back to the pod's immediate
-	// controller.
-	degraded bool
 }
+
+// errOwnerUnresolved wraps a failed read of a pod's controller chain (its
+// ReplicaSet or Job).
+var errOwnerUnresolved = errors.New("pod owner unresolved")
 
 func (r *podReader) Policies(ctx context.Context) (*governance.Policies, error) {
 	return r.policies.List(ctx, r.client, r.excluded)
 }
 
-// PodOwner falls back to the immediate controller ref so a transient RS/Job
-// Get failure does not fail the pass: a Job's OOM is still recorded under the
-// Job when its Policy manages Jobs. Under a kind no Policy manages (a
-// ReplicaSet) nothing is recorded, and since a degraded pass marks nothing
-// resolved, the pod's next status event retries the walk.
 func (r *podReader) PodOwner(ctx context.Context, pod *corev1.Pod) (string, string, error) {
 	kind, name, err := workload.ResolvePodOwner(ctx, r.client, pod)
-	if err == nil {
-		return kind, name, nil
+	if err != nil {
+		return "", "", fmt.Errorf("%w: %w", errOwnerUnresolved, err)
 	}
-	r.degraded = true
-	kind, name = immediateController(pod)
-	r.logger.V(1).Info("owner resolution failed; falling back to immediate controller",
-		"kind", kind, "name", name, "err", err)
 	return kind, name, nil
 }
 
@@ -259,52 +277,50 @@ func (r *podReader) NamespaceAnnotations(ctx context.Context, namespace string) 
 	return workload.NamespaceAnnotations(ctx, r.client, namespace)
 }
 
-func immediateController(pod *corev1.Pod) (kind, name string) {
-	for _, ref := range pod.OwnerReferences {
-		if ref.Controller != nil && *ref.Controller {
-			return ref.Kind, ref.Name
-		}
-	}
-	return "", ""
-}
-
-func hasFreshOOM(pod *corev1.Pod) bool {
-	for i := range pod.Status.ContainerStatuses {
-		term := pod.Status.ContainerStatuses[i].LastTerminationState.Terminated
-		if term != nil && term.Reason == oomKilledReason {
-			return true
-		}
-	}
-	return false
-}
-
-// containerTermination is the identity oomTerminations extracts for one
-// container's fresh OOMKilled LastTerminationState: enough to key
-// Sink.AlreadyResolved/MarkResolved without needing the resolved workload.
-type containerTermination struct {
-	Container    string
+// oomKill is one OOM kill a pod's status shows. Container, RestartCount and
+// TerminatedAt identify it without the resolved workload, which is what
+// Sink.AlreadyResolved and MarkResolved key on.
+type oomKill struct {
+	Container string
+	// Restarted says the container restarted after the kill; false for a
+	// container that will not restart.
+	Restarted    bool
 	RestartCount int32
 	TerminatedAt time.Time
+	LimitBytes   int64
 }
 
-// oomTerminations returns one containerTermination per container reporting a
-// fresh OOMKilled LastTerminationState — the same signal hasFreshOOM checks,
-// but carrying the identity Reconcile's pre-walk dedup needs.
-func oomTerminations(pod *corev1.Pod) []containerTermination {
-	var out []containerTermination
+// oomKills lists the OOM kills pod's containers show, by the definition the
+// k8s_sustain:container_oom_kills recording rule counts (docs/adr/0010): a
+// last termination that is OOMKilled, which the container restarted after,
+// or, in a pod whose restartPolicy is Never, a current OOMKilled termination.
+// Under Always or OnFailure a current termination is the brief state before
+// the restart, which counts the kill instead.
+func oomKills(pod *corev1.Pod) []oomKill {
+	never := pod.Spec.RestartPolicy == corev1.RestartPolicyNever
+	var out []oomKill
 	for i := range pod.Status.ContainerStatuses {
 		cs := &pod.Status.ContainerStatuses[i]
-		term := cs.LastTerminationState.Terminated
-		if term == nil || term.Reason != oomKilledReason {
+		term, restarted := cs.LastTerminationState.Terminated, true
+		if !isOOMKill(term) && never {
+			term, restarted = cs.State.Terminated, false
+		}
+		if !isOOMKill(term) {
 			continue
 		}
-		out = append(out, containerTermination{
+		out = append(out, oomKill{
 			Container:    cs.Name,
+			Restarted:    restarted,
 			RestartCount: cs.RestartCount,
 			TerminatedAt: term.FinishedAt.Time,
+			LimitBytes:   containerMemLimitBytes(pod, cs.Name),
 		})
 	}
 	return out
+}
+
+func isOOMKill(term *corev1.ContainerStateTerminated) bool {
+	return term != nil && term.Reason == oomKilledReason
 }
 
 // containerMemLimitBytes returns the memory limit (bytes) the kernel actually

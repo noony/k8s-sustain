@@ -672,6 +672,101 @@ prometheusRule:
                 "owner_kind", "Pod", "", ""
               )
             )
+        # OOM kills, each recorded once, at the evaluation that first sees it:
+        # the only definition of a kill every OOM reader derives from. A
+        # sample's value is the number of kills first seen then; between kills
+        # the series has no sample at all. A kill is either:
+        #   - a restart whose last termination is OOMKilled, or
+        #   - for a pod whose restartPolicy is Never, a container's current
+        #     termination turning OOMKilled: it never restarts, so its kill
+        #     never becomes a last termination. Under Always or OnFailure the
+        #     restart counts it, even when a scrape catches the brief
+        #     Terminated state before it.
+        #
+        # Restarts are compared with the previous evaluation, one group
+        # interval earlier: the offset must stay equal to this group's
+        # interval, or restarts are counted twice or missed. last_over_time
+        # skips the staleness markers a failed scrape writes, so a short
+        # kube-state-metrics gap delays its restarts instead of losing them.
+        # last_terminated_reason only gates the restart: kube-state-metrics
+        # keeps it OOMKilled for the rest of the container's life.
+        #
+        # A current termination stays in the pod's status until the pod is
+        # deleted, so it counts only when it was absent for the previous 24h,
+        # not merely one evaluation earlier: a scrape gap must not count it
+        # again.
+        #
+        # It sits in this group, after k8s_sustain:pod_workload, because
+        # rules of one group run in order at the same instant: a pod killed
+        # before its first scrape is mapped by the evaluation that first sees
+        # it, and a kill recorded without its identity is never recorded
+        # again.
+        - record: k8s_sustain:container_oom_kills
+          expr: |
+            (
+              (
+                (
+                  max by (namespace, pod, container) (
+                    kube_pod_container_status_restarts_total{container!="", container!="POD"}
+                  )
+                  - on(namespace, pod, container)
+                  max by (namespace, pod, container) (
+                    last_over_time(kube_pod_container_status_restarts_total{container!="", container!="POD"}[10m] offset 1m)
+                  )
+                  > 0
+                )
+                and on(namespace, pod, container)
+                max by (namespace, pod, container) (
+                  kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
+                )
+              )
+              or
+              (
+                (
+                  max by (namespace, pod, container) (
+                    kube_pod_container_status_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
+                  )
+                  unless on(namespace, pod, container)
+                  max by (namespace, pod, container) (
+                    max_over_time(kube_pod_container_status_terminated_reason{reason="OOMKilled", container!="", container!="POD"}[24h] offset 1m)
+                  )
+                )
+                and on(namespace, pod)
+                max by (namespace, pod) (kube_pod_restart_policy{type="Never"})
+              )
+            )
+            * on(namespace, pod) group_left(owner_kind, owner_name)
+            k8s_sustain:pod_workload
+        # The memory limit each OOM kill happened at, recorded once per kill
+        # k8s_sustain:container_oom_kills records, as the last cAdvisor sample
+        # of the container instance the kill ended. A restarted container runs
+        # in a new cgroup, a series of its own as long as the scrape keeps a
+        # label telling instances apart: the bundled scrape keeps `cgroup`,
+        # and the rule matches on every label, so a scrape keeping cAdvisor's
+        # `id` works too. The killed instance's last sample holds an in-place
+        # raise that came before the kill, and never k8s-sustain's response to
+        # it, which lands on the next instance.
+        #
+        # The kill is read 3m after it was recorded, and the instances it
+        # ended are those with no sample since, so the offset and the shorter
+        # range must stay equal: the kubelet restarts a
+        # container, and kube-state-metrics shows the restart, only once its
+        # old cgroup is gone, while the next instance is scraped meanwhile.
+        # That window starts exactly at the kill only because this rule
+        # shares the kill rule's group, whose evaluations are one interval
+        # apart. The 15m window reaches back past a crash-loop back-off of up
+        # to 5m between the kill and the restart that reveals it; instances
+        # of a fast crash loop ending within it give the highest of their
+        # limits, the last one unless the limit was lowered in between.
+        - record: k8s_sustain:container_oom_kill_limit:bytes
+          expr: |
+            max by (namespace, pod, container) (
+              last_over_time(container_spec_memory_limit_bytes{container!="", container!="POD", image!="", node!=""}[15m])
+              unless
+              last_over_time(container_spec_memory_limit_bytes{container!="", container!="POD", image!="", node!=""}[3m])
+            )
+            * on(namespace, pod, container) group_left(owner_kind, owner_name)
+            (k8s_sustain:container_oom_kills offset 3m > bool 0)
     - name: k8s_sustain.cpu_rates
       interval: 1m
       rules:
@@ -925,69 +1020,24 @@ prometheusRule:
               k8s_sustain:pod_workload
             )
 
-        # OOM-time memory limit: the cgroup memory limit observed at the moment
-        # an OOM event fired. Used by the recommender as a bump anchor —
-        # max(peak, oom_time_limit * bump_factor) — so workloads whose peak
-        # working-set is unreliable (cgroup v2, sub-scrape spikes) still get
-        # pushed above the limit the kernel killed them at.
-        #
-        # Why this doesn't create the feedback loop the peak rule's comment
-        # warned about: this rule only records the limit at moments a NEW OOM
-        # event fires (restart counter increased AND last_terminated_reason is
-        # OOMKilled). Once the recommender bumps the limit and the workload
-        # fits, no new OOM events fire, so the recorded limit stays at the OLD
-        # (pre-bump) value and stops growing. After 24h with no further OOMs
-        # the signal drains and the recommendation falls back to the percentile.
-        #
-        # min_over_time([2m]) is what makes that hold. The restart gate below
-        # stays true for two minutes AFTER the kill, and k8s-sustain reacts to
-        # an OOM within seconds (the watcher forces an immediate reconcile), so
-        # the raised limit lands well inside that window. Sampling the limit
-        # directly would record k8s-sustain's own response as if the kernel had
-        # killed at it, and max_over_time below would then hold that inflated
-        # value for 24h — the recommendation deriving its next anchor from its
-        # own previous output. An OOM response only ever RAISES the limit, so
-        # the minimum across the window is the pre-bump value: the limit the
-        # container was actually killed at. A downsize landing in the same
-        # window makes this anchor conservative rather than inflated, and the
-        # peak anchor covers that direction.
+        # The highest killed-at limit of the container's kills in the last
+        # 24h: the recommender's bump anchor, max(peak, killed-at limit * bump
+        # factor), so a workload whose peak working set is unreliable (cgroup
+        # v2, sub-scrape spikes) is still pushed above the limit the kernel
+        # killed it at. A limit is recorded only at a kill, so it cannot feed
+        # the loop the peak rule's comment warns about: once the recommender
+        # raises the limit and the workload fits, no new kill records the
+        # raised limit, and the anchor drains 24h after the last kill. A kill
+        # carries its identity, so a deleted pod's kill stays in the anchor.
         - record: k8s_sustain:container_oom_limit_24h:bytes
           expr: |
             max by (namespace, owner_kind, owner_name, container) (
-              max by (namespace, pod, container) (
-                max_over_time(
-                  (
-                    min_over_time(
-                      container_spec_memory_limit_bytes{container!="", container!="POD", image!="", node!=""}[2m]
-                    )
-                    and on(namespace, pod, container)
-                    (changes(kube_pod_container_status_restarts_total{container!="", container!="POD"}[2m]) > 0)
-                    and on(namespace, pod, container)
-                    (kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"} == 1)
-                  )[24h:1m]
-                )
-              )
-              * on(namespace, pod) group_left(owner_kind, owner_name)
-              k8s_sustain:pod_workload
+              max_over_time(k8s_sustain:container_oom_kill_limit:bytes[24h])
             )
 
-        # OOM kills per container in the last 24h: the container's restarts in
-        # the window, counted when its last termination is OOMKilled. A kill
-        # counts only when its container restarts after it.
-        #
-        # kube-state-metrics keeps last_terminated_reason{OOMKilled} at 1 for as
-        # long as that kill is the container's last termination, which is the
-        # rest of the pod's life if it never fails again. It may only gate a
-        # restart, never stand alone: on its own it would keep one kill recent
-        # for the pod's life.
-        #
-        # Each side is reduced by (namespace, pod, container) first, dropping the
-        # kube-state-metrics scrape target's labels, so a container several
-        # targets report is counted once and the one-to-one match holds.
-        #
-        # A container whose restarts left the window would count 0 for as long
-        # as last_terminated_reason stays OOMKilled: `> 0` drops it, so only a
-        # container killed in the window has a series.
+        # OOM kills per container in the last 24h, as
+        # k8s_sustain:container_oom_kills recorded them: a kill stops counting
+        # 24h after it was recorded, whatever its container does since.
         #
         # The `container` label is kept through the outer sum so the OOM
         # recency signal is per-container: the recommender only floors the
@@ -997,20 +1047,7 @@ prometheusRule:
         - record: k8s_sustain:workload_oom_24h
           expr: |
             sum by (namespace, owner_kind, owner_name, container) (
-              (
-                max by (namespace, pod, container) (
-                  increase(
-                    kube_pod_container_status_restarts_total{container!="", container!="POD"}[24h]
-                  )
-                )
-                * on(namespace, pod, container)
-                max by (namespace, pod, container) (
-                  kube_pod_container_status_last_terminated_reason{reason="OOMKilled", container!="", container!="POD"}
-                )
-                > 0
-              )
-              * on(namespace, pod) group_left(owner_kind, owner_name)
-              k8s_sustain:pod_workload
+              sum_over_time(k8s_sustain:container_oom_kills[24h])
             )
 
         - record: k8s_sustain:workload_drifted
@@ -1127,6 +1164,15 @@ prometheus:
       - action: keep
         source_labels: [__name__]
         regex: "container_cpu_usage_seconds_total|container_memory_working_set_bytes|container_memory_max_usage_bytes|container_memory_peak_working_set_bytes|container_spec_memory_limit_bytes"
+      # k8s_sustain:container_oom_kill_limit:bytes reads the limit per
+      # container instance: id is the instance's cgroup, kept for this one
+      # metric as `cgroup`, its last path segment, before the labeldrop drops
+      # id. That costs one series per container restart, for this metric
+      # alone. hack/signalcontract fails when the instances merge.
+      - action: replace
+        source_labels: [__name__, id]
+        regex: "container_spec_memory_limit_bytes;.*/([^/]+)"
+        target_label: cgroup
       - action: labeldrop
         regex: "container_id|host_ip|id|image_id|image_spec|internal_ip|name|pod_ip|provider_id|system_uuid|uid"
     # Disabled — these scrape ANY pod/service in ANY namespace that carries the
@@ -1213,7 +1259,7 @@ prometheus:
       metric_relabel_configs:
         - action: keep
           source_labels: [__name__]
-          regex: "kube_pod_owner|kube_job_owner|kube_replicaset_owner|kube_pod_annotations|kube_pod_container_resource_requests|kube_pod_container_resource_limits|kube_pod_init_container_resource_requests|kube_pod_init_container_resource_limits|kube_pod_container_status_restarts_total|kube_pod_container_status_last_terminated_reason|kube_node_status_allocatable"
+          regex: "kube_pod_owner|kube_job_owner|kube_replicaset_owner|kube_pod_annotations|kube_pod_container_resource_requests|kube_pod_container_resource_limits|kube_pod_init_container_resource_requests|kube_pod_init_container_resource_limits|kube_pod_container_status_restarts_total|kube_pod_container_status_last_terminated_reason|kube_pod_container_status_terminated_reason|kube_pod_restart_policy|kube_node_status_allocatable"
         - action: labeldrop
           regex: "container_id|host_ip|id|image_id|image_spec|internal_ip|pod_ip|provider_id|system_uuid|uid|unit"
 

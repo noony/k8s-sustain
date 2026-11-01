@@ -31,7 +31,7 @@ func (s *Server) handleWorkloadMetrics(w http.ResponseWriter, r *http.Request, n
 	var (
 		cpuSeries, memSeries                           promclient.ContainerTimeSeries
 		cpuRequests, memRequests, cpuLimits, memLimits promclient.ContainerTimeSeries
-		oomEvents                                      []promclient.OOMEvent
+		oomEvents                                      []promclient.OOMKill
 		cpuErr, memErr                                 error
 	)
 	var wg sync.WaitGroup

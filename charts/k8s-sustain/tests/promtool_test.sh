@@ -32,6 +32,7 @@ required=(
   "k8s_sustain:policy_cpu_savings_cores"
   "k8s_sustain:policy_memory_savings_bytes"
   "k8s_sustain:workload_oom_24h"
+  "k8s_sustain:container_oom_kills"
   "k8s_sustain:workload_drifted"
 )
 for rule in "${required[@]}"; do

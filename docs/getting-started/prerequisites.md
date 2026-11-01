@@ -30,7 +30,8 @@ From **kube-state-metrics**:
 - `kube_replicaset_owner` — resolves ReplicaSet → Deployment (or Rollout)
 - `kube_pod_container_resource_requests` / `kube_pod_container_resource_limits` — current CPU/memory requests and limits
 - `kube_pod_init_container_resource_requests` / `kube_pod_init_container_resource_limits` — same, for init and sidecar containers (kube-state-metrics reports init containers under these separate metric names)
-- `kube_pod_container_status_restarts_total` / `kube_pod_container_status_last_terminated_reason` — OOMKill detection
+- `kube_pod_container_status_restarts_total` / `kube_pod_container_status_last_terminated_reason` — OOM kills of containers that restart after them
+- `kube_pod_container_status_terminated_reason` / `kube_pod_restart_policy` — OOM kills of containers that never restart (pods with `restartPolicy: Never`). Without them, those kills are not counted: no memory floor, no At risk state. See [`k8s_sustain:container_oom_kills`](../reference/recording-rules.md#k8s_sustaincontainer_oom_kills)
 - `kube_node_status_allocatable` — cluster capacity for the headroom panels
 
 From **cAdvisor**:
@@ -38,7 +39,7 @@ From **cAdvisor**:
 - `container_cpu_usage_seconds_total` — CPU usage per container
 - `container_memory_working_set_bytes` — memory usage per container
 - `container_memory_max_usage_bytes` (cgroup v1) / `container_memory_peak_working_set_bytes` (cgroup v2) — peak memory between scrapes
-- `container_spec_memory_limit_bytes` — the limit that was in effect when an OOMKill fired
+- `container_spec_memory_limit_bytes` — the memory limit of each container instance, whose last sample is the limit an OOM kill ended it at. Keep a label telling a restarted container's instances apart on it, such as cAdvisor's `id` (kube-prometheus-stack keeps it): a restarted container is a new cgroup, and without that label the [killed-at limit](../reference/recording-rules.md#k8s_sustaincontainer_oom_kill_limitbytes) is recorded only for containers that never restart
 
 The recording rules filter cAdvisor series by `node!=""`, so your scrape config must inject a `node` label onto cAdvisor metrics:
 

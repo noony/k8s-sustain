@@ -75,11 +75,12 @@ type OOM struct {
 	// LimitBytes is the memory limit the container was killed at, the higher
 	// of the recording rule's and the watcher's. The two have complementary
 	// blind spots and neither can be inflated by k8s-sustain's own resize:
-	// Prometheus survives a controller restart but is windowed, so right
-	// after a resize-then-OOM it can still report the PREVIOUS limit; the
-	// watcher has the exact limit applied at that kill but loses it on
-	// restart. Preferring Prometheus anchors on the stale, lower limit and
-	// under-bumps a container that is still OOM-looping.
+	// Prometheus survives a controller restart but records a kill's limit
+	// minutes after the kill, so right after a resize-then-OOM it still
+	// reports the PREVIOUS limit; the watcher has the exact limit applied at
+	// that kill but loses it on restart. Preferring Prometheus anchors on the
+	// stale, lower limit and under-bumps a container that is still
+	// OOM-looping.
 	LimitBytes float64
 	// LiveAt is when the OOM Pod watcher's kill happened, zero when it saw
 	// none within LiveOOMWindow.
@@ -142,7 +143,10 @@ func (oomFloor) contract() PromContract {
 		KubeStateMetrics: append([]string{
 			"kube_pod_container_status_restarts_total",
 			"kube_pod_container_status_last_terminated_reason",
+			"kube_pod_container_status_terminated_reason",
+			"kube_pod_restart_policy",
 		}, podWorkloadMetrics...),
+		CAdvisorPerInstance: []string{"container_spec_memory_limit_bytes"},
 	}
 }
 

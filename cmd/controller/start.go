@@ -135,6 +135,7 @@ func runStart(_ *cobra.Command, _ []string) error {
 		Sink:               oomCache,
 		Handler:            oomHandler,
 		ExcludedNamespaces: cfg.ExcludedNamespaces,
+		Window:             recommender.LiveOOMWindow,
 	}
 	if err := watcher.SetupWithManager(mgr); err != nil {
 		log.Error(err, "Unable to create OOM watcher")
