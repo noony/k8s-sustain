@@ -1969,7 +1969,8 @@
 <li><code>kube_replicaset_owner</code> — resolves ReplicaSet → Deployment (or Rollout)</li>
 <li><code>kube_pod_container_resource_requests</code> / <code>kube_pod_container_resource_limits</code> — current CPU/memory requests and limits</li>
 <li><code>kube_pod_init_container_resource_requests</code> / <code>kube_pod_init_container_resource_limits</code> — same, for init and sidecar containers (kube-state-metrics reports init containers under these separate metric names)</li>
-<li><code>kube_pod_container_status_restarts_total</code> / <code>kube_pod_container_status_last_terminated_reason</code> — OOMKill detection</li>
+<li><code>kube_pod_container_status_restarts_total</code> / <code>kube_pod_container_status_last_terminated_reason</code> — OOM kills of containers that restart after them</li>
+<li><code>kube_pod_container_status_terminated_reason</code> / <code>kube_pod_restart_policy</code> — OOM kills of containers that never restart (pods with <code>restartPolicy: Never</code>). Without them, those kills are not counted: no memory floor, no At risk state. See <a href="../../reference/recording-rules/#k8s_sustaincontainer_oom_kills"><code>k8s_sustain:container_oom_kills</code></a></li>
 <li><code>kube_node_status_allocatable</code> — cluster capacity for the headroom panels</li>
 </ul>
 <p>From <strong>cAdvisor</strong>:</p>
@@ -1977,7 +1978,7 @@
 <li><code>container_cpu_usage_seconds_total</code> — CPU usage per container</li>
 <li><code>container_memory_working_set_bytes</code> — memory usage per container</li>
 <li><code>container_memory_max_usage_bytes</code> (cgroup v1) / <code>container_memory_peak_working_set_bytes</code> (cgroup v2) — peak memory between scrapes</li>
-<li><code>container_spec_memory_limit_bytes</code> — the limit that was in effect when an OOMKill fired</li>
+<li><code>container_spec_memory_limit_bytes</code> — the memory limit of each container instance, whose last sample is the limit an OOM kill ended it at. Keep a label telling a restarted container's instances apart on it, such as cAdvisor's <code>id</code> (kube-prometheus-stack keeps it): a restarted container is a new cgroup, and without that label the <a href="../../reference/recording-rules/#k8s_sustaincontainer_oom_kill_limitbytes">killed-at limit</a> is recorded only for containers that never restart</li>
 </ul>
 <p>The recording rules filter cAdvisor series by <code>node!=""</code>, so your scrape config must inject a <code>node</code> label onto cAdvisor metrics:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">relabel_configs</span><span class="p">:</span>

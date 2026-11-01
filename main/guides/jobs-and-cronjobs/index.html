@@ -2099,8 +2099,12 @@
 <h2 id="guaranteed-qos-for-batch-jobs">Guaranteed QoS for batch jobs<a class="headerlink" href="#guaranteed-qos-for-batch-jobs" title="Permanent link">&para;</a></h2>
 <p>Setting <code>equalsToRequest: true</code> for both CPU and memory limits makes the pod <a href="https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/#guaranteed">Guaranteed QoS</a>, which makes the pod the last candidate for node-pressure eviction.</p>
 <h2 id="oom-detection-for-job-pods">OOM detection for job pods<a class="headerlink" href="#oom-detection-for-job-pods" title="Permanent link">&para;</a></h2>
-<p>An OOM kill counts when its container restarts after it: the <a href="../../reference/recording-rules/#k8s_sustainworkload_oom_24h"><code>k8s_sustain:workload_oom_24h</code></a> rule counts restarts whose last termination is <code>OOMKilled</code>, and the <a href="../../concepts/architecture/#pod-oom-watcher">Pod OOM watcher</a> reads the same last termination. A Job pod with <code>restartPolicy: OnFailure</code> is restarted in place after a kill, so the OOM-driven memory floor and the dashboard's At risk state see it.</p>
-<p>A pod with <code>restartPolicy: Never</code> dies with its kill and is never restarted, and the Job's retry runs in a new pod, so no kill is counted for it. Size such Jobs from usage alone: use a window that spans several runs (see <a href="#collecting-enough-history">Collecting enough history</a>), or set a memory <code>minAllowed</code>.</p>
+<p>Job and CronJob pods' OOM kills count like any other's, whatever their restart policy: the <a href="../../reference/recording-rules/#k8s_sustaincontainer_oom_kills"><code>k8s_sustain:container_oom_kills</code></a> rule and the <a href="../../concepts/architecture/#pod-oom-watcher">Pod OOM watcher</a> count each kill once, so the OOM-driven memory floor and the dashboard's At risk state see it for 24 hours.</p>
+<ul>
+<li>A pod with <code>restartPolicy: OnFailure</code> is restarted in place after a kill: the restart counts it.</li>
+<li>A pod with <code>restartPolicy: Never</code> dies with its kill, and the Job's retry runs in a new pod: the kill counts when the container's status first shows it, and only once however long the failed pod is kept.</li>
+</ul>
+<p>A container killed within seconds of starting leaves little usage behind, and the floor rests on the limit it was killed at: give such Jobs a window that spans several runs (see <a href="#collecting-enough-history">Collecting enough history</a>), or a memory <code>minAllowed</code>.</p>
 
 
 
