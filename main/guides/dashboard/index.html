@@ -1472,6 +1472,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Workload Detail">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-usage-lines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two usage lines
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -2181,6 +2198,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Workload Detail">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-usage-lines" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two usage lines
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -2596,12 +2630,26 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <li><strong>Header</strong> — kind, namespace, container count, <strong>Automated</strong> + policy link, <strong>Conflicted</strong> with the policies its members opt into, or <strong>Manual</strong>; <strong>Departed</strong> when no member is live; the <a href="#risk-state">Risk state</a> badge, and the <strong>Coordinated</strong> badge with its factors when autoscaler coordination shaped the stored recommendation.</li>
 <li><strong>Status</strong> — three cards: <strong>Mode</strong> (<code>OnCreate</code> / <code>Ongoing</code>), <strong>Drift</strong> (stale/total pods), <strong>OOM 24h</strong>.</li>
 <li><strong>Blocked</strong> — a band shown only while a member of the identity is Blocked: the failed step (<code>prometheus</code>, <code>patch</code>, <code>resize</code> or <code>store</code>) and the attempt count across members.</li>
-<li><strong>Recommendation</strong> — the Recommendation stored in the identity's <code>WorkloadRecommendation</code>, current vs. recommended CPU and memory request per container (init containers flagged), with the outcome of the controller's last pass (<code>Computed</code>, <code>No data</code>, <code>Too young</code>, <code>Fetch failed</code>, <code>Conflicted (frozen)</code>) and when it was last computed. <strong>How this was computed</strong> expands each container's stored <a href="../../concepts/recommendation-pipeline/#trace">trace</a> into a table: CPU and memory after each stage that ran, request stages (usage percentile, OOM floor, headroom, min/max clamp, autoscaler coordination) then limit stages (the limit strategy, any limit-side signal, the guard that raised a limit below the request), each with its facts as recorded (<code>determined: true</code> when the OOM floor set the request, coordination's factors, <code>scaled</code> when a clamp capped the coordinated value). A stage the dashboard has no name for is shown under its own. Nothing is recomputed here; use the Simulator for that.</li>
-<li><strong>Charts</strong> — per container, CPU and memory usage with the workload's <strong>historical request</strong> (amber dashed, stepped) and <strong>limit</strong> (amber dotted), plus the <strong>stored recommendation</strong> (green long-dashed line). Without historical request data in Prometheus, the request line falls back to the current spec. Lines break across gaps longer than ~1.5× the query step (between CronJob runs, scaled to zero). Memory charts show <strong>OOM kills</strong> as red markers with a count: the kills the <a href="../../reference/recording-rules/#k8s_sustaincontainer_oom_kills"><code>k8s_sustain:container_oom_kills</code></a> rule recorded, the same ones At risk and the OOM floor count, each at the end of the chart step it fell in. Without kube-state-metrics the markers are omitted.</li>
+<li><strong>Recommendation</strong> — the Recommendation stored in the identity's <code>WorkloadRecommendation</code>, current vs. recommended CPU and memory request and limit per container (init containers flagged; <code>— removed —</code> where the limit is stripped), with the outcome of the controller's last pass (<code>Computed</code>, <code>No data</code>, <code>Too young</code>, <code>Fetch failed</code>, <code>Conflicted (frozen)</code>) and when it was last computed. <strong>How this was computed</strong> expands each container's stored <a href="../../concepts/recommendation-pipeline/#trace">trace</a> into a table: CPU and memory after each stage that ran, request stages (usage percentile, OOM floor, headroom, min/max clamp, autoscaler coordination) then limit stages (the limit strategy, any limit-side signal, the guard that raised a limit below the request), each with its facts as recorded (<code>determined: true</code> when the OOM floor set the request, coordination's factors, <code>scaled</code> when a clamp capped the coordinated value). A stage the dashboard has no name for is shown under its own. Nothing is recomputed here; use the Simulator for that.</li>
+<li><strong>Charts</strong> — per container, a CPU and a memory chart, each with <a href="#two-usage-lines">two usage lines</a>: the <strong>replica average</strong> (solid, filled) and the <strong>busiest replica's percentile the recommender reads</strong> (dashed, same colour). With them, the workload's <strong>historical request</strong> (amber dashed, stepped) and <strong>limit</strong> (amber dotted), plus the stored Recommendation's <strong>request</strong> (green long-dashed line) and <strong>limit</strong> (green dotted line; none where the limit is kept or removed). The stored values are drawn flat: the detail page never recomputes a recommendation at past instants, the Simulator does. Without historical request data in Prometheus, the request line falls back to the current spec. Lines break across gaps longer than ~1.5× the query step (between CronJob runs, scaled to zero). Memory charts show <strong>OOM kills</strong> as red markers with a count: the kills the <a href="../../reference/recording-rules/#k8s_sustaincontainer_oom_kills"><code>k8s_sustain:container_oom_kills</code></a> rule recorded, the same ones At risk and the OOM floor count, read with the signal line's history and each at the end of its step they fell in. A workload no policy governs still has its markers: its history is read under the recommender defaults for them alone. Without kube-state-metrics, or when that history cannot be read, the markers are omitted.</li>
 <li><strong>Recent events</strong> — k8s-sustain events about every member of the identity (the controller attributes each event to the member it acted on, so an owner-name group's or bare-pod group's events sit on several objects).</li>
 <li><strong>Open in Simulator</strong> — jumps to the simulator with the workload pre-filled.</li>
 </ul>
 <p>A <strong>Departed</strong> identity's detail page resolves from the retained <code>WorkloadRecommendation</code>, so the recommendation and the usage history for the time it ran remain visible.</p>
+<h4 id="two-usage-lines">Two usage lines<a class="headerlink" href="#two-usage-lines" title="Permanent link">&para;</a></h4>
+<p>Each chart draws two usage lines, because the recommender does not size a request from the average:</p>
+<ul>
+<li><strong>Usage (replica average)</strong> — the container's CPU rate or memory working set averaged over the identity's running replicas, at each chart step: what a typical pod used then.</li>
+<li><strong>Busiest replica, p95 over 168h: what the recommender reads</strong> — at each instant, what the usage signal read as of it: the percentile, over the window, of the busiest replica's usage, with the percentile and window of the identity's governing policy, which the label names. It is read through the same query the controller and the Simulator's <a href="../../concepts/recommendation-pipeline/#history">history</a> run, and it is the request before headroom, the OOM floor, the min/max clamp and autoscaler coordination shape it. Plotting it recomputes nothing: the recommended request and limit drawn are still the stored ones.</li>
+</ul>
+<p>The signal line sits above the average for three reasons: it follows the busiest replica, so load spread unevenly across replicas lifts it; it is a high percentile, so it tracks the top of the usage rather than its middle; and it covers a trailing window (a week by default), so it rises with a spike and stays up for a whole window after it, while the average falls back at once. One replica under a steady load shows the two close. Like the Simulator's history, the signal line holds at most about 300 points: the server coarsens its step to fit the range.</p>
+<p>A chart without a signal line says why in a short note at its top:</p>
+<ul>
+<li><strong>No policy governs the workload</strong> (Manual or Conflicted): there are no settings to read the signal under.</li>
+<li><strong>The policy keeps the request</strong> of that resource (<code>keepRequest</code>): no signal sizes it.</li>
+<li><strong>The policy excludes init containers</strong>: an init container is not sized.</li>
+<li><strong>Signal history unavailable</strong>, with the reason, when the history cannot be read (Prometheus timed out, or the range loads more samples than <code>--query.max-samples</code>). The OOM markers, read with it, are missing too; the average and the rest of the page still show.</li>
+</ul>
 <h3 id="policies-page">Policies Page<a class="headerlink" href="#policies-page" title="Permanent link">&para;</a></h3>
 <p>A stat strip shows <strong>Total policies</strong>, <strong>Workloads covered</strong>, <strong>Cluster CPU saved</strong> and <strong>Cluster Mem saved</strong>. The table lists each policy's Name, <strong>Status</strong> (Ready condition), <strong>Mode</strong> (per-kind update modes), <strong>Workloads</strong>, <strong>CPU saved</strong>, <strong>Mem saved</strong>, <strong>Blocked</strong> (Blocked identities) and <strong>Last applied</strong>. Click a row for the policy detail page.</p>
 <h3 id="policy-detail">Policy Detail<a class="headerlink" href="#policy-detail" title="Permanent link">&para;</a></h3>
@@ -2632,7 +2680,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <ul>
 <li>A <strong>Savings impact</strong> band — projected CPU and memory change, with a note when the outcome is <strong>Too young</strong> (the controller would not apply it yet).</li>
 <li>Per container: CPU/memory request and limit, current vs. recommended (<code>— removed —</code> under <code>noLimit</code>), and <strong>How this was computed</strong>: the Simulation's own <a href="../../concepts/recommendation-pipeline/#trace">trace</a>. A note above them names the window of live OOM kills the Simulation cannot see, as the server sends it.</li>
-<li>Charts with the sliding-window recommendation, historical request and current limit over usage.</li>
+<li><strong>Usage over time</strong> — per container, one CPU and one memory chart of the Simulation's <a href="../../concepts/recommendation-pipeline/#history">history</a>: at each instant of the chart range, the <strong>recommended request</strong> (green long-dashed) and <strong>recommended limit</strong> (green dotted, no line where the container would run without a limit) the full computation gives from what every signal read as of that instant, the OOM floor as it stood then included. Under them, the usage the signal read (the <strong>usage percentile of the busiest replica</strong> over the policy's window), the <strong>request</strong> and <strong>limit</strong> the pods ran with (amber; the current spec when Prometheus has no history of them) and, on memory charts, the <strong>OOM kills</strong> as red markers. Each chart's note says that every point is computed as of its instant; autoscaler coordination has no history, so every instant is coordinated with today's HPA or ScaledObject, and a coordinated Simulation's charts say so too. The containers' own limits, which <code>keepLimit</code> and <code>keepLimitRequestRatio</code> derive from, are also today's. A chart holds at most about 300 points: the server coarsens the step to fit the range, and the step the picker asks for is only the finest it gets. When the history cannot be read (Prometheus timed out, or the range loads more samples than <code>--query.max-samples</code>), the numbers above still show, and the charts give way to <strong>History unavailable</strong> with the reason.</li>
 </ul>
 <p>The simulator, the batch simulation and the controller build each identity's computation in one place (<code>recommender.Assemble</code>) and run one algorithm (<code>internal/recommender</code>): percentile over the busiest replica, OOM-aware memory floor, limits derived from the real containers, and <strong>autoscaler coordination</strong> when an HPA or KEDA ScaledObject targets one of the identity's members. A Simulation is the only place the dashboard computes a recommendation; what is applied is what the controller stored. It dates the identity as the controller does (its earliest member or its <code>WorkloadRecommendation</code>, whichever is older) and reports a Too young identity's numbers with its outcome instead of hiding them.</p>
 <p>When a container OOM'd in the last 24h, its simulated memory recommendation is floored at <code>max(kernel high-water peak, OOM-time cgroup limit × 1.20)</code>, exactly as the controller applies it (see <a href="../../concepts/recommendation-pipeline/">Recommendation pipeline</a>). Sibling containers that did not OOM keep their plain percentile.</p>
@@ -2651,7 +2699,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">  </span><span class="p">}</span>
 <a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="p">}</span>
 </code></pre></div>
-<p><code>window</code>/<code>step</code> (or <code>fromTs</code>/<code>toTs</code>) shape the charts only. <code>policy</code> names the Policy to start from; omitted, the identity's governing Policy. <code>override</code> is a <a href="https://datatracker.ietf.org/doc/html/rfc7386">JSON merge patch</a> of <code>resourcesConfigs</code>, <code>autoscalerCoordination</code> and <code>excludeInitContainers</code> onto that Policy's: a key replaces the Policy's, <code>null</code> removes it, and a limit strategy is changed by setting the old one to <code>false</code>. An override the Policy CRD would reject is a <code>400</code> whose <code>field</code> names the setting (e.g. <code>resourcesConfigs.memory.requests</code>); an unknown <code>policy</code> is a <code>404</code>. The response carries the <code>policy</code> it started from, the <code>effective</code> settings it ran with (override merged, every default explicit), the <code>outcome</code> (<code>Computed</code>, <code>TooYoung</code> or <code>NoData</code>), and per container the values and their <code>trace</code>, next to the usage, request and recommendation series. <code>liveOOMWindowSeconds</code> is how long a kill the controller's OOM watcher saw counts as recent (<code>recommender.LiveOOMWindow</code>): a kill that recent and not yet in Prometheus raises the controller's memory floor and not the Simulation's.</p>
+<p><code>window</code>/<code>step</code> (or <code>fromTs</code>/<code>toTs</code>) shape the charts only. <code>policy</code> names the Policy to start from; omitted, the identity's governing Policy. <code>override</code> is a <a href="https://datatracker.ietf.org/doc/html/rfc7386">JSON merge patch</a> of <code>resourcesConfigs</code>, <code>autoscalerCoordination</code> and <code>excludeInitContainers</code> onto that Policy's: a key replaces the Policy's, <code>null</code> removes it, and a limit strategy is changed by setting the old one to <code>false</code>. An override the Policy CRD would reject is a <code>400</code> whose <code>field</code> names the setting (e.g. <code>resourcesConfigs.memory.requests</code>); an unknown <code>policy</code> is a <code>404</code>. The response carries the <code>policy</code> it started from, the <code>effective</code> settings it ran with (override merged, every default explicit), the <code>outcome</code> (<code>Computed</code>, <code>TooYoung</code> or <code>NoData</code>), and per container the values and their <code>trace</code>. <code>history</code> holds the chart series: <code>stepSeconds</code>, the step the server chose for the range; per container and resource <code>usage</code>, <code>recommendedRequest</code>, <code>recommendedLimit</code>, <code>runningRequest</code> and <code>runningLimit</code>, each a list of <code>{timestamp, value}</code> in cores or bytes with no point where it has no value; and <code>oomKills</code>. A history that cannot be read leaves <code>history</code> out and says why in <code>historyError</code>; the response is still a <code>200</code>. <code>liveOOMWindowSeconds</code> is how long a kill the controller's OOM watcher saw counts as recent (<code>recommender.LiveOOMWindow</code>): a kill that recent and not yet in Prometheus raises the controller's memory floor and not the Simulation's.</p>
 <h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
 <h3 id="no-metrics-data-available">"No metrics data available"<a class="headerlink" href="#no-metrics-data-available" title="Permanent link">&para;</a></h3>
 <p>This message appears when Prometheus returns no time-series data for the workload. Common causes:</p>

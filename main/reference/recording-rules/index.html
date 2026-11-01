@@ -2616,7 +2616,7 @@
 </tr>
 <tr>
 <td><code>workload_max_pod_cpu:cores</code>, <code>workload_max_pod_memory:bytes</code></td>
-<td>Busiest-replica per-pod usage — the recommender's percentile input</td>
+<td>Busiest-replica per-pod usage — the recommender's percentile input, at an instant and over a Simulation's chart range</td>
 </tr>
 <tr>
 <td><code>container_*_requests_by_workload:*</code>, <code>container_*_limits_by_workload:*</code></td>
@@ -2653,7 +2653,7 @@
 </tbody>
 </table>
 <h2 id="signal-contracts">Signal contracts<a class="headerlink" href="#signal-contracts" title="Permanent link">&para;</a></h2>
-<p>Each <a href="../../concepts/recommendation-pipeline/#signals">recommendation signal</a> declares what it needs from Prometheus next to its query, as a <code>PromContract</code> (<code>internal/recommender</code>): the rules it reads, the labels they aggregate by, the evaluation interval its query cost assumes, and the raw series those rules compute from, through every rule they read in turn.</p>
+<p>Each <a href="../../concepts/recommendation-pipeline/#signals">recommendation signal</a> declares what it needs from Prometheus next to its query, as a <code>PromContract</code> (<code>internal/recommender</code>): the rules it reads, the labels they aggregate by, the evaluation interval its query cost assumes, the rules only its <a href="../../concepts/recommendation-pipeline/#history">history</a> read reads, and the raw series those rules compute from, through every rule they read in turn.</p>
 <table>
 <thead>
 <tr>
@@ -2661,6 +2661,7 @@
 <th>Rules it reads</th>
 <th>Aggregated by</th>
 <th>Interval</th>
+<th>History rules</th>
 <th>cAdvisor series</th>
 <th>kube-state-metrics series</th>
 </tr>
@@ -2671,6 +2672,7 @@
 <td><code>workload_max_pod_cpu:cores</code></td>
 <td><code>namespace</code>, <code>owner_kind</code>, <code>owner_name</code>, <code>container</code></td>
 <td>1m</td>
+<td>none</td>
 <td><code>container_cpu_usage_seconds_total</code></td>
 <td><code>kube_pod_owner</code>, <code>kube_job_owner</code>, <code>kube_replicaset_owner</code>, <code>kube_pod_annotations</code></td>
 </tr>
@@ -2679,6 +2681,7 @@
 <td><code>workload_max_pod_memory:bytes</code></td>
 <td>the same</td>
 <td>1m</td>
+<td>none</td>
 <td><code>container_memory_working_set_bytes</code></td>
 <td>the same four</td>
 </tr>
@@ -2687,6 +2690,7 @@
 <td><code>workload_oom_24h</code>, <code>container_peak_memory_24h:bytes</code>, <code>container_oom_limit_24h:bytes</code></td>
 <td>the same</td>
 <td>none assumed</td>
+<td><code>container_oom_kills</code></td>
 <td><code>container_memory_max_usage_bytes</code>, <code>container_memory_peak_working_set_bytes</code>, <code>container_memory_working_set_bytes</code>, <code>container_spec_memory_limit_bytes</code></td>
 <td><code>kube_pod_container_status_restarts_total</code>, <code>kube_pod_container_status_last_terminated_reason</code>, <code>kube_pod_container_status_terminated_reason</code>, <code>kube_pod_restart_policy</code> and the same four</td>
 </tr>
@@ -2694,11 +2698,12 @@
 </table>
 <ul>
 <li><strong>Labels.</strong> A query reads a whole shard of identities at once and attributes each series by these four labels. A series missing one is dropped; a rule keeping one more, such as <code>pod</code>, would hand a container several series, and the usage signals keep only one of them.</li>
+<li><strong>History rules.</strong> A rule only a signal's history read reads: the OOM floor's history counts, per step, the kills <a href="#k8s_sustaincontainer_oom_kills"><code>container_oom_kills</code></a> recorded, for the OOM markers of the Simulator and the workload detail page. The read sums it by the four labels, so it must keep them all; it keeps <code>pod</code> too.</li>
 <li><strong>Interval.</strong> The usage signals read their rule as a plain range vector, so its 1m interval is the percentile's sample resolution and what the shard sample budget counts. The OOM floor reads its rules as an instant vector, one sample per rule, whatever their interval.</li>
 <li><strong>Series.</strong> The four kube-state-metrics series shared by every signal are what <code>pod_workload</code> maps a pod to its identity from; <code>kube_pod_annotations</code> carries the owner-name override. The OOM floor's other four are what <a href="#k8s_sustaincontainer_oom_kills"><code>container_oom_kills</code></a> detects a kill from.</li>
 <li><strong>Per container instance.</strong> The OOM floor reads <code>container_spec_memory_limit_bytes</code> per container instance: a restarted container runs in a new cgroup, and <a href="#k8s_sustaincontainer_oom_kill_limitbytes"><code>container_oom_kill_limit:bytes</code></a> tells the instance a kill ended from the one replacing it only while each is a series of its own. cAdvisor names an instance in its <code>id</code> label (the cgroup path) and its <code>name</code> label (the runtime's container ID); the bundled scrape drops both from every metric to save series, and keeps the last segment of <code>id</code> as <code>cgroup</code> for this one metric.</li>
 </ul>
-<p><code>go test ./hack/signalcontract</code>, part of <code>make test</code>, checks the chart against every contract. Each rule a signal reads must be recorded in <code>prometheusRule.groups</code>, be one aggregation <code>by</code> exactly the declared labels over its whole expression, and evaluate at the declared interval. It and every rule it reads in turn, such as <code>container_oom_kills</code> or <code>pod_workload</code>, must be evaluated with expected samples by a promtool fixture in <code>charts/k8s-sustain/tests/promtool/</code> (run by <code>make helm-promtool</code>). Following the rules they read down to raw series, those series must be exactly the declared ones, and each must be kept by its exporter's keep-list in the bundled Prometheus: the <code>metric_relabel_configs</code> of <code>prometheus.scrapeConfigs.kubernetes-nodes-cadvisor</code>, or of the <code>kube-state-metrics</code> job in <code>prometheus.extraScrapeConfigs</code>. A series read per container instance must come out of the cAdvisor job's <code>metric_relabel_configs</code> as two series for two instances of one container: the test applies them to two such samples, and fails on an action it cannot apply. A signal that needs a series the chart does not keep yet, such as cAdvisor's CFS throttling counters, fails the test until the keep-list keeps it. Expressions are read textually, without the PromQL parser, so a rule a signal reads has to stay a single <code>&lt;aggregation&gt; by (…) (…)</code>.</p>
+<p><code>go test ./hack/signalcontract</code>, part of <code>make test</code>, checks the chart against every contract. Each rule a signal reads must be recorded in <code>prometheusRule.groups</code>, be one aggregation <code>by</code> exactly the declared labels over its whole expression, and evaluate at the declared interval. It and every rule it reads in turn, such as <code>container_oom_kills</code> or <code>pod_workload</code>, must be evaluated with expected samples by a promtool fixture in <code>charts/k8s-sustain/tests/promtool/</code> (run by <code>make helm-promtool</code>). Following the rules they read down to raw series, those series must be exactly the declared ones, and each must be kept by its exporter's keep-list in the bundled Prometheus: the <code>metric_relabel_configs</code> of <code>prometheus.scrapeConfigs.kubernetes-nodes-cadvisor</code>, or of the <code>kube-state-metrics</code> job in <code>prometheus.extraScrapeConfigs</code>. A series read per container instance must come out of the cAdvisor job's <code>metric_relabel_configs</code> as two series for two instances of one container: the test applies them to two such samples, and fails on an action it cannot apply. A signal that needs a series the chart does not keep yet, such as cAdvisor's CFS throttling counters, fails the test until the keep-list keeps it. Expressions are read textually, without the PromQL parser, so a rule a signal reads has to stay a single <code>&lt;aggregation&gt; by (…) (…)</code>. A history rule is held to less: it must be recorded, and a promtool fixture must evaluate it alone with expected samples that each carry the four labels, which <code>make helm-promtool</code> holds to the rule's real output.</p>
 <p>If you bring your own Prometheus, it must scrape every series in the table, and keep a label telling a container's instances apart on <code>container_spec_memory_limit_bytes</code>, such as cAdvisor's <code>id</code>, which kube-prometheus-stack keeps.</p>
 <h2 id="rules">Rules<a class="headerlink" href="#rules" title="Permanent link">&para;</a></h2>
 <h3 id="k8s_sustainpod_workload"><code>k8s_sustain:pod_workload</code><a class="headerlink" href="#k8s_sustainpod_workload" title="Permanent link">&para;</a></h3>
