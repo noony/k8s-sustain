@@ -54,7 +54,10 @@ type Handler struct {
 	Client        client.Client
 	RecommendOnly bool
 
-	ExcludedNamespaces []string
+	// Policies lists the Policies every admission decides with and holds the
+	// namespaces no Policy governs. Keep one for the process: it spares an
+	// admission recompiling the Policies it lists.
+	Policies *governance.PolicyLister
 
 	// stubMu guards every stub field below, including stubWG.Add and
 	// stubStopping: registering a goroutine and deciding no more may start must
@@ -70,9 +73,6 @@ type Handler struct {
 
 	stubStopping bool
 	stubWG       sync.WaitGroup
-
-	// policies spares an admission recompiling the Policies it lists.
-	policies governance.PolicyLister
 
 	// ownerAnnCache and ownerRefCache bound the per-admission owner Gets on
 	// clusters where a selector-less Policy covers every pod.

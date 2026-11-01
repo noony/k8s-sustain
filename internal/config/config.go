@@ -1,6 +1,8 @@
 // Package config centralizes all Viper-backed configuration for the k8s-sustain
-// operator. Each subcommand has a Bind*Flags function (called from init()) and a
-// corresponding typed struct returned by a Load* function (called at runtime).
+// operator. BindGlobalFlags binds the cluster-scope settings once, on the root
+// command; each subcommand has a Bind*Flags function (called from init()) for
+// its own flags and a corresponding typed struct returned by a Load* function
+// (called at runtime), which reads both.
 package config
 
 import (
@@ -61,11 +63,20 @@ func bindStringArray(flags *pflag.FlagSet, key, flagName, usage string) {
 	_ = viper.BindPFlag(key, flags.Lookup(flagName))
 }
 
-// BindGlobalFlags registers global persistent flags on the root command.
+// BindGlobalFlags registers the root command's persistent flags: the
+// cluster-scope settings every subcommand must read alike. Each is one flag,
+// one viper key and one env var, so no component can be configured apart from
+// the others; a subcommand that does not use one ignores it.
 func BindGlobalFlags(root *cobra.Command) {
-	root.PersistentFlags().StringVar(&cfgFile, "config", "", "config file")
-	bindBool(root.PersistentFlags(), "recommend-only", "recommend-only", false,
+	flags := root.PersistentFlags()
+	flags.StringVar(&cfgFile, "config", "", "config file")
+	bindBool(flags, "recommend-only", "recommend-only", false,
 		"Compute recommendations but never patch workloads or mutate pods (dry-run mode)")
+	bindStringSlice(flags, "excluded-namespaces", "excluded-namespaces",
+		"Namespaces no Policy governs, whatever they opt into: the controller never touches their workloads, the webhook never mutates their pods, the OOM watcher ignores their kills and the dashboard shows their workloads governed by none")
+	bindString(flags, "prometheus-address", "prometheus-address", "http://localhost:9090",
+		"Address of the Prometheus server the controller and the dashboard query")
+	bindPrometheusTransportFlags(flags)
 }
 
 var cfgFile string
@@ -102,10 +113,28 @@ var scheme = func() *runtime.Scheme {
 	return s
 }()
 
-// RecommendOnly returns true when the operator should only log recommendations
-// without applying any changes to workloads or pods.
-func RecommendOnly() bool {
-	return viper.GetBool("recommend-only")
+// ClusterScope is the cluster-scope settings every subcommand reads alike,
+// from the root command's persistent flags.
+type ClusterScope struct {
+	// RecommendOnly computes recommendations but applies none and mutates no
+	// pod.
+	RecommendOnly      bool
+	ExcludedNamespaces []string
+}
+
+func loadClusterScope() ClusterScope {
+	return ClusterScope{
+		RecommendOnly:      viper.GetBool("recommend-only"),
+		ExcludedNamespaces: getStringSlice("excluded-namespaces"),
+	}
+}
+
+// PrometheusConnection is the cluster-scope Prometheus connection the
+// controller and the dashboard query through. The webhook has none.
+type PrometheusConnection struct {
+	Address string
+	// Transport is the auth/TLS config handed to promclient.New.
+	Transport promclient.TransportConfig
 }
 
 // getStringSlice splits comma-separated env values manually: viper hands env
@@ -126,35 +155,28 @@ func getStringSlice(key string) []string {
 	return out
 }
 
-// bindPrometheusTransportFlags registers the Prometheus auth and TLS flags
-// under keyPrefix ("" for the controller, "dashboard." for the dashboard).
-//
-// The two subcommands need identical flags under DIFFERENT viper keys:
-// BindPFlag maps one key to exactly one pflag, so a shared flat key would leave
-// whichever subcommand registered last owning it and the other reading an unset
-// flagset. One registration function keeps the two sets from drifting.
-func bindPrometheusTransportFlags(flags *pflag.FlagSet, keyPrefix string) {
-	bindString(flags, keyPrefix+"prometheus-bearer-token", "prometheus-bearer-token", "",
+func bindPrometheusTransportFlags(flags *pflag.FlagSet) {
+	bindString(flags, "prometheus-bearer-token", "prometheus-bearer-token", "",
 		"Static bearer token sent as `Authorization: Bearer <token>` on every Prometheus request. Mutually exclusive with --prometheus-bearer-token-file; prefer the file form for Kubernetes service-account tokens, which rotate.")
-	bindString(flags, keyPrefix+"prometheus-bearer-token-file", "prometheus-bearer-token-file", "",
+	bindString(flags, "prometheus-bearer-token-file", "prometheus-bearer-token-file", "",
 		"Path to a file holding the Prometheus bearer token. Re-read on every request, so projected service-account tokens keep working across rotation.")
-	bindString(flags, keyPrefix+"prometheus-basic-auth-username", "prometheus-basic-auth-username", "",
+	bindString(flags, "prometheus-basic-auth-username", "prometheus-basic-auth-username", "",
 		"Username for HTTP basic auth against Prometheus. Required whenever a password or password file is set.")
-	bindString(flags, keyPrefix+"prometheus-basic-auth-password", "prometheus-basic-auth-password", "",
+	bindString(flags, "prometheus-basic-auth-password", "prometheus-basic-auth-password", "",
 		"Password for HTTP basic auth against Prometheus. Mutually exclusive with --prometheus-basic-auth-password-file.")
-	bindString(flags, keyPrefix+"prometheus-basic-auth-password-file", "prometheus-basic-auth-password-file", "",
+	bindString(flags, "prometheus-basic-auth-password-file", "prometheus-basic-auth-password-file", "",
 		"Path to a file holding the Prometheus basic-auth password. Re-read on every request.")
-	bindStringArray(flags, keyPrefix+"prometheus-headers", "prometheus-headers",
+	bindStringArray(flags, "prometheus-headers", "prometheus-headers",
 		"Extra HTTP header sent on every Prometheus request, as Key=Value (e.g. X-Scope-OrgID=tenant-a for a multi-tenant Thanos/Mimir/Cortex gateway). Repeat the flag for several headers; a value may contain commas. The K8SSUSTAIN_PROMETHEUS_HEADERS env var form is comma-separated instead, so values with commas must use the flag.")
-	bindString(flags, keyPrefix+"prometheus-tls-ca-file", "prometheus-tls-ca-file", "",
+	bindString(flags, "prometheus-tls-ca-file", "prometheus-tls-ca-file", "",
 		"PEM CA bundle used to verify the Prometheus server certificate. Appended to the system trust store rather than replacing it.")
-	bindString(flags, keyPrefix+"prometheus-tls-cert-file", "prometheus-tls-cert-file", "",
+	bindString(flags, "prometheus-tls-cert-file", "prometheus-tls-cert-file", "",
 		"Client certificate for mutual TLS to Prometheus. Must be set together with --prometheus-tls-key-file.")
-	bindString(flags, keyPrefix+"prometheus-tls-key-file", "prometheus-tls-key-file", "",
+	bindString(flags, "prometheus-tls-key-file", "prometheus-tls-key-file", "",
 		"Client private key for mutual TLS to Prometheus. Must be set together with --prometheus-tls-cert-file.")
-	bindString(flags, keyPrefix+"prometheus-tls-server-name", "prometheus-tls-server-name", "",
+	bindString(flags, "prometheus-tls-server-name", "prometheus-tls-server-name", "",
 		"Overrides the SNI / certificate hostname verified against the Prometheus server certificate.")
-	bindBool(flags, keyPrefix+"prometheus-tls-insecure-skip-verify", "prometheus-tls-insecure-skip-verify", false,
+	bindBool(flags, "prometheus-tls-insecure-skip-verify", "prometheus-tls-insecure-skip-verify", false,
 		"Disable verification of the Prometheus server certificate. Insecure: the connection can be intercepted. Logs a warning at startup.")
 }
 
@@ -180,28 +202,31 @@ func parseHeaders(entries []string) (map[string]string, error) {
 	return out, nil
 }
 
-// loadPrometheusTransport reads the Prometheus transport keys under keyPrefix.
-// Only the --prometheus-headers grammar can fail, and it is returned as an
-// error so no call site can start the process with headers silently missing —
-// i.e. querying the wrong tenant.
-func loadPrometheusTransport(keyPrefix string) (promclient.TransportConfig, error) {
-	headers, err := parseHeaders(getStringSlice(keyPrefix + "prometheus-headers"))
+// loadPrometheusConnection reads the Prometheus connection keys. Only the
+// --prometheus-headers grammar can fail, and it is returned as an error so no
+// call site can start the process with headers silently missing — i.e.
+// querying the wrong tenant.
+func loadPrometheusConnection() (PrometheusConnection, error) {
+	headers, err := parseHeaders(getStringSlice("prometheus-headers"))
 	if err != nil {
-		return promclient.TransportConfig{}, err
+		return PrometheusConnection{}, fmt.Errorf("invalid --prometheus-headers: %w", err)
 	}
-	return promclient.TransportConfig{
-		BearerToken:           viper.GetString(keyPrefix + "prometheus-bearer-token"),
-		BearerTokenFile:       viper.GetString(keyPrefix + "prometheus-bearer-token-file"),
-		BasicAuthUsername:     viper.GetString(keyPrefix + "prometheus-basic-auth-username"),
-		BasicAuthPassword:     viper.GetString(keyPrefix + "prometheus-basic-auth-password"),
-		BasicAuthPasswordFile: viper.GetString(keyPrefix + "prometheus-basic-auth-password-file"),
-		Headers:               headers,
-		TLS: promclient.TLSConfig{
-			CAFile:             viper.GetString(keyPrefix + "prometheus-tls-ca-file"),
-			CertFile:           viper.GetString(keyPrefix + "prometheus-tls-cert-file"),
-			KeyFile:            viper.GetString(keyPrefix + "prometheus-tls-key-file"),
-			ServerName:         viper.GetString(keyPrefix + "prometheus-tls-server-name"),
-			InsecureSkipVerify: viper.GetBool(keyPrefix + "prometheus-tls-insecure-skip-verify"),
+	return PrometheusConnection{
+		Address: viper.GetString("prometheus-address"),
+		Transport: promclient.TransportConfig{
+			BearerToken:           viper.GetString("prometheus-bearer-token"),
+			BearerTokenFile:       viper.GetString("prometheus-bearer-token-file"),
+			BasicAuthUsername:     viper.GetString("prometheus-basic-auth-username"),
+			BasicAuthPassword:     viper.GetString("prometheus-basic-auth-password"),
+			BasicAuthPasswordFile: viper.GetString("prometheus-basic-auth-password-file"),
+			Headers:               headers,
+			TLS: promclient.TLSConfig{
+				CAFile:             viper.GetString("prometheus-tls-ca-file"),
+				CertFile:           viper.GetString("prometheus-tls-cert-file"),
+				KeyFile:            viper.GetString("prometheus-tls-key-file"),
+				ServerName:         viper.GetString("prometheus-tls-server-name"),
+				InsecureSkipVerify: viper.GetBool("prometheus-tls-insecure-skip-verify"),
+			},
 		},
 	}, nil
 }
@@ -222,9 +247,7 @@ func BindControllerFlags(cmd *cobra.Command) {
 	bindBool(flags, "leader-elect", "leader-elect", false, "Enable leader election for high availability")
 	bindString(flags, "leader-election-id", "leader-election-id", "k8s-sustain-leader-election", "Lease name for leader election. Override when running multiple operator installs in the same cluster.")
 	bindString(flags, "log-level", "log-level", "info", "Log level (debug, info, warn, error)")
-	bindString(flags, "prometheus-address", "prometheus-address", "http://localhost:9090", "Address of the Prometheus server used for metric queries")
 	bindDuration(flags, "reconcile-interval", "reconcile-interval", 5*time.Minute, "How often policies are re-evaluated. A Recommendation stays servable for the larger of 30m and three intervals past its last computation, so a pass can run late without the webhook stopping injection. Must be greater than zero.")
-	bindStringSlice(flags, "excluded-namespaces", "excluded-namespaces", "Namespaces the reconciler should never touch")
 	bindInt(flags, "workload-concurrency-limit", "workload-concurrency-limit", 5, "Maximum number of workloads processed in parallel per reconcile cycle")
 	bindInt(flags, "policy-concurrency-limit", "policy-concurrency-limit", 10, "Maximum number of Policy objects reconciled in parallel")
 	bindInt(flags, "prometheus-max-inflight", "prometheus-max-inflight", 8,
@@ -235,28 +258,24 @@ func BindControllerFlags(cmd *cobra.Command) {
 		"How long a Departed identity's WorkloadRecommendation (ephemeral bare pods, deleted or terminal Jobs) is kept and its recommendation served, past its last computation. Also decides whether a RECURRING ephemeral identity is rightsized at admission on its next run: the webhook's only recommendation source is this object, so an identity whose gap between runs exceeds this window cold-starts every time. Set it above the longest expected inter-run gap (the 7d default covers weekly batch). It also bounds how long a Conflicted identity's frozen recommendation is kept and served. The dashboard shows retained entries as Departed workloads. Must be greater than zero.")
 	bindInt(flags, "query-shard-max-samples", "query-shard-max-samples", DefaultQueryShardMaxSamples,
 		"Projected Prometheus sample budget (containers x samples per container, summed across a shard's workloads: window-minutes for the CPU and memory queries, one per rule for the OOM query) a single batched shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own --query.max-samples (default 50,000,000): that server-side limit REJECTS an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default here leaves a 5x margin.")
-	bindPrometheusTransportFlags(flags, "")
 }
 
 // ControllerConfig holds resolved configuration for the controller.
 type ControllerConfig struct {
+	ClusterScope
+	Prometheus                PrometheusConnection
 	MetricsBindAddress        string
 	HealthProbeBindAddress    string
 	LeaderElect               bool
 	LeaderElectionID          string
 	LogLevel                  string
-	PrometheusAddress         string
 	ReconcileInterval         time.Duration
-	ExcludedNamespaces        []string
 	WorkloadConcurrencyLimit  int
 	PolicyConcurrencyLimit    int
 	PrometheusMaxInflight     int
-	RecommendOnly             bool
 	RecycleReplacementTimeout time.Duration
 	RecommendationRetention   time.Duration
 	QueryShardMaxSamples      int
-	// PrometheusTransport is the auth/TLS config handed to promclient.New.
-	PrometheusTransport promclient.TransportConfig
 }
 
 // LoadControllerConfig reads the current Viper state and returns a
@@ -265,9 +284,9 @@ type ControllerConfig struct {
 // controller stamps every Recommendation servable for a window derived from
 // them, so either would stop the webhook injecting anything.
 func LoadControllerConfig() (ControllerConfig, error) {
-	transport, err := loadPrometheusTransport("")
+	prometheus, err := loadPrometheusConnection()
 	if err != nil {
-		return ControllerConfig{}, fmt.Errorf("invalid --prometheus-headers: %w", err)
+		return ControllerConfig{}, err
 	}
 	if d := viper.GetDuration("reconcile-interval"); d <= 0 {
 		return ControllerConfig{}, fmt.Errorf("invalid --reconcile-interval %s: must be greater than zero", d)
@@ -277,22 +296,20 @@ func LoadControllerConfig() (ControllerConfig, error) {
 			"it is how long a Departed or Conflicted identity's Recommendation is served and kept", d)
 	}
 	return ControllerConfig{
+		ClusterScope:              loadClusterScope(),
+		Prometheus:                prometheus,
 		MetricsBindAddress:        viper.GetString("metrics-bind-address"),
 		HealthProbeBindAddress:    viper.GetString("health-probe-bind-address"),
 		LeaderElect:               viper.GetBool("leader-elect"),
 		LeaderElectionID:          viper.GetString("leader-election-id"),
 		LogLevel:                  viper.GetString("log-level"),
-		PrometheusAddress:         viper.GetString("prometheus-address"),
 		ReconcileInterval:         viper.GetDuration("reconcile-interval"),
-		ExcludedNamespaces:        getStringSlice("excluded-namespaces"),
 		WorkloadConcurrencyLimit:  viper.GetInt("workload-concurrency-limit"),
 		PolicyConcurrencyLimit:    viper.GetInt("policy-concurrency-limit"),
 		PrometheusMaxInflight:     viper.GetInt("prometheus-max-inflight"),
-		RecommendOnly:             RecommendOnly(),
 		RecycleReplacementTimeout: viper.GetDuration("recycle-replacement-timeout"),
 		RecommendationRetention:   viper.GetDuration("recommendation-retention"),
 		QueryShardMaxSamples:      viper.GetInt("query-shard-max-samples"),
-		PrometheusTransport:       transport,
 	}, nil
 }
 
@@ -303,17 +320,15 @@ func BindWebhookFlags(cmd *cobra.Command) {
 	bindString(flags, "webhook.tls-key-file", "tls-key-file", "/tls/tls.key", "Path to TLS private key file")
 	bindInt(flags, "webhook.port", "port", 9443, "Port the webhook server listens on")
 	bindString(flags, "webhook.log-level", "log-level", "info", "Log level (debug, info, warn, error)")
-	bindStringSlice(flags, "webhook.excluded-namespaces", "excluded-namespaces", "Namespaces the webhook should never mutate (mirrors the controller flag)")
 }
 
 // WebhookConfig holds resolved configuration for the webhook server.
 type WebhookConfig struct {
-	TLSCertFile        string
-	TLSKeyFile         string
-	Port               int
-	LogLevel           string
-	RecommendOnly      bool
-	ExcludedNamespaces []string
+	ClusterScope
+	TLSCertFile string
+	TLSKeyFile  string
+	Port        int
+	LogLevel    string
 }
 
 // LoadWebhookConfig reads the current Viper state and returns a WebhookConfig.
@@ -321,12 +336,11 @@ type WebhookConfig struct {
 // keys (viper.Sub("webhook") returns nil), hence the explicit Get calls.
 func LoadWebhookConfig() WebhookConfig {
 	return WebhookConfig{
-		TLSCertFile:        viper.GetString("webhook.tls-cert-file"),
-		TLSKeyFile:         viper.GetString("webhook.tls-key-file"),
-		Port:               viper.GetInt("webhook.port"),
-		LogLevel:           viper.GetString("webhook.log-level"),
-		RecommendOnly:      RecommendOnly(),
-		ExcludedNamespaces: getStringSlice("webhook.excluded-namespaces"),
+		ClusterScope: loadClusterScope(),
+		TLSCertFile:  viper.GetString("webhook.tls-cert-file"),
+		TLSKeyFile:   viper.GetString("webhook.tls-key-file"),
+		Port:         viper.GetInt("webhook.port"),
+		LogLevel:     viper.GetString("webhook.log-level"),
 	}
 }
 
@@ -334,38 +348,32 @@ func LoadWebhookConfig() WebhookConfig {
 func BindDashboardFlags(cmd *cobra.Command) {
 	flags := cmd.Flags()
 	bindString(flags, "dashboard.bind-address", "bind-address", ":8090", "Address the dashboard server listens on")
-	bindString(flags, "dashboard.prometheus-address", "prometheus-address", "http://localhost:9090", "Prometheus server address")
 	bindString(flags, "dashboard.log-level", "log-level", "info", "Log level (debug, info, warn, error)")
 	bindStringSlice(flags, "dashboard.cors-allowed-origins", "cors-allowed-origins", "Allowed CORS origins (e.g. http://localhost:3000). Empty (default) means same-origin only. Use * to allow all.")
-	bindStringSlice(flags, "dashboard.excluded-namespaces", "excluded-namespaces", "Namespaces the controller/webhook never manage (mirrors their --excluded-namespaces flag). The dashboard uses this to keep its policy-scoped workload views consistent with what the controller and webhook actually manage.")
-	bindPrometheusTransportFlags(flags, "dashboard.")
 }
 
 // DashboardConfig holds resolved configuration for the dashboard server.
 type DashboardConfig struct {
+	ClusterScope
+	Prometheus         PrometheusConnection
 	BindAddress        string
-	PrometheusAddress  string
 	LogLevel           string
 	CORSAllowedOrigins []string
-	ExcludedNamespaces []string
-	// PrometheusTransport is the auth/TLS config handed to promclient.New.
-	PrometheusTransport promclient.TransportConfig
 }
 
 // LoadDashboardConfig reads the current Viper state and returns a
 // DashboardConfig. It fails only on a malformed --prometheus-headers entry.
 // See LoadWebhookConfig for why we avoid viper.UnmarshalKey here.
 func LoadDashboardConfig() (DashboardConfig, error) {
-	transport, err := loadPrometheusTransport("dashboard.")
+	prometheus, err := loadPrometheusConnection()
 	if err != nil {
-		return DashboardConfig{}, fmt.Errorf("invalid --prometheus-headers: %w", err)
+		return DashboardConfig{}, err
 	}
 	return DashboardConfig{
-		BindAddress:         viper.GetString("dashboard.bind-address"),
-		PrometheusAddress:   viper.GetString("dashboard.prometheus-address"),
-		LogLevel:            viper.GetString("dashboard.log-level"),
-		CORSAllowedOrigins:  getStringSlice("dashboard.cors-allowed-origins"),
-		ExcludedNamespaces:  getStringSlice("dashboard.excluded-namespaces"),
-		PrometheusTransport: transport,
+		ClusterScope:       loadClusterScope(),
+		Prometheus:         prometheus,
+		BindAddress:        viper.GetString("dashboard.bind-address"),
+		LogLevel:           viper.GetString("dashboard.log-level"),
+		CORSAllowedOrigins: getStringSlice("dashboard.cors-allowed-origins"),
 	}, nil
 }

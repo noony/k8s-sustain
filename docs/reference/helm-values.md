@@ -13,8 +13,14 @@
 | `nameOverride` | `""` | Override the chart name |
 | `fullnameOverride` | `""` | Override the full release name |
 | `recommendOnly` | `false` | Compute recommendations without recycling or mutating pods (dry-run mode) |
-| `prometheusAddress` | `""` | Prometheus server URL, shared by all components. Leave empty to auto-detect the bundled subchart service. |
-| `excludedNamespaces` | `[]` | Extra namespaces to exclude from k8s-sustain entirely — the controller never recycles pods there and the webhook never mutates them (the release namespace, `kube-system`, and `kube-public` are always excluded) |
+| `prometheusAddress` | `""` | Prometheus server URL, rendered into the controller and the dashboard (the webhook never queries Prometheus). Leave empty to auto-detect the bundled subchart service. |
+| `excludedNamespaces` | `[]` | Extra namespaces no Policy governs, whatever they opt into: the controller never touches their workloads, the webhook never mutates their pods, the dashboard shows them governed by none. The release namespace, `kube-system` and `kube-public` are always excluded. One list renders every component's `--excluded-namespaces` and the `MutatingWebhookConfiguration`'s `namespaceSelector`. |
+
+`recommendOnly`, `excludedNamespaces`, `prometheusAddress` and
+[`prometheusAuth`](#prometheus-authentication) are the cluster-scope settings:
+the chart renders each, from its one value, identically into every component
+that reads it, so the controller, the webhook and the dashboard always agree on
+them.
 
 ---
 
@@ -68,9 +74,8 @@ Flag semantics (rotation, conflicts, startup validation) are in the [CLI referen
 - **A secret-backed file always wins** over its inline counterpart. Setting
   both is not an error; the inline value simply is not rendered.
 - **Inline values become environment variables**, not arguments — so they stay
-  out of the container's `argv` — with the per-component prefix the binary
-  expects: `K8SSUSTAIN_PROMETHEUS_*` on the controller,
-  `K8SSUSTAIN_DASHBOARD_PROMETHEUS_*` on the dashboard.
+  out of the container's `argv` — the same `K8SSUSTAIN_PROMETHEUS_*` variables
+  on the controller and the dashboard.
 - Naming a `*Key` without the matching `existingSecret` renders **nothing** —
   no flag, no volume, no mount.
 - **A `*File` value is a raw path, not a source the chart creates.** It renders
@@ -107,6 +112,8 @@ Flag semantics (rotation, conflicts, startup validation) are in the [CLI referen
 ---
 
 ## Controller
+
+The duration values (`reconcileInterval`, `recycleReplacementTimeout`, `recommendationRetention`) take any Go duration the binary's flags parse: a sequence of decimal numbers, each with an optional fraction and a unit (`ns`, `us`, `ms`, `s`, `m`, `h`), such as `90s`, `1.5h` or `1h30m`. There is no day unit: write a week as `168h`.
 
 | Value | Default | Description |
 |-------|---------|-------------|
@@ -269,7 +276,7 @@ The dashboard has no authentication; expose it only behind something that adds i
 | `httpRoute.annotations` | `{}` | HTTPRoute annotations |
 | `httpRoute.parentRefs` | `gateway` / `http` | Gateways the route attaches to |
 | `httpRoute.hostnames` | `[dashboard.local]` | Hostnames matched |
-| `httpRoute.rules` | `PathPrefix /` | Match rules; each is routed to the dashboard Service port |
+| `httpRoute.rules` | `PathPrefix` match on `/` | Match rules; each is routed to the dashboard Service port |
 
 ---
 

@@ -185,9 +185,9 @@ go run main.go start \
   --log-level=debug
 ```
 
-The flag names are identical on `go run main.go dashboard`; the environment
-variables are not — see
-[Environment variables — the prefixes differ per subcommand](guides/authenticated-prometheus.md#environment-variables-the-prefixes-differ-per-subcommand).
+The Prometheus flags are global, so `go run main.go dashboard` takes the same
+ones, and reads the same environment variables — see
+[Environment variables](guides/authenticated-prometheus.md#environment-variables).
 
 ### Start the webhook
 
@@ -728,6 +728,38 @@ Implementation notes for maintainers. Behaviour users can observe is
 documented in the guides and references; this section explains why the code
 is shaped the way it is.
 
+### Cluster-scope settings
+
+The settings every component must read alike — `--recommend-only`,
+`--excluded-namespaces` and the Prometheus connection (`--prometheus-address`
+and the transport flags) — are root persistent flags, bound once by
+`config.BindGlobalFlags` to one viper key and one environment variable each,
+and loaded once into one type each: `config.ClusterScope` (recommend-only,
+excluded namespaces), embedded in every subcommand's config, and
+`config.PrometheusConnection` (address, transport), held by the controller's
+and the dashboard's. A subcommand that has no use for one ignores it: the
+webhook accepts the Prometheus flags, and its config has no connection. A new
+setting the components must agree on goes there, never in a subcommand's
+`Bind*Flags`, where its key would be the subcommand's own.
+
+The chart renders them through one helper, `k8s-sustain.clusterScopeArgs` in
+`_helpers.tpl`, which every Deployment includes; the Prometheus connection only
+for a component that queries Prometheus. `k8s-sustain.excludedNamespaces` is
+the one list (the release namespace, `kube-system`, `kube-public`, then
+`excludedNamespaces`) behind every `--excluded-namespaces` and the webhook's
+`namespaceSelector`. In the binary, each reader holds the excluded namespaces
+in its `governance.PolicyLister` (see [Governance](#governance)).
+
+`hack/docscheck` guards the flags against `docs/reference/cli.md`: each command
+has a row for every flag it registers and none for one it does not (a root
+persistent flag is documented once, under Global flags), with the flag's
+default. It also reads every flag the chart renders straight from a value: the
+value's schema must accept the flag's default, and a value rendered only when
+set (`with`, `if`) must default to the flag's default, since leaving it unset
+falls through to the binary's. Helm value names come from `values.yaml` and its
+schema, and a single backticked default in `docs/reference/helm-values.md` must
+be the one `values.yaml` holds.
+
 ### Prometheus transport
 
 `internal/prometheus.New(addr, opts...)` takes functional options. The
@@ -764,9 +796,9 @@ Before touching `internal/prometheus/transport.go`:
 - `--prometheus-headers` is a pflag **StringArray** (one element per flag
   occurrence, no CSV splitting); the env-var path (`getStringSlice`) still
   splits on commas.
-- A new transport flag goes in `bindPrometheusTransportFlags` (called with `""`
-  for the controller and `"dashboard."` for the dashboard, which keeps the two
-  flag sets from drifting) and `loadPrometheusTransport` in
+- A new transport flag goes in `bindPrometheusTransportFlags` (registered once,
+  as a root persistent flag, by `BindGlobalFlags`, so the controller and the
+  dashboard read one key and one env var) and `loadPrometheusConnection` in
   `internal/config/config.go`, plus the field on `promclient.TransportConfig`.
   Mirror it in `charts/k8s-sustain/templates/_helpers.tpl`
   (`k8s-sustain.prometheusAuthArgs` / `…Env` / `…AuthSecretVolumes`),
@@ -775,7 +807,7 @@ Before touching `internal/prometheus/transport.go`:
 
 ### Governance
 
-`internal/governance` decides, for one pod template or pod, the identity it reports into, the Policy it opts into and at which level, and the governing Policy or why there is none. Its interface is one call, `governance.Decide(ctx, subject, reader)`. A subject is a workload member's pod template (`PodTemplate`), a pod (`Pod`: the webhook's, the OOM watcher's, the inventory's bare pods) or a Departed identity (`Departed`, governed by the Policy its `WorkloadRecommendation` names; it has no labels to match, so its namespace is checked and its Policy's selector must parse, as for a live member). The identity is a `promclient.WorkloadIdentity`, the key the inventory, the OOM cache, the WorkloadRecommendation and the recording rules all use, and a governing decision carries the mode the Policy manages the identity's kind in. The `Reader` port supplies what the subject does not carry: the Policies (a `governance.Policies`: every Policy with its label selector compiled, and the excluded namespaces), a pod's owner, a workload's own annotations and a Namespace's. Each caller adapts it to its own reads: the inventory serves the Policies it listed and memoised Namespaces, the webhook lists Policies from its informer cache and reads the owner chain through its TTL caches, the OOM watcher reads through the manager's client and leaves a kill unresolved when the owner lookup fails. All three list Policies through `governance.PolicyLister`, which compiles a Policy's selector once per version of it (UID and resourceVersion), and every caller keeps one lister for the process, so an unchanged Policy set is never recompiled: the webhook and the OOM watcher, which list on every admission and every kill, and the controller and the dashboard, which hand theirs to every snapshot they take (`inventory.Basis`). The lister lists without deep copies (`client.UnsafeDisableDeepCopy`), so a Policy it returns shares its fields with the informer cache's object and with concurrent decisions: governance and every caller of `Decide` treat it as read-only.
+`internal/governance` decides, for one pod template or pod, the identity it reports into, the Policy it opts into and at which level, and the governing Policy or why there is none. Its interface is one call, `governance.Decide(ctx, subject, reader)`. A subject is a workload member's pod template (`PodTemplate`), a pod (`Pod`: the webhook's, the OOM watcher's, the inventory's bare pods) or a Departed identity (`Departed`, governed by the Policy its `WorkloadRecommendation` names; it has no labels to match, so its namespace is checked and its Policy's selector must parse, as for a live member). The identity is a `promclient.WorkloadIdentity`, the key the inventory, the OOM cache, the WorkloadRecommendation and the recording rules all use, and a governing decision carries the mode the Policy manages the identity's kind in. The `Reader` port supplies what the subject does not carry: the Policies (a `governance.Policies`: every Policy with its label selector compiled, and the excluded namespaces), a pod's owner, a workload's own annotations and a Namespace's. Each caller adapts it to its own reads: the inventory serves the Policies it listed and memoised Namespaces, the webhook lists Policies from its informer cache and reads the owner chain through its TTL caches, the OOM watcher reads through the manager's client and leaves a kill unresolved when the owner lookup fails. All three list Policies through `governance.PolicyLister`, which compiles a Policy's selector once per version of it (UID and resourceVersion) and holds the excluded namespaces, given once at construction (`governance.NewPolicyLister(cfg.ExcludedNamespaces)` in each subcommand): no reader passes them on a call. Every caller keeps one lister for the process, so an unchanged Policy set is never recompiled: the webhook and the OOM watcher, which list on every admission and every kill, and the controller and the dashboard, which hand theirs to every snapshot they take (`inventory.Basis`). Only `NewPolicyLister` builds a lister that lists: a nil or zero-value one would silently exclude no namespace, so its `List` fails (`governance.ErrNoPolicyLister`), and so does a snapshot whose `inventory.Basis` holds none. The lister lists without deep copies (`client.UnsafeDisableDeepCopy`), so a Policy it returns shares its fields with the informer cache's object and with concurrent decisions: governance and every caller of `Decide` treat it as read-only.
 
 Behind it: the opt-in walk (pod template, then workload, then Namespace; an opt-out or a non-empty policy decides, an empty value falls through), each level read only when every more specific one is silent and a pod's owner only when the walk needs it; the pre-gate, which before the first read checks that some Policy accepts the subject's namespace and labels by the same rule as the full decision (a Policy whose selector does not parse counts as accepting, so opting into it is refused `selector-invalid` at every level rather than `no-policy-selects` at some); the Policy's consent (it exists, the namespace is neither excluded nor unselected, the label selector is valid and matches the pod template's labels, the kind is managed); and the owner-name override, applied there and nowhere else.
 
@@ -785,7 +817,7 @@ A governance rule changes in this module and its contract table (`internal/gover
 
 #### Identity inventory
 
-`internal/inventory` is the one place workload objects become identities. Its interface is one call, `inventory.Take(ctx, reader, Options)`, plus `inventory.TakeForPolicy(ctx, reader, policy, Basis)`, which narrows it to what a Policy can govern (its selector's namespaces and the kinds it manages, reading nothing for a Policy that manages none). A `Basis` is what a reader decides and dates every snapshot with, its excluded namespaces, its Policy lister and its clock, the reader's own: a snapshot without a clock fails rather than fall back on the wall clock; `Options` is a `Basis` and the namespaces and kinds that narrow the snapshot, which `TakeForPolicy` takes from the Policy. Both return a `Snapshot`, dated `TakenAt` by the Basis's clock when it began reading, of `Identity` values (key, live members each with the Policy governing it, union containers, `Since`, governing Policy or `Conflicted`, stored `WorkloadRecommendation`). Behind it: listing every kind in scope (a kind the cluster does not serve, such as Argo Rollouts without its CRD, has no identities rather than failing the snapshot), skipping CronJob-owned Jobs and finished standalone Jobs, owner-name and bare-pod grouping, each member's [governance decision](#governance) (`governance.Decide` on its pod template, reading a Namespace only when the object's own annotations leave it undecided), the Conflicted rule, and attaching each stored `WorkloadRecommendation` (which is what makes a Departed identity).
+`internal/inventory` is the one place workload objects become identities. Its interface is one call, `inventory.Take(ctx, reader, Options)`, plus `inventory.TakeForPolicy(ctx, reader, policy, Basis)`, which narrows it to what a Policy can govern (its selector's namespaces and the kinds it manages, reading nothing for a Policy that manages none). A `Basis` is what a reader decides and dates every snapshot with, its Policy lister and its clock, the reader's own: a snapshot missing either fails, rather than exclude no namespace or fall back on the wall clock; `Options` is a `Basis` and the namespaces and kinds that narrow the snapshot, which `TakeForPolicy` takes from the Policy. Both return a `Snapshot`, dated `TakenAt` by the Basis's clock when it began reading, of `Identity` values (key, live members each with the Policy governing it, union containers, `Since`, governing Policy or `Conflicted`, stored `WorkloadRecommendation`). Behind it: listing every kind in scope (a kind the cluster does not serve, such as Argo Rollouts without its CRD, has no identities rather than failing the snapshot), skipping CronJob-owned Jobs and finished standalone Jobs, owner-name and bare-pod grouping, each member's [governance decision](#governance) (`governance.Decide` on its pod template, reading a Namespace only when the object's own annotations leave it undecided), the Conflicted rule, and attaching each stored `WorkloadRecommendation` (which is what makes a Departed identity).
 
 The controller takes one `TakeForPolicy` snapshot per reconcile through its informer cache, dated by `PolicyReconciler.Clock`, and works on `Snapshot.GovernedBy(policy)`. Every member of an identity shares its namespace and kind, so the narrowing never splits one, and every identity in it has a kind the Policy manages. The dashboard takes snapshots through its uncached client, dated by `Server.Clock`, narrowed to what each view shows: one namespace and kind for a detail page, `TakeForPolicy` for a Policy's list, everything for `/api/workloads`.
 

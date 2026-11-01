@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
@@ -105,6 +106,7 @@ func reconcilerOn(c client.Client, scheme *runtime.Scheme, inputs recommender.In
 		Scheme:                   scheme,
 		Inputs:                   inputs,
 		Clock:                    clock.RealClock{},
+		Policies:                 governance.NewPolicyLister(nil),
 		ReconcileInterval:        time.Hour,
 		WorkloadConcurrencyLimit: 1,
 		InPlaceUpdates:           inPlace,
@@ -284,7 +286,7 @@ func barePodTarget(t *testing.T, ns, ownerName string, pods ...*corev1.Pod) *wor
 		objs = append(objs, p.DeepCopy())
 	}
 	c := fake.NewClientBuilder().WithScheme(testFullScheme(t)).WithObjects(objs...).Build()
-	snap, err := inventory.Take(context.Background(), c, inventory.Options{Basis: inventory.Basis{Clock: clock.RealClock{}}})
+	snap, err := inventory.Take(context.Background(), c, inventory.Options{Basis: inventory.Basis{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}}})
 	if err != nil {
 		t.Fatalf("inventory: %v", err)
 	}

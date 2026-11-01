@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -142,7 +143,7 @@ func ownerNameGroupServer(t *testing.T, health memHealthSignals) *Server {
 		deploymentWithOwnerName("prod", "web-green", "web", base.Add(time.Hour)),
 	}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
-	return &Server{Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: health}
+	return &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: health}
 }
 
 // Owner-name groups are listed under their identity, so their health must be

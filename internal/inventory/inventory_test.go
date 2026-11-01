@@ -45,13 +45,18 @@ func scheme(t *testing.T) *runtime.Scheme {
 
 // basis is what the tests' snapshots are taken with: dated at base.
 func basis() inventory.Basis {
-	return inventory.Basis{Clock: clocktesting.NewFakePassiveClock(base)}
+	return inventory.Basis{Policies: governance.NewPolicyLister(nil), Clock: clocktesting.NewFakePassiveClock(base)}
 }
 
-// take snapshots objs on opts with basis's clock.
+// take snapshots objs on opts with basis's clock and, unless opts holds a
+// lister, its lister.
 func take(t *testing.T, opts inventory.Options, objs ...client.Object) *inventory.Snapshot {
 	t.Helper()
-	opts.Clock = basis().Clock
+	b := basis()
+	opts.Clock = b.Clock
+	if opts.Policies == nil {
+		opts.Policies = b.Policies
+	}
 	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(objs...).Build()
 	snap, err := inventory.Take(context.Background(), c, opts)
 	if err != nil {
@@ -332,7 +337,7 @@ func TestMembersAreGovernedThroughTheirPodTemplate(t *testing.T) {
 	workloadLevel.Annotations = optIn("p")
 	team := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team", Annotations: optIn("p")}}
 
-	snap := take(t, inventory.Options{Basis: inventory.Basis{ExcludedNamespaces: []string{"kube-system"}}},
+	snap := take(t, inventory.Options{Basis: inventory.Basis{Policies: governance.NewPolicyLister([]string{"kube-system"})}},
 		everyKind("p"), selective, team, templateLabelled, objectLabelled, workloadLevel,
 		deployment("team", "namespace-level", base, nil),
 		deployment("kube-system", "excluded", base, optIn("p")),
@@ -396,7 +401,7 @@ func TestTakeDecidesWithTheListerItIsHanded(t *testing.T) {
 	policyOfWeb := func(opts inventory.Options, tier string) string {
 		return lookup(t, take(t, opts, objs(tier)...), key("a", "Deployment", "web")).Policy
 	}
-	lister := &governance.PolicyLister{}
+	lister := governance.NewPolicyLister(nil)
 
 	if got := policyOfWeb(inventory.Options{Basis: inventory.Basis{Policies: lister}}, "web"); got != "p" {
 		t.Fatalf("first snapshot: policy = %q, want p", got)
@@ -404,7 +409,7 @@ func TestTakeDecidesWithTheListerItIsHanded(t *testing.T) {
 	if got := policyOfWeb(inventory.Options{Basis: inventory.Basis{Policies: lister}}, "api"); got != "p" {
 		t.Errorf("with the lister that compiled this version: policy = %q, want p", got)
 	}
-	if got := policyOfWeb(inventory.Options{}, "api"); got != "" {
+	if got := policyOfWeb(inventory.Options{Basis: inventory.Basis{Policies: governance.NewPolicyLister(nil)}}, "api"); got != "" {
 		t.Errorf("with a lister of its own: policy = %q, want none", got)
 	}
 }
@@ -427,7 +432,7 @@ func TestTakeForPolicyReadsWhatThePolicyCanGovern(t *testing.T) {
 	).Build()
 
 	takenAt := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
-	b := inventory.Basis{ExcludedNamespaces: []string{"excluded"}, Clock: clocktesting.NewFakePassiveClock(takenAt)}
+	b := inventory.Basis{Policies: governance.NewPolicyLister([]string{"excluded"}), Clock: clocktesting.NewFakePassiveClock(takenAt)}
 	snap, err := inventory.TakeForPolicy(context.Background(), c, p, b)
 	if err != nil {
 		t.Fatalf("TakeForPolicy: %v", err)
@@ -522,15 +527,26 @@ func TestNamespaceReadOnlyWhenUndecided(t *testing.T) {
 	}
 }
 
-// A snapshot is dated by its reader's clock, never a fallback of its own: a
-// Basis without one fails, even for a Policy that reads nothing.
-func TestABasisWithoutAClockFails(t *testing.T) {
+// A snapshot decides with its reader's lister and is dated by its reader's
+// clock, never a fallback of its own: a Basis missing either fails, even for a
+// Policy that reads nothing, and so does a lister NewPolicyLister did not
+// build, which would exclude no namespace.
+func TestAnIncompleteBasisFails(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme(t)).WithObjects(everyKind("p")).Build()
-	if _, err := inventory.Take(context.Background(), c, inventory.Options{}); err == nil {
-		t.Error("Take without a clock succeeded")
-	}
 	none := managing("none", sustainv1alpha1.UpdateTypes{})
-	if _, err := inventory.TakeForPolicy(context.Background(), c, none, inventory.Basis{}); err == nil {
-		t.Error("TakeForPolicy without a clock succeeded")
+	for name, b := range map[string]inventory.Basis{
+		"no clock":  {Policies: governance.NewPolicyLister(nil)},
+		"no lister": {Clock: basis().Clock},
+	} {
+		if _, err := inventory.Take(context.Background(), c, inventory.Options{Basis: b}); err == nil {
+			t.Errorf("Take with %s succeeded", name)
+		}
+		if _, err := inventory.TakeForPolicy(context.Background(), c, none, b); err == nil {
+			t.Errorf("TakeForPolicy with %s succeeded", name)
+		}
+	}
+	zero := inventory.Basis{Policies: &governance.PolicyLister{}, Clock: basis().Clock}
+	if _, err := inventory.Take(context.Background(), c, inventory.Options{Basis: zero}); !errors.Is(err, governance.ErrNoPolicyLister) {
+		t.Errorf("Take with a zero-value lister: err = %v, want %v", err, governance.ErrNoPolicyLister)
 	}
 }

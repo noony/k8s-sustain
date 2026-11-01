@@ -20,6 +20,7 @@ import (
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/autoscaler"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/inventory"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
@@ -75,7 +76,7 @@ func deploymentPolicy(name string) *sustainv1alpha1.Policy {
 func identityServer(t *testing.T, health memHealthSignals, objs ...client.Object) *Server {
 	t.Helper()
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
-	return &Server{Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: health, Inputs: recommendertest.NewStaticInputs()}
+	return &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Health: health, Inputs: recommendertest.NewStaticInputs()}
 }
 
 type listedRow struct {
@@ -407,7 +408,7 @@ func TestWorkloadDetailReadsEventsOfEveryMember(t *testing.T) {
 	} {
 		b = index(b)
 	}
-	srv := &Server{Clock: clock.RealClock{}, K8sClient: b.Build(), Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
+	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: b.Build(), Logger: testLogger(t), PromClient: &fakePromClient{}, Health: memHealthSignals{}}
 
 	var got workloadDetailResponse
 	detail(t, srv, "prod", "Deployment", "api", &got)

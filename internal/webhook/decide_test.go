@@ -428,7 +428,7 @@ func TestDecide(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(tc.objs...).
 				WithStatusSubresource(&sustainv1alpha1.WorkloadRecommendation{}).
 				WithInterceptorFuncs(tc.funcs).Build()
-			h := &Handler{Client: c, RecommendOnly: tc.recommendOnly, ExcludedNamespaces: tc.excluded}
+			h := &Handler{Client: c, RecommendOnly: tc.recommendOnly, Policies: governance.NewPolicyLister(tc.excluded)}
 
 			a := h.decide(context.Background(), tc.pod)
 			if a.reason != tc.reason {
@@ -487,7 +487,7 @@ func TestAdmitPatchesOnlyTheResourcesItInjects(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(tc.objs...).Build()
-			h := &Handler{Client: c, ExcludedNamespaces: tc.excluded}
+			h := &Handler{Client: c, Policies: governance.NewPolicyLister(tc.excluded)}
 
 			var paths []string
 			for _, p := range patchesOf(t, h.admit(context.Background(), admissionRequestFor(t, etlPod("p")))) {
@@ -573,7 +573,7 @@ func TestAdmitTurnsAPanicIntoAnUnmutatedPod(t *testing.T) {
 			withSnapshot(wlr)
 			c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(podPolicy("p"), wlr).
 				WithInterceptorFuncs(tc.funcs).Build()
-			h := &Handler{Client: c}
+			h := &Handler{Policies: governance.NewPolicyLister(nil), Client: c}
 
 			before := testutil.ToFloat64(PanicTotal.WithLabelValues(panicLabelAdmit))
 			resp := h.admit(log.IntoContext(context.Background(), tc.logger), admissionRequestFor(t, etlPod("p")))
@@ -616,7 +616,7 @@ func TestAdmitLogsTheDecision(t *testing.T) {
 			wlr := freshWLR("Pod", "default", "etl-daily", tc.recs)
 			withSnapshot(wlr)
 			c := fake.NewClientBuilder().WithScheme(config.Scheme()).WithObjects(podPolicy("p"), wlr).Build()
-			h := &Handler{Client: c}
+			h := &Handler{Policies: governance.NewPolicyLister(nil), Client: c}
 			var mu sync.Mutex
 			var lines []string
 			logger := funcr.New(func(_, args string) {

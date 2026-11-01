@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -25,6 +26,7 @@ import (
 
 func TestHandleWorkloadMetrics_BadWindow(t *testing.T) {
 	srv := &Server{
+		Policies:   governance.NewPolicyLister(nil),
 		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
@@ -44,6 +46,7 @@ func TestHandleWorkloadMetrics_BadWindow(t *testing.T) {
 
 func TestHandleWorkloadMetrics_BadStep(t *testing.T) {
 	srv := &Server{
+		Policies:   governance.NewPolicyLister(nil),
 		Clock:      clock.RealClock{},
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
@@ -66,7 +69,7 @@ func TestHandleWorkloadMetrics_ReturnsAllKeys(t *testing.T) {
 	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "app"}}
 	d.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "wait-db"}}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
-	srv := &Server{Clock: clock.RealClock{}, K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
+	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, PromClient: &fakePromClient{}, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	rec := httptest.NewRecorder()
 	srv.handleWorkloadMetrics(rec,
@@ -101,7 +104,7 @@ func TestWorkloadMetricsAbsoluteRange(t *testing.T) {
 	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "web"}}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(d).Build()
 	prom := &fakePromClient{}
-	srv := &Server{Clock: clock.RealClock{}, K8sClient: c, PromClient: prom, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
+	srv := &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, PromClient: prom, Inputs: recommendertest.NewStaticInputs(), Logger: testLogger(t)}
 
 	req := httptest.NewRequest(http.MethodGet,
 		"/api/workloads/default/Deployment/web/metrics?from=1718000000&to=1718003600&step=5m", nil)
@@ -177,6 +180,7 @@ func TestHandleWorkloadMetrics_CarriesTheAverageTheSignalAndTheKills(t *testing.
 	}))
 	policy, d := governedWeb()
 	srv := &Server{
+		Policies:  governance.NewPolicyLister(nil),
 		Clock:     clock.RealClock{},
 		K8sClient: fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, d).Build(),
 		PromClient: &fakePromClient{rangeByLabel: map[string]map[string][]promclient.TimeValue{
@@ -223,6 +227,7 @@ func TestHandleWorkloadMetrics_AnUnreadableSignalKeepsTheAverage(t *testing.T) {
 	average := []promclient.TimeValue{{Timestamp: time.Unix(1718000000, 0).UTC(), Value: 0.2}}
 	policy, d := governedWeb()
 	srv := &Server{
+		Policies:  governance.NewPolicyLister(nil),
 		Clock:     clock.RealClock{},
 		K8sClient: fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(policy, d).Build(),
 		PromClient: &fakePromClient{rangeByLabel: map[string]map[string][]promclient.TimeValue{
@@ -271,6 +276,7 @@ func TestHandleWorkloadMetrics_NoSignalWithoutAGoverningPolicy(t *testing.T) {
 					recommender.WithOOMKills(map[string]recommender.OOM{"app": {Kills: 1, KillsInStep: 1}})),
 			}}))
 			srv := &Server{
+				Policies:   governance.NewPolicyLister(nil),
 				Clock:      clock.RealClock{},
 				K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build(),
 				PromClient: &fakePromClient{},

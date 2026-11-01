@@ -1,0 +1,150 @@
+# The cluster-scope settings (excluded namespaces, recommend-only, the
+# Prometheus connection) come from one value each through one helper. Every
+# Deployment is rendered in the same suite, so an assertion naming no template
+# holds for each of them, and the webhook's namespaceSelector is checked
+# against the same list.
+suite: cluster-scope settings
+templates:
+  - templates/deployment.yaml
+  - templates/webhook-deployment.yaml
+  - templates/dashboard-deployment.yaml
+  - templates/mutatingwebhookconfiguration.yaml
+release:
+  name: k8s-sustain
+  namespace: k8s-sustain
+tests:
+  - it: excludes the release and system namespaces everywhere by default
+    asserts:
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --excluded-namespaces=k8s-sustain,kube-system,kube-public
+      - template: templates/webhook-deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --excluded-namespaces=k8s-sustain,kube-system,kube-public
+      - template: templates/dashboard-deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --excluded-namespaces=k8s-sustain,kube-system,kube-public
+      - template: templates/mutatingwebhookconfiguration.yaml
+        equal:
+          path: webhooks[0].namespaceSelector.matchExpressions[0].values
+          value:
+            - k8s-sustain
+            - kube-system
+            - kube-public
+
+  - it: appends excludedNamespaces once, to every component and the selector
+    set:
+      excludedNamespaces: [team-a, kube-system, team-b]
+    asserts:
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --excluded-namespaces=k8s-sustain,kube-system,kube-public,team-a,team-b
+      - template: templates/webhook-deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --excluded-namespaces=k8s-sustain,kube-system,kube-public,team-a,team-b
+      - template: templates/dashboard-deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --excluded-namespaces=k8s-sustain,kube-system,kube-public,team-a,team-b
+      - template: templates/mutatingwebhookconfiguration.yaml
+        equal:
+          path: webhooks[0].namespaceSelector.matchExpressions[0].values
+          value:
+            - k8s-sustain
+            - kube-system
+            - kube-public
+            - team-a
+            - team-b
+
+  - it: omits recommend-only by default
+    asserts:
+      - template: templates/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].args
+          content: --recommend-only=true
+      - template: templates/webhook-deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].args
+          content: --recommend-only=true
+      - template: templates/dashboard-deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].args
+          content: --recommend-only=true
+
+  - it: renders recommend-only into every component
+    set:
+      recommendOnly: true
+    asserts:
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --recommend-only=true
+      - template: templates/webhook-deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --recommend-only=true
+      - template: templates/dashboard-deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --recommend-only=true
+
+  - it: prefers an explicit prometheusAddress over subchart autodetection
+    set:
+      prometheusAddress: http://thanos.example:10902
+    asserts:
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-address=http://thanos.example:10902
+      - template: templates/dashboard-deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-address=http://thanos.example:10902
+
+  - it: falls back to localhost when the subchart is disabled and no address is set
+    set:
+      prometheus.enabled: false
+    asserts:
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-address=http://localhost:9090
+      - template: templates/dashboard-deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-address=http://localhost:9090
+
+  # The webhook never queries Prometheus: it gets neither the address nor the
+  # credentials, so a webhook pod cannot read them.
+  - it: gives the webhook none of the Prometheus connection
+    set:
+      prometheusAddress: http://thanos.example:10902
+      prometheusAuth:
+        existingSecret: prometheus-credentials
+        bearerTokenKey: token
+        headers:
+          X-Scope-OrgID: tenant-a
+    asserts:
+      - template: templates/webhook-deployment.yaml
+        notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: prometheus
+      - template: templates/webhook-deployment.yaml
+        notExists:
+          path: spec.template.spec.containers[0].env
+      - template: templates/webhook-deployment.yaml
+        equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: tls
+              secret:
+                secretName: k8s-sustain-webhook-tls
+      - template: templates/dashboard-deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-bearer-token-file=/etc/k8s-sustain/prometheus-auth/token

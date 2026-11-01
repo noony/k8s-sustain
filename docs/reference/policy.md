@@ -71,7 +71,7 @@ spec:
 
 Restricts which namespaces and workloads this policy applies to. The selector only **narrows**: a workload must also opt in with the `k8s.sustain.io/policy` annotation (see [Resolution order](annotation.md#resolution-order)). The controller, webhook, dashboard and OOM watcher decide it in one place (`internal/governance`), so they all honour the same selector.
 
-The controller, webhook and OOM watcher also honour their operator-level `--excluded-namespaces` flag (see [CLI reference](./cli.md)); a workload in an excluded namespace is never managed regardless of selector configuration. A malformed `spec.selector.labelSelector` (one the CRD admits but Kubernetes cannot parse, such as an unknown operator) matches no pod template, so the policy governs no workload, a Departed one included. The webhook fails open rather than denying a pod that opts into it: whichever level the pod opts in at, it is admitted without resources injected and the webhook logs a warning with reason `selector-invalid`.
+The controller, webhook, OOM watcher and dashboard also honour the operator-level global `--excluded-namespaces` flag (see [CLI reference](./cli.md#global-flags)); a workload in an excluded namespace is never managed regardless of selector configuration. A malformed `spec.selector.labelSelector` (one the CRD admits but Kubernetes cannot parse, such as an unknown operator) matches no pod template, so the policy governs no workload, a Departed one included. The webhook fails open rather than denying a pod that opts into it: whichever level the pod opts in at, it is admitted without resources injected and the webhook logs a warning with reason `selector-invalid`.
 
 ### `spec.selector.namespaces`
 

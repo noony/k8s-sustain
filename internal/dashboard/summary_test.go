@@ -17,6 +17,7 @@ import (
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 )
 
@@ -177,6 +178,7 @@ func TestHandleSummaryCacheHit(t *testing.T) {
 	}
 	srv := &Server{
 		Clock:      clock.RealClock{},
+		Policies:   governance.NewPolicyLister(nil),
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: fp,
 		Health:     memHealthSignals{},
@@ -254,6 +256,7 @@ func TestHandleSummaryServesRecentLastGoodOnPartialError(t *testing.T) {
 	cache.now = func() time.Time { return now }
 	srv := &Server{
 		Clock:        clock.RealClock{},
+		Policies:     governance.NewPolicyLister(nil),
 		K8sClient:    fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient:   fp,
 		Health:       memHealthSignals{},
@@ -374,6 +377,7 @@ func TestHandleSummaryConcurrentMissesCollapseToOneRecompute(t *testing.T) {
 	bp := &blockingPromClient{fakePromClient: fp, release: allJoined}
 	srv := &Server{
 		Clock:      clock.RealClock{},
+		Policies:   governance.NewPolicyLister(nil),
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: bp,
 		Health:     memHealthSignals{},
@@ -498,6 +502,7 @@ func TestHandleSummaryFollowerHonoursOwnContextDeadline(t *testing.T) {
 func TestComputeAndCacheSummaryRecoversPanic(t *testing.T) {
 	srv := &Server{
 		Clock:      clock.RealClock{},
+		Policies:   governance.NewPolicyLister(nil),
 		K8sClient:  fake.NewClientBuilder().WithScheme(Scheme()).Build(),
 		PromClient: &fakePromClient{},
 		Health:     memHealthSignals{},

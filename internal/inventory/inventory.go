@@ -33,12 +33,10 @@ import (
 // Basis is what a reader decides and dates every snapshot it takes with,
 // whatever the snapshot reads.
 type Basis struct {
-	// ExcludedNamespaces are governed by no Policy, whatever they opt into.
-	ExcludedNamespaces []string
-	// Policies lists the Policies the snapshot decides with. A caller taking
-	// snapshots for the life of the process keeps one, so a Policy's selector
-	// is compiled once per version of it rather than once per snapshot; nil
-	// lists through a lister of the snapshot's own.
+	// Policies lists the Policies the snapshot decides with, and holds the
+	// namespaces no Policy governs. A caller taking snapshots for the life of
+	// the process keeps one, so a Policy's selector is compiled once per
+	// version of it rather than once per snapshot. Required.
 	Policies *governance.PolicyLister
 	// Clock dates the snapshot. Required: the reader's own, so a test clock
 	// dates what it judges by the snapshot's instant.
@@ -49,7 +47,10 @@ type Basis struct {
 var errNoClock = errors.New("inventory: the Basis has no clock to date the snapshot by")
 
 func (b Basis) validate() error {
-	if b.Clock == nil {
+	switch {
+	case b.Policies == nil:
+		return fmt.Errorf("inventory: %w", governance.ErrNoPolicyLister)
+	case b.Clock == nil:
 		return errNoClock
 	}
 	return nil
@@ -247,11 +248,7 @@ func (b *builder) inScope(kind string) bool {
 }
 
 func (b *builder) listPolicies(ctx context.Context) error {
-	lister := b.opts.Policies
-	if lister == nil {
-		lister = new(governance.PolicyLister)
-	}
-	ps, err := lister.List(ctx, b.reader, b.opts.ExcludedNamespaces)
+	ps, err := b.opts.Policies.List(ctx, b.reader)
 	b.policies = ps
 	return err
 }

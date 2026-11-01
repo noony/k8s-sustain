@@ -74,13 +74,10 @@ type Server struct {
 	// only, ["*"] allows every origin.
 	CORSOrigins []string
 
-	// ExcludedNamespaces mirrors the controller's --excluded-namespaces flag,
-	// a hard deny applied ahead of a Policy's own selector.
-	ExcludedNamespaces []string
-
-	// policies is shared by every snapshot the views take, so a Policy's
-	// selector is compiled once per version of it.
-	policies governance.PolicyLister
+	// Policies is shared by every snapshot the views take, so a Policy's
+	// selector is compiled once per version of it. It holds the namespaces no
+	// Policy governs, a hard deny applied ahead of a Policy's own selector.
+	Policies *governance.PolicyLister
 
 	cacheInit    sync.Once
 	summaryCache *Cache

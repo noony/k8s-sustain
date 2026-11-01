@@ -6,12 +6,14 @@ The `k8s-sustain` binary exposes three operational subcommands — `start`, `web
 
 ## Global flags
 
-These flags are available on every subcommand.
+These flags are available on every subcommand. They carry the cluster-scope settings, which every component must read alike: each is one flag, one config-file key and one environment variable, whichever subcommand reads it, so the controller, the webhook and the dashboard cannot be configured apart. A subcommand ignores the ones it has no use for: the webhook accepts the Prometheus flags and never queries Prometheus.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--recommend-only` | `false` | Compute recommendations but never recycle pods or mutate pods (dry-run mode) |
-| `--config` | — | Path to a YAML config file. Keys are the flag names (`webhook.`/`dashboard.`-prefixed for those subcommands). No file is read unless this flag is set, and it has no environment-variable form. |
+| `--excluded-namespaces` | — | Comma-separated list of namespaces no Policy governs, whatever they opt into: the controller never touches their workloads, the webhook never mutates their pods, the OOM watcher ignores their kills, and the dashboard shows their workloads governed by no Policy. The chart also drops them from the `MutatingWebhookConfiguration`'s `namespaceSelector`, so the webhook never sees their pods. |
+| `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server the controller and the dashboard query |
+| `--config` | — | Path to a YAML config file. Keys are the flag names, a `webhook` or `dashboard` flag's prefixed with `webhook.` or `dashboard.`. No file is read unless this flag is set, and it has no environment-variable form. |
 
 When `--recommend-only` is enabled, the controller still queries Prometheus and computes recommendations as usual, and the webhook still resolves workloads and reads the cached recommendation (it never queries Prometheus itself, recommend-only or not), but nothing **applies** changes. Computed recommendations are emitted as structured log lines at `info` level, so you can inspect them before switching to active mode.
 
@@ -28,40 +30,12 @@ K8SSUSTAIN_RECOMMEND_ONLY=true k8s-sustain start
 recommend-only: true
 ```
 
----
-
-## `k8s-sustain start`
-
-Starts the controller. Watches `Policy` objects and periodically reconciles `Ongoing`-mode workloads.
-
-```text
-k8s-sustain start [flags]
-```
-
-### Flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--metrics-bind-address` | `:8080` | Address the Prometheus metrics endpoint binds to |
-| `--health-probe-bind-address` | `:8081` | Address the `/healthz` and `/readyz` endpoints bind to |
-| `--leader-elect` | `false` | Enable leader election for high-availability deployments |
-| `--leader-election-id` | `k8s-sustain-leader-election` | Lease name used for leader election. Override when running several installs in the same cluster. |
-| `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
-| `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server used for metric queries |
-| `--reconcile-interval` | `5m` | How often policies are re-evaluated. Must be greater than zero. It also sizes the staleness budget: a live identity's recommendation is served for the larger of 30 minutes and three intervals past its last computation, so any interval keeps recommendations served between passes, and a pass can run late without pods losing them. See [How long a recommendation is served](../concepts/workload-recommendations.md#how-long-a-recommendation-is-served). |
-| `--excluded-namespaces` | — | Comma-separated list of namespaces the reconciler should never touch |
-| `--workload-concurrency-limit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
-| `--policy-concurrency-limit` | `10` | Maximum number of Policy objects reconciled in parallel |
-| `--prometheus-max-inflight` | `8` | Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own `--query.max-concurrency` (default 20) so k8s-sustain does not starve dashboards and alerting sharing the same server. A query that cannot get a slot within 2 minutes is abandoned rather than queued indefinitely; that is counted as a batch failure, not as a Prometheus failure, so it never trips the circuit breaker |
-| `--recycle-replacement-timeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) regularly takes longer than the default. |
-| `--recommendation-retention` | `168h` | How long a Departed identity's WorkloadRecommendation (bare pods, deleted or finished Jobs) is kept, and its recommendation served, past its last computation; the same for a Conflicted identity's frozen one. Set it above the longest gap between runs of a recurring workload. Must be greater than zero. The webhook has no such flag: it serves what the controller stamped. See [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). |
-| `--query-shard-max-samples` | `10000000` | Projected Prometheus sample budget (containers × samples per container, summed across a shard's workloads: window-minutes for the CPU and memory queries, one per rule for the OOM query) a single batched shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own `--query.max-samples` (default `50000000`): that server-side limit *rejects* an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default leaves a 5x margin. |
-
 ### Prometheus authentication and TLS flags
 
-These flags exist with **identical names** on both `start` and `dashboard`
-(the webhook has none — it never queries Prometheus). The Helm chart renders
-them from the `prometheusAuth` block — see
+Global flags too, so the controller and the dashboard always authenticate to
+Prometheus alike, from one set of environment variables
+(`K8SSUSTAIN_PROMETHEUS_*`); the webhook accepts them and ignores them. The Helm
+chart renders them from the `prometheusAuth` block — see
 [Helm values: Prometheus authentication](helm-values.md#prometheus-authentication).
 Worked examples live in the
 [Authenticated Prometheus guide](../guides/authenticated-prometheus.md).
@@ -96,6 +70,33 @@ becomes the *only* trusted root; the startup log says so with a `WARNING`
 line, since a public-CA ingress on the same address would then fail with
 "unknown authority".
 
+---
+
+## `k8s-sustain start`
+
+Starts the controller. Watches `Policy` objects and periodically reconciles `Ongoing`-mode workloads.
+
+```text
+k8s-sustain start [flags]
+```
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--metrics-bind-address` | `:8080` | Address the Prometheus metrics endpoint binds to |
+| `--health-probe-bind-address` | `:8081` | Address the `/healthz` and `/readyz` endpoints bind to |
+| `--leader-elect` | `false` | Enable leader election for high-availability deployments |
+| `--leader-election-id` | `k8s-sustain-leader-election` | Lease name used for leader election. Override when running several installs in the same cluster. |
+| `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
+| `--reconcile-interval` | `5m` | How often policies are re-evaluated. Must be greater than zero. It also sizes the staleness budget: a live identity's recommendation is served for the larger of 30 minutes and three intervals past its last computation, so any interval keeps recommendations served between passes, and a pass can run late without pods losing them. See [How long a recommendation is served](../concepts/workload-recommendations.md#how-long-a-recommendation-is-served). |
+| `--workload-concurrency-limit` | `5` | Maximum number of workloads processed in parallel per reconcile cycle |
+| `--policy-concurrency-limit` | `10` | Maximum number of Policy objects reconciled in parallel |
+| `--prometheus-max-inflight` | `8` | Maximum concurrent Prometheus queries across the whole controller. Kept below Prometheus's own `--query.max-concurrency` (default 20) so k8s-sustain does not starve dashboards and alerting sharing the same server. A query that cannot get a slot within 2 minutes is abandoned rather than queued indefinitely; that is counted as a batch failure, not as a Prometheus failure, so it never trips the circuit breaker |
+| `--recycle-replacement-timeout` | `5m` | In the eviction-fallback recycle path, how long to wait for a replacement pod to become Ready before aborting the loop. Increase on clusters where node autoscaling (Karpenter / cluster-autoscaler) regularly takes longer than the default. |
+| `--recommendation-retention` | `168h` | How long a Departed identity's WorkloadRecommendation (bare pods, deleted or finished Jobs) is kept, and its recommendation served, past its last computation; the same for a Conflicted identity's frozen one. Set it above the longest gap between runs of a recurring workload. Must be greater than zero. The webhook has no such flag: it serves what the controller stamped. See [Retention for ephemeral workloads](../concepts/workload-recommendations.md#retention-for-ephemeral-workloads). |
+| `--query-shard-max-samples` | `10000000` | Projected Prometheus sample budget (containers × samples per container, summed across a shard's workloads: window-minutes for the CPU and memory queries, one per rule for the OOM query) a single batched shard query is allowed to reach before a new shard is started. Keep this under Prometheus's own `--query.max-samples` (default `50000000`): that server-side limit *rejects* an over-budget query outright, failing every workload sharing the shard, not just the excess ones. The default leaves a 5x margin. |
+
 ### Log verbosity
 
 - `info` (default) — high-signal events: reconcile cycle start/end with target counts, HPA detection, recommendations computed, in-place update applied, pod evictions, recommendation injection by the webhook.
@@ -129,7 +130,6 @@ k8s-sustain webhook [flags]
 | `--tls-cert-file` | `/tls/tls.crt` | Path to the TLS certificate file |
 | `--tls-key-file` | `/tls/tls.key` | Path to the TLS private key file |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
-| `--excluded-namespaces` | — | Comma-separated list of namespaces no Policy governs: the webhook injects no resources into their pods, whatever they opt into, and never mutates them. Mirrors the controller flag so both components stay in lockstep. The chart also drops these namespaces from the `MutatingWebhookConfiguration`'s `namespaceSelector`, so the webhook never sees their pods. |
 
 The webhook also honours each Policy's `spec.selector.namespaces` and `spec.selector.labelSelector` (see [Policy reference](./policy.md#specselector)). A pod is admitted unmutated if any of the following holds: its namespace is in `--excluded-namespaces`, its namespace is not in a non-empty `selector.namespaces`, or its pod labels — its pod template's, which the controller matches too — do not satisfy `selector.labelSelector`. A malformed `labelSelector` causes the webhook to fail open (admit without injection, log a warning with reason `selector-invalid`, whichever level the pod opts in at) rather than deny.
 
@@ -162,7 +162,7 @@ helm upgrade k8s-sustain oci://ghcr.io/noony/helm-charts/k8s-sustain \
 ```
 
 !!! warning "Using `Fail` in production"
-    Setting `failurePolicy: Fail` means **pod creation is blocked** if the webhook is unavailable. Only use this if you have ≥2 webhook replicas. The webhook does not depend on Prometheus at admission time — it only needs the apiserver to read the cached `WorkloadRecommendation` — but it still needs the controller's cache to stay fresh (within the 30-minute staleness window) for injections to happen at all, and a webhook outage under `Fail` still blocks pod creation regardless.
+    Setting `failurePolicy: Fail` means **pod creation is blocked** if the webhook is unavailable. Only use this if you have ≥2 webhook replicas. The webhook does not depend on Prometheus at admission time — it only needs the apiserver to read the cached `WorkloadRecommendation` — but it injects a recommendation only until the `servableUntil` the controller stamps (for a live identity, the larger of 30 minutes and three `--reconcile-interval`s past its last computation), so injections stop when the controller stops reconciling, and a webhook outage under `Fail` still blocks pod creation regardless.
 
 ---
 
@@ -179,15 +179,12 @@ k8s-sustain dashboard [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--bind-address` | `:8090` | Address the HTTP server listens on |
-| `--prometheus-address` | `http://localhost:9090` | Address of the Prometheus server |
 | `--log-level` | `info` | Log verbosity: `debug`, `info`, `warn`, `error` |
 | `--cors-allowed-origins` | *(empty)* | Comma-separated list of allowed CORS origins. Empty (default) = same-origin only. Use `*` to allow all (not recommended). |
-| `--excluded-namespaces` | — | Comma-separated list of namespaces the controller and webhook never manage. Mirrors their `--excluded-namespaces` flag so the dashboard's policy-scoped workload views stay consistent with what is actually managed. |
 
-The dashboard also accepts the full set of
-[Prometheus authentication and TLS flags](#prometheus-authentication-and-tls-flags)
-documented under `start`, with identical names and semantics. Their environment
-variables carry the `DASHBOARD` prefix — see [Environment variables](#environment-variables).
+It queries Prometheus through the global `--prometheus-address` and
+[Prometheus authentication and TLS flags](#prometheus-authentication-and-tls-flags),
+exactly as the controller does.
 
 ### Health endpoints
 
@@ -205,20 +202,21 @@ See the [Dashboard guide](../guides/dashboard.md) for full usage instructions.
 
 Every flag except `--config` can be set with an environment variable: `K8SSUSTAIN_` + the flag's key, upper-cased, with `-` and `.` replaced by `_`. List-valued flags take a comma-separated string.
 
-!!! danger "The prefix depends on the subcommand"
-    | Subcommand | Key | Example |
-    |---|---|---|
-    | global (`--recommend-only`) | flag name | `K8SSUSTAIN_RECOMMEND_ONLY` |
-    | `start` | flag name | `K8SSUSTAIN_LOG_LEVEL` |
-    | `webhook` | `webhook.` + flag name | `K8SSUSTAIN_WEBHOOK_LOG_LEVEL` |
-    | `dashboard` | `dashboard.` + flag name | `K8SSUSTAIN_DASHBOARD_LOG_LEVEL` |
+| Flags | Key | Example |
+|---|---|---|
+| [global](#global-flags) | flag name | `K8SSUSTAIN_EXCLUDED_NAMESPACES`, `K8SSUSTAIN_PROMETHEUS_ADDRESS` |
+| `start` | flag name | `K8SSUSTAIN_RECONCILE_INTERVAL` |
+| `webhook` | `webhook.` + flag name | `K8SSUSTAIN_WEBHOOK_PORT` |
+| `dashboard` | `dashboard.` + flag name | `K8SSUSTAIN_DASHBOARD_BIND_ADDRESS` |
 
-    Flags shared across subcommands (`--log-level`, `--excluded-namespaces`, every `--prometheus-*` flag) have the same flag name but a different variable per subcommand. A variable with the wrong prefix is **silently ignored**. The Helm chart renders the right prefix for each component. See [Authenticated Prometheus: environment variables](../guides/authenticated-prometheus.md#environment-variables-the-prefixes-differ-per-subcommand) for the full Prometheus auth table.
+A global flag's variable reaches every subcommand. A subcommand's own flag is read only under its own key: `--log-level` is the one flag name the three subcommands share, and each reads its own variable (`K8SSUSTAIN_LOG_LEVEL`, `K8SSUSTAIN_WEBHOOK_LOG_LEVEL`, `K8SSUSTAIN_DASHBOARD_LOG_LEVEL`); a variable meant for another subcommand is silently ignored.
 
 ```bash
+# read alike by start, webhook and dashboard
+K8SSUSTAIN_EXCLUDED_NAMESPACES=kube-system,monitoring k8s-sustain webhook
+# a live identity's recommendation then stays served for 1h30m (three intervals)
+# past its last computation, rather than the 30m floor
 K8SSUSTAIN_RECONCILE_INTERVAL=30m k8s-sustain start
-K8SSUSTAIN_EXCLUDED_NAMESPACES=kube-system,monitoring k8s-sustain start
-K8SSUSTAIN_WEBHOOK_EXCLUDED_NAMESPACES=kube-system,monitoring k8s-sustain webhook
 K8SSUSTAIN_DASHBOARD_BIND_ADDRESS=:9999 k8s-sustain dashboard
 ```
 

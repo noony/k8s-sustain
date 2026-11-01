@@ -65,19 +65,6 @@ tests:
                 - kube-system
                 - kube-public
 
-  - it: appends excludedNamespaces to the namespace selector
-    set:
-      excludedNamespaces: [team-a, team-b]
-    asserts:
-      - equal:
-          path: webhooks[0].namespaceSelector.matchExpressions[0].values
-          value:
-            - k8s-sustain
-            - kube-system
-            - kube-public
-            - team-a
-            - team-b
-
   - it: renders nothing when the webhook is disabled
     set:
       webhook.enabled: false

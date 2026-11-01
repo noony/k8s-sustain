@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
+	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -46,7 +47,7 @@ func newBatchSimulateServer(t *testing.T, inputs recommender.InputsFetcher, coun
 		objs = append(objs, d)
 	}
 	c := fake.NewClientBuilder().WithScheme(Scheme()).WithObjects(objs...).Build()
-	return &Server{Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Inputs: inputs}
+	return &Server{Policies: governance.NewPolicyLister(nil), Clock: clock.RealClock{}, K8sClient: c, Logger: testLogger(t), PromClient: &fakePromClient{}, Inputs: inputs}
 }
 
 func batchID(name string) promclient.WorkloadIdentity {

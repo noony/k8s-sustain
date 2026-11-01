@@ -29,6 +29,7 @@ import (
 	sustainv1alpha1 "github.com/noony/k8s-sustain/api/v1alpha1"
 	"github.com/noony/k8s-sustain/internal/controller"
 	"github.com/noony/k8s-sustain/internal/dashboard"
+	"github.com/noony/k8s-sustain/internal/governance"
 	promclient "github.com/noony/k8s-sustain/internal/prometheus"
 	"github.com/noony/k8s-sustain/internal/recommender"
 	"github.com/noony/k8s-sustain/internal/recommender/recommendertest"
@@ -260,7 +261,7 @@ func TestSimulationRecommendsWhatTheControllerStores(t *testing.T) {
 			stored, storedFresh := statuses["web"], statuses["fresh"]
 			want := renderStored(stored.Containers)
 
-			srv := &dashboard.Server{K8sClient: c, PromClient: noRunning{}, Inputs: inputs, Clock: clock, Logger: logr.Discard()}
+			srv := &dashboard.Server{Policies: governance.NewPolicyLister(nil), K8sClient: c, PromClient: noRunning{}, Inputs: inputs, Clock: clock, Logger: logr.Discard()}
 			sim, simFresh := simulate(t, srv, "web"), simulate(t, srv, "fresh")
 			var batch struct {
 				Workloads []struct {

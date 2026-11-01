@@ -30,9 +30,7 @@ tests:
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
             - --leader-elect=true
-            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
-            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
             - --workload-concurrency-limit=5
             - --policy-concurrency-limit=10
             - --reconcile-interval=5m
@@ -40,15 +38,17 @@ tests:
             - --recommendation-retention=168h
             - --prometheus-max-inflight=8
             - --query-shard-max-samples=10000000
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
       - template: templates/dashboard-deployment.yaml
         equal:
           path: spec.template.spec.containers[0].args
           value:
             - dashboard
             - --bind-address=:8090
-            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
             - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
 
   - it: renders nothing when a key is named but no Secret is
     set:
@@ -79,13 +79,12 @@ tests:
           content:
             name: K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN
             value: s3cret-token
-      # The dashboard binds every flag under the `dashboard.` Viper key prefix,
-      # so its env var carries the matching K8SSUSTAIN_DASHBOARD_ prefix.
+      # One env var per setting, whatever the subcommand.
       - template: templates/dashboard-deployment.yaml
         contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN
+            name: K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN
             value: s3cret-token
       - notExists:
           path: spec.template.spec.volumes
@@ -157,7 +156,7 @@ tests:
         equal:
           path: spec.template.spec.containers[0].env
           value:
-            - name: K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_USERNAME
+            - name: K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: prometheus-credentials
@@ -191,7 +190,7 @@ tests:
         equal:
           path: spec.template.spec.containers[0].env
           value:
-            - name: K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_PASSWORD
+            - name: K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_PASSWORD
               value: hunter2
       - notExists:
           path: spec.template.spec.volumes
@@ -218,7 +217,7 @@ tests:
         equal:
           path: spec.template.spec.containers[0].env
           value:
-            - name: K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_USERNAME
+            - name: K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: prometheus-credentials
@@ -483,9 +482,7 @@ tests:
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
             - --leader-elect=true
-            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
-            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
             - --workload-concurrency-limit=5
             - --policy-concurrency-limit=10
             - --reconcile-interval=5m
@@ -493,15 +490,17 @@ tests:
             - --recommendation-retention=168h
             - --prometheus-max-inflight=8
             - --query-shard-max-samples=10000000
+            - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
       - template: templates/dashboard-deployment.yaml
         equal:
           path: spec.template.spec.containers[0].args
           value:
             - dashboard
             - --bind-address=:8090
-            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
             - --log-level=error
             - --excluded-namespaces=k8s-sustain,kube-system,kube-public
+            - --prometheus-address=http://k8s-sustain-prometheus-server.k8s-sustain.svc:80
       - notExists:
           path: spec.template.spec.volumes
       - notExists:
@@ -547,16 +546,9 @@ tests:
             - name: prometheus-tls
               mountPath: /etc/k8s-sustain/prometheus-tls
               readOnly: true
-      # Only the env var NAME legitimately differs between the two: the
-      # dashboard's flags live under the `dashboard.` Viper key prefix.
-      - template: templates/deployment.yaml
-        equal:
+      - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_USERNAME
-      - template: templates/dashboard-deployment.yaml
-        equal:
-          path: spec.template.spec.containers[0].env[0].name
-          value: K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_USERNAME
       - equal:
           path: spec.template.spec.containers[0].env[0].valueFrom
           value:

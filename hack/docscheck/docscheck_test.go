@@ -1,16 +1,12 @@
 package docscheck
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 
 	"github.com/noony/k8s-sustain/cmd/controller"
 	_ "github.com/noony/k8s-sustain/cmd/dashboard"
@@ -55,25 +51,13 @@ func uniqueSorted(set map[string]struct{}) []string {
 
 func backticked(s string) string { return "`" + s + "`" }
 
+// Every flag has a row, with its default, in its command's section of the
+// CLI reference: a root persistent flag once, in the global one.
 func TestCLIFlagsDocumented(t *testing.T) {
-	names := map[string]struct{}{}
-	var walk func(*cobra.Command)
-	walk = func(c *cobra.Command) {
-		add := func(f *pflag.Flag) {
-			if f.Name != "help" {
-				names[f.Name] = struct{}{}
-			}
-		}
-		c.Flags().VisitAll(add)
-		c.PersistentFlags().VisitAll(add)
-		for _, sub := range c.Commands() {
-			walk(sub)
-		}
-	}
-	walk(controller.RootCmd())
-
 	const doc = "docs/reference/cli.md"
-	assertDocumented(t, readFile(t, doc), doc, uniqueSorted(names), func(n string) string { return "`--" + n + "`" })
+	for _, p := range checkCLI(readFile(t, doc), registeredFlags(controller.RootCmd())) {
+		t.Errorf("%s: %s", doc, p)
+	}
 }
 
 var metricNameRe = regexp.MustCompile(`Name:\s*"(k8s_sustain_[a-z0-9_]+)"`)
@@ -115,40 +99,44 @@ func TestRecordingRulesDocumented(t *testing.T) {
 	assertDocumented(t, readFile(t, doc), doc, uniqueSorted(names), backticked)
 }
 
-type schemaNode struct {
-	Properties map[string]schemaNode `json:"properties"`
-}
-
 var subchartKeys = map[string]bool{"prometheus": true}
 
+func chartValues(t *testing.T) (map[string]any, schemaNode) {
+	t.Helper()
+	return parseValues(t, readFile(t, "charts/k8s-sustain/values.yaml")),
+		parseSchema(t, readFile(t, "charts/k8s-sustain/values.schema.json"))
+}
+
+// Every value of values.yaml or of its schema has a row, and a row's default
+// is the one values.yaml holds.
 func TestHelmValuesDocumented(t *testing.T) {
-	var root schemaNode
-	if err := json.Unmarshal([]byte(readFile(t, "charts/k8s-sustain/values.schema.json")), &root); err != nil {
+	values, schema := chartValues(t)
+	const doc = "docs/reference/helm-values.md"
+	text := readFile(t, doc)
+	assertDocumented(t, text, doc, helmValueNames(values, schema, subchartKeys), backticked)
+	for _, p := range checkHelmDefaults(text, values) {
+		t.Errorf("%s: %s", doc, p)
+	}
+}
+
+// A flag the chart renders from a value exists, its default is a value the
+// schema accepts, and a value rendered only when set defaults to it.
+func TestChartRendersFlagDefaults(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join(repoRoot, "charts/k8s-sustain/templates/*"))
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	names := map[string]struct{}{}
-	var walk func(schemaNode, string)
-	walk = func(n schemaNode, prefix string) {
-		for k, child := range n.Properties {
-			path := k
-			if prefix != "" {
-				path = prefix + "." + k
-			}
-			if len(child.Properties) == 0 {
-				names[path] = struct{}{}
-				continue
-			}
-			walk(child, path)
-		}
+	templates := map[string]string{}
+	for _, f := range files {
+		rel, _ := filepath.Rel(repoRoot, f)
+		templates[filepath.Base(f)] = readFile(t, rel)
 	}
-	for k, child := range root.Properties {
-		if subchartKeys[k] {
-			continue
-		}
-		walk(schemaNode{Properties: map[string]schemaNode{k: child}}, "")
+	rendered := renderedFlags(templates)
+	if len(rendered) == 0 {
+		t.Fatal("found no flag rendered from a value")
 	}
-
-	const doc = "docs/reference/helm-values.md"
-	assertDocumented(t, readFile(t, doc), doc, uniqueSorted(names), backticked)
+	values, schema := chartValues(t)
+	for _, p := range checkRenderedDefaults(controller.RootCmd(), rendered, values, schema) {
+		t.Error(p)
+	}
 }

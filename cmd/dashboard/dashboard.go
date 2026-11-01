@@ -14,6 +14,7 @@ import (
 	"github.com/noony/k8s-sustain/cmd/controller"
 	"github.com/noony/k8s-sustain/internal/config"
 	"github.com/noony/k8s-sustain/internal/dashboard"
+	"github.com/noony/k8s-sustain/internal/governance"
 	"github.com/noony/k8s-sustain/internal/httpx"
 	k8sclient "github.com/noony/k8s-sustain/internal/k8s"
 	"github.com/noony/k8s-sustain/internal/logging"
@@ -47,16 +48,16 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 	}
 	log := logging.Setup(cfg.LogLevel, "dashboard")
 
-	promClient, err := promclient.New(cfg.PrometheusAddress,
-		promclient.WithTransportConfig(cfg.PrometheusTransport))
+	promClient, err := promclient.New(cfg.Prometheus.Address,
+		promclient.WithTransportConfig(cfg.Prometheus.Transport))
 	if err != nil {
 		return fmt.Errorf("creating prometheus client: %w", err)
 	}
 
 	if err := promClient.Ping(context.Background()); err != nil {
-		log.Error(err, "Prometheus is not reachable at startup — metrics queries will fail until it becomes available", "address", cfg.PrometheusAddress)
+		log.Error(err, "Prometheus is not reachable at startup — metrics queries will fail until it becomes available", "address", cfg.Prometheus.Address)
 	} else {
-		log.Info("Prometheus connectivity verified", "address", cfg.PrometheusAddress)
+		log.Info("Prometheus connectivity verified", "address", cfg.Prometheus.Address)
 	}
 
 	k8sClient, err := k8sclient.New(config.Scheme())
@@ -70,11 +71,11 @@ func runDashboard(_ *cobra.Command, _ []string) error {
 		Health:     dashboard.NewPrometheusHealthSignals(promClient),
 		// The dashboard has no shard-budget flag of its own; the controller's
 		// default keeps a batch simulate within Prometheus's sample limit.
-		Inputs:             recommender.NewPromInputs(promClient, config.DefaultQueryShardMaxSamples),
-		Clock:              clock.RealClock{},
-		Logger:             log,
-		CORSOrigins:        cfg.CORSAllowedOrigins,
-		ExcludedNamespaces: cfg.ExcludedNamespaces,
+		Inputs:      recommender.NewPromInputs(promClient, config.DefaultQueryShardMaxSamples),
+		Clock:       clock.RealClock{},
+		Logger:      log,
+		CORSOrigins: cfg.CORSAllowedOrigins,
+		Policies:    governance.NewPolicyLister(cfg.ExcludedNamespaces),
 	}
 
 	httpSrv := srv.NewHTTPServer(cfg.BindAddress)
