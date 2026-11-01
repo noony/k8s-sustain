@@ -1458,10 +1458,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables-the-prefixes-differ-per-subcommand" class="md-nav__link">
+  <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Environment variables — the prefixes differ per subcommand
+        Environment variables
       
     </span>
   </a>
@@ -1961,10 +1961,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#environment-variables-the-prefixes-differ-per-subcommand" class="md-nav__link">
+  <a href="#environment-variables" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Environment variables — the prefixes differ per subcommand
+        Environment variables
       
     </span>
   </a>
@@ -2330,115 +2330,72 @@ from the credentials (it may point at the same Secret).</p>
 </code></pre></div>
 <p>Reach for <code>serverName</code> before <code>insecureSkipVerify</code>.</p>
 <hr />
-<h2 id="environment-variables-the-prefixes-differ-per-subcommand">Environment variables — the prefixes differ per subcommand<a class="headerlink" href="#environment-variables-the-prefixes-differ-per-subcommand" title="Permanent link">&para;</a></h2>
-<p>Each subcommand binds its flags under its own Viper key prefix, so the same
-flag name maps to a <strong>different environment variable</strong> per subcommand:</p>
-<table>
-<thead>
-<tr>
-<th>Subcommand</th>
-<th>Prefix</th>
-<th>Example</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Controller (<code>start</code>)</td>
-<td><code>K8SSUSTAIN_</code></td>
-<td><code>K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE</code></td>
-</tr>
-<tr>
-<td>Webhook (<code>webhook</code>)</td>
-<td><code>K8SSUSTAIN_WEBHOOK_</code></td>
-<td><code>K8SSUSTAIN_WEBHOOK_LOG_LEVEL</code></td>
-</tr>
-<tr>
-<td>Dashboard (<code>dashboard</code>)</td>
-<td><code>K8SSUSTAIN_DASHBOARD_</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE</code></td>
-</tr>
-</tbody>
-</table>
-<p>The global <code>--recommend-only</code> flag is unprefixed (<code>K8SSUSTAIN_RECOMMEND_ONLY</code>)
-on every subcommand; <code>--config</code> has no environment variable.</p>
-<div class="admonition danger">
-<p class="admonition-title">A wrong prefix is silently ignored</p>
-<p><code>K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE</code> set on the dashboard does
-nothing: the dashboard starts, queries Prometheus unauthenticated, and
-reports "No metrics data available" while the controller works fine.
-There is no error message. The same applies to shared flags such as
-<code>--log-level</code> and <code>--excluded-namespaces</code> on the webhook.</p>
-</div>
-<p>The Prometheus settings (the webhook has none):</p>
+<h2 id="environment-variables">Environment variables<a class="headerlink" href="#environment-variables" title="Permanent link">&para;</a></h2>
+<p>Every Prometheus setting is a global flag, read alike by every subcommand, so
+each has one environment variable that the controller and the dashboard both
+read (the webhook ignores them):</p>
 <table>
 <thead>
 <tr>
 <th>Setting</th>
-<th>Controller</th>
-<th>Dashboard</th>
+<th>Variable</th>
 </tr>
 </thead>
 <tbody>
 <tr>
+<td>Address</td>
+<td><code>K8SSUSTAIN_PROMETHEUS_ADDRESS</code></td>
+</tr>
+<tr>
 <td>Bearer token</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN</code></td>
 </tr>
 <tr>
 <td>Bearer token file</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_BEARER_TOKEN_FILE</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_BEARER_TOKEN_FILE</code></td>
 </tr>
 <tr>
 <td>Basic auth username</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_USERNAME</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_USERNAME</code></td>
 </tr>
 <tr>
 <td>Basic auth password</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_PASSWORD</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_PASSWORD</code></td>
 </tr>
 <tr>
 <td>Basic auth password file</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_BASIC_AUTH_PASSWORD_FILE</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_BASIC_AUTH_PASSWORD_FILE</code></td>
 </tr>
 <tr>
 <td>Headers</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_HEADERS</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_HEADERS</code></td>
 </tr>
 <tr>
 <td>TLS CA file</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_TLS_CA_FILE</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_CA_FILE</code></td>
 </tr>
 <tr>
 <td>TLS cert file</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_TLS_CERT_FILE</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_CERT_FILE</code></td>
 </tr>
 <tr>
 <td>TLS key file</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_TLS_KEY_FILE</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_KEY_FILE</code></td>
 </tr>
 <tr>
 <td>TLS server name</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_TLS_SERVER_NAME</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_SERVER_NAME</code></td>
 </tr>
 <tr>
 <td>TLS insecure skip verify</td>
 <td><code>K8SSUSTAIN_PROMETHEUS_TLS_INSECURE_SKIP_VERIFY</code></td>
-<td><code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_TLS_INSECURE_SKIP_VERIFY</code></td>
 </tr>
 </tbody>
 </table>
-<p>The chart renders the right prefix for each component; this table matters when
-you set environment variables yourself (raw manifests, a kustomize patch,
-<code>docker run</code>, local development).</p>
+<p>The chart renders the same variables into both Deployments; this table matters
+when you set them yourself (raw manifests, a kustomize patch, <code>docker run</code>,
+local development). Every other flag's variable is listed in the
+<a href="../../reference/cli/#environment-variables">CLI reference</a>.</p>
 <hr />
 <h2 id="credential-sources-and-security">Credential sources and security<a class="headerlink" href="#credential-sources-and-security" title="Permanent link">&para;</a></h2>
 <table>
@@ -2573,7 +2530,7 @@ startup. Use <code>serverName</code> or a <code>caKey</code> instead.</p>
 </tr>
 <tr>
 <td>Controller works, dashboard shows "No metrics data available"</td>
-<td>Dashboard credentials missing: a <code>K8SSUSTAIN_PROMETHEUS_*</code> variable that should be <code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code>, a patch applied to only one Deployment, or (projected token) the dashboard ServiceAccount not authorized</td>
+<td>Dashboard credentials missing: a patch applied to only one Deployment, or (projected token) the dashboard ServiceAccount not authorized</td>
 </tr>
 <tr>
 <td>Queries return <code>401</code> about an hour after startup</td>

@@ -2086,6 +2086,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#cluster-scope-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster-scope settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#prometheus-transport" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2835,6 +2846,17 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#cluster-scope-settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cluster-scope settings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#prometheus-transport" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3390,9 +3412,9 @@ deployment uses:</p>
 <a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span>--prometheus-headers<span class="o">=</span>X-Scope-OrgID<span class="o">=</span>tenant-a<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a><span class="w">  </span>--log-level<span class="o">=</span>debug
 </code></pre></div>
-<p>The flag names are identical on <code>go run main.go dashboard</code>; the environment
-variables are not — see
-<a href="../guides/authenticated-prometheus/#environment-variables-the-prefixes-differ-per-subcommand">Environment variables — the prefixes differ per subcommand</a>.</p>
+<p>The Prometheus flags are global, so <code>go run main.go dashboard</code> takes the same
+ones, and reads the same environment variables — see
+<a href="../guides/authenticated-prometheus/#environment-variables">Environment variables</a>.</p>
 <h3 id="start-the-webhook">Start the webhook<a class="headerlink" href="#start-the-webhook" title="Permanent link">&para;</a></h3>
 <p>The webhook must be reachable from the API server over TLS, so develop it
 in-cluster: use the <a href="../guides/local-testing/">kind harness</a> or the manual kind
@@ -3874,6 +3896,34 @@ would report success without updating the site
 <p>Implementation notes for maintainers. Behaviour users can observe is
 documented in the guides and references; this section explains why the code
 is shaped the way it is.</p>
+<h3 id="cluster-scope-settings">Cluster-scope settings<a class="headerlink" href="#cluster-scope-settings" title="Permanent link">&para;</a></h3>
+<p>The settings every component must read alike — <code>--recommend-only</code>,
+<code>--excluded-namespaces</code> and the Prometheus connection (<code>--prometheus-address</code>
+and the transport flags) — are root persistent flags, bound once by
+<code>config.BindGlobalFlags</code> to one viper key and one environment variable each,
+and loaded once into one type each: <code>config.ClusterScope</code> (recommend-only,
+excluded namespaces), embedded in every subcommand's config, and
+<code>config.PrometheusConnection</code> (address, transport), held by the controller's
+and the dashboard's. A subcommand that has no use for one ignores it: the
+webhook accepts the Prometheus flags, and its config has no connection. A new
+setting the components must agree on goes there, never in a subcommand's
+<code>Bind*Flags</code>, where its key would be the subcommand's own.</p>
+<p>The chart renders them through one helper, <code>k8s-sustain.clusterScopeArgs</code> in
+<code>_helpers.tpl</code>, which every Deployment includes; the Prometheus connection only
+for a component that queries Prometheus. <code>k8s-sustain.excludedNamespaces</code> is
+the one list (the release namespace, <code>kube-system</code>, <code>kube-public</code>, then
+<code>excludedNamespaces</code>) behind every <code>--excluded-namespaces</code> and the webhook's
+<code>namespaceSelector</code>. In the binary, each reader holds the excluded namespaces
+in its <code>governance.PolicyLister</code> (see <a href="#governance">Governance</a>).</p>
+<p><code>hack/docscheck</code> guards the flags against <code>docs/reference/cli.md</code>: each command
+has a row for every flag it registers and none for one it does not (a root
+persistent flag is documented once, under Global flags), with the flag's
+default. It also reads every flag the chart renders straight from a value: the
+value's schema must accept the flag's default, and a value rendered only when
+set (<code>with</code>, <code>if</code>) must default to the flag's default, since leaving it unset
+falls through to the binary's. Helm value names come from <code>values.yaml</code> and its
+schema, and a single backticked default in <code>docs/reference/helm-values.md</code> must
+be the one <code>values.yaml</code> holds.</p>
 <h3 id="prometheus-transport">Prometheus transport<a class="headerlink" href="#prometheus-transport" title="Permanent link">&para;</a></h3>
 <p><code>internal/prometheus.New(addr, opts...)</code> takes functional options. The
 transport-related ones:</p>
@@ -3921,9 +3971,9 @@ transport-related ones:</p>
 <li><code>--prometheus-headers</code> is a pflag <strong>StringArray</strong> (one element per flag
   occurrence, no CSV splitting); the env-var path (<code>getStringSlice</code>) still
   splits on commas.</li>
-<li>A new transport flag goes in <code>bindPrometheusTransportFlags</code> (called with <code>""</code>
-  for the controller and <code>"dashboard."</code> for the dashboard, which keeps the two
-  flag sets from drifting) and <code>loadPrometheusTransport</code> in
+<li>A new transport flag goes in <code>bindPrometheusTransportFlags</code> (registered once,
+  as a root persistent flag, by <code>BindGlobalFlags</code>, so the controller and the
+  dashboard read one key and one env var) and <code>loadPrometheusConnection</code> in
   <code>internal/config/config.go</code>, plus the field on <code>promclient.TransportConfig</code>.
   Mirror it in <code>charts/k8s-sustain/templates/_helpers.tpl</code>
   (<code>k8s-sustain.prometheusAuthArgs</code> / <code>…Env</code> / <code>…AuthSecretVolumes</code>),
@@ -3931,12 +3981,12 @@ transport-related ones:</p>
   <code>charts/k8s-sustain/tests/prometheus-auth_test.yaml</code>.</li>
 </ul>
 <h3 id="governance">Governance<a class="headerlink" href="#governance" title="Permanent link">&para;</a></h3>
-<p><code>internal/governance</code> decides, for one pod template or pod, the identity it reports into, the Policy it opts into and at which level, and the governing Policy or why there is none. Its interface is one call, <code>governance.Decide(ctx, subject, reader)</code>. A subject is a workload member's pod template (<code>PodTemplate</code>), a pod (<code>Pod</code>: the webhook's, the OOM watcher's, the inventory's bare pods) or a Departed identity (<code>Departed</code>, governed by the Policy its <code>WorkloadRecommendation</code> names; it has no labels to match, so its namespace is checked and its Policy's selector must parse, as for a live member). The identity is a <code>promclient.WorkloadIdentity</code>, the key the inventory, the OOM cache, the WorkloadRecommendation and the recording rules all use, and a governing decision carries the mode the Policy manages the identity's kind in. The <code>Reader</code> port supplies what the subject does not carry: the Policies (a <code>governance.Policies</code>: every Policy with its label selector compiled, and the excluded namespaces), a pod's owner, a workload's own annotations and a Namespace's. Each caller adapts it to its own reads: the inventory serves the Policies it listed and memoised Namespaces, the webhook lists Policies from its informer cache and reads the owner chain through its TTL caches, the OOM watcher reads through the manager's client and leaves a kill unresolved when the owner lookup fails. All three list Policies through <code>governance.PolicyLister</code>, which compiles a Policy's selector once per version of it (UID and resourceVersion), and every caller keeps one lister for the process, so an unchanged Policy set is never recompiled: the webhook and the OOM watcher, which list on every admission and every kill, and the controller and the dashboard, which hand theirs to every snapshot they take (<code>inventory.Basis</code>). The lister lists without deep copies (<code>client.UnsafeDisableDeepCopy</code>), so a Policy it returns shares its fields with the informer cache's object and with concurrent decisions: governance and every caller of <code>Decide</code> treat it as read-only.</p>
+<p><code>internal/governance</code> decides, for one pod template or pod, the identity it reports into, the Policy it opts into and at which level, and the governing Policy or why there is none. Its interface is one call, <code>governance.Decide(ctx, subject, reader)</code>. A subject is a workload member's pod template (<code>PodTemplate</code>), a pod (<code>Pod</code>: the webhook's, the OOM watcher's, the inventory's bare pods) or a Departed identity (<code>Departed</code>, governed by the Policy its <code>WorkloadRecommendation</code> names; it has no labels to match, so its namespace is checked and its Policy's selector must parse, as for a live member). The identity is a <code>promclient.WorkloadIdentity</code>, the key the inventory, the OOM cache, the WorkloadRecommendation and the recording rules all use, and a governing decision carries the mode the Policy manages the identity's kind in. The <code>Reader</code> port supplies what the subject does not carry: the Policies (a <code>governance.Policies</code>: every Policy with its label selector compiled, and the excluded namespaces), a pod's owner, a workload's own annotations and a Namespace's. Each caller adapts it to its own reads: the inventory serves the Policies it listed and memoised Namespaces, the webhook lists Policies from its informer cache and reads the owner chain through its TTL caches, the OOM watcher reads through the manager's client and leaves a kill unresolved when the owner lookup fails. All three list Policies through <code>governance.PolicyLister</code>, which compiles a Policy's selector once per version of it (UID and resourceVersion) and holds the excluded namespaces, given once at construction (<code>governance.NewPolicyLister(cfg.ExcludedNamespaces)</code> in each subcommand): no reader passes them on a call. Every caller keeps one lister for the process, so an unchanged Policy set is never recompiled: the webhook and the OOM watcher, which list on every admission and every kill, and the controller and the dashboard, which hand theirs to every snapshot they take (<code>inventory.Basis</code>). Only <code>NewPolicyLister</code> builds a lister that lists: a nil or zero-value one would silently exclude no namespace, so its <code>List</code> fails (<code>governance.ErrNoPolicyLister</code>), and so does a snapshot whose <code>inventory.Basis</code> holds none. The lister lists without deep copies (<code>client.UnsafeDisableDeepCopy</code>), so a Policy it returns shares its fields with the informer cache's object and with concurrent decisions: governance and every caller of <code>Decide</code> treat it as read-only.</p>
 <p>Behind it: the opt-in walk (pod template, then workload, then Namespace; an opt-out or a non-empty policy decides, an empty value falls through), each level read only when every more specific one is silent and a pod's owner only when the walk needs it; the pre-gate, which before the first read checks that some Policy accepts the subject's namespace and labels by the same rule as the full decision (a Policy whose selector does not parse counts as accepting, so opting into it is refused <code>selector-invalid</code> at every level rather than <code>no-policy-selects</code> at some); the Policy's consent (it exists, the namespace is neither excluded nor unselected, the label selector is valid and matches the pod template's labels, the kind is managed); and the owner-name override, applied there and nowhere else.</p>
 <p>A governance rule changes in this module and its contract table (<code>internal/governance/governance_test.go</code>, a map-backed reader that records its reads), never in a caller.</p>
 <h3 id="controller">Controller<a class="headerlink" href="#controller" title="Permanent link">&para;</a></h3>
 <h4 id="identity-inventory">Identity inventory<a class="headerlink" href="#identity-inventory" title="Permanent link">&para;</a></h4>
-<p><code>internal/inventory</code> is the one place workload objects become identities. Its interface is one call, <code>inventory.Take(ctx, reader, Options)</code>, plus <code>inventory.TakeForPolicy(ctx, reader, policy, Basis)</code>, which narrows it to what a Policy can govern (its selector's namespaces and the kinds it manages, reading nothing for a Policy that manages none). A <code>Basis</code> is what a reader decides and dates every snapshot with, its excluded namespaces, its Policy lister and its clock, the reader's own: a snapshot without a clock fails rather than fall back on the wall clock; <code>Options</code> is a <code>Basis</code> and the namespaces and kinds that narrow the snapshot, which <code>TakeForPolicy</code> takes from the Policy. Both return a <code>Snapshot</code>, dated <code>TakenAt</code> by the Basis's clock when it began reading, of <code>Identity</code> values (key, live members each with the Policy governing it, union containers, <code>Since</code>, governing Policy or <code>Conflicted</code>, stored <code>WorkloadRecommendation</code>). Behind it: listing every kind in scope (a kind the cluster does not serve, such as Argo Rollouts without its CRD, has no identities rather than failing the snapshot), skipping CronJob-owned Jobs and finished standalone Jobs, owner-name and bare-pod grouping, each member's <a href="#governance">governance decision</a> (<code>governance.Decide</code> on its pod template, reading a Namespace only when the object's own annotations leave it undecided), the Conflicted rule, and attaching each stored <code>WorkloadRecommendation</code> (which is what makes a Departed identity).</p>
+<p><code>internal/inventory</code> is the one place workload objects become identities. Its interface is one call, <code>inventory.Take(ctx, reader, Options)</code>, plus <code>inventory.TakeForPolicy(ctx, reader, policy, Basis)</code>, which narrows it to what a Policy can govern (its selector's namespaces and the kinds it manages, reading nothing for a Policy that manages none). A <code>Basis</code> is what a reader decides and dates every snapshot with, its Policy lister and its clock, the reader's own: a snapshot missing either fails, rather than exclude no namespace or fall back on the wall clock; <code>Options</code> is a <code>Basis</code> and the namespaces and kinds that narrow the snapshot, which <code>TakeForPolicy</code> takes from the Policy. Both return a <code>Snapshot</code>, dated <code>TakenAt</code> by the Basis's clock when it began reading, of <code>Identity</code> values (key, live members each with the Policy governing it, union containers, <code>Since</code>, governing Policy or <code>Conflicted</code>, stored <code>WorkloadRecommendation</code>). Behind it: listing every kind in scope (a kind the cluster does not serve, such as Argo Rollouts without its CRD, has no identities rather than failing the snapshot), skipping CronJob-owned Jobs and finished standalone Jobs, owner-name and bare-pod grouping, each member's <a href="#governance">governance decision</a> (<code>governance.Decide</code> on its pod template, reading a Namespace only when the object's own annotations leave it undecided), the Conflicted rule, and attaching each stored <code>WorkloadRecommendation</code> (which is what makes a Departed identity).</p>
 <p>The controller takes one <code>TakeForPolicy</code> snapshot per reconcile through its informer cache, dated by <code>PolicyReconciler.Clock</code>, and works on <code>Snapshot.GovernedBy(policy)</code>. Every member of an identity shares its namespace and kind, so the narrowing never splits one, and every identity in it has a kind the Policy manages. The dashboard takes snapshots through its uncached client, dated by <code>Server.Clock</code>, narrowed to what each view shows: one namespace and kind for a detail page, <code>TakeForPolicy</code> for a Policy's list, everything for <code>/api/workloads</code>.</p>
 <p>A new identity rule goes in the inventory and its contract tests (<code>internal/inventory/inventory_test.go</code>), never in a caller.</p>
 <h4 id="informer-lag">Informer lag<a class="headerlink" href="#informer-lag" title="Permanent link">&para;</a></h4>

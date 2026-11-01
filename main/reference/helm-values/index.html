@@ -2154,15 +2154,20 @@
 <tr>
 <td><code>prometheusAddress</code></td>
 <td><code>""</code></td>
-<td>Prometheus server URL, shared by all components. Leave empty to auto-detect the bundled subchart service.</td>
+<td>Prometheus server URL, rendered into the controller and the dashboard (the webhook never queries Prometheus). Leave empty to auto-detect the bundled subchart service.</td>
 </tr>
 <tr>
 <td><code>excludedNamespaces</code></td>
 <td><code>[]</code></td>
-<td>Extra namespaces to exclude from k8s-sustain entirely — the controller never recycles pods there and the webhook never mutates them (the release namespace, <code>kube-system</code>, and <code>kube-public</code> are always excluded)</td>
+<td>Extra namespaces no Policy governs, whatever they opt into: the controller never touches their workloads, the webhook never mutates their pods, the dashboard shows them governed by none. The release namespace, <code>kube-system</code> and <code>kube-public</code> are always excluded. One list renders every component's <code>--excluded-namespaces</code> and the <code>MutatingWebhookConfiguration</code>'s <code>namespaceSelector</code>.</td>
 </tr>
 </tbody>
 </table>
+<p><code>recommendOnly</code>, <code>excludedNamespaces</code>, <code>prometheusAddress</code> and
+<a href="#prometheus-authentication"><code>prometheusAuth</code></a> are the cluster-scope settings:
+the chart renders each, from its one value, identically into every component
+that reads it, so the controller, the webhook and the dashboard always agree on
+them.</p>
 <hr />
 <h2 id="prometheus-authentication">Prometheus authentication<a class="headerlink" href="#prometheus-authentication" title="Permanent link">&para;</a></h2>
 <p>Authentication and TLS for the Prometheus connection. One top-level block wires
@@ -2295,9 +2300,8 @@ an auth proxy, basic auth with a private CA).</p>
 <li><strong>A secret-backed file always wins</strong> over its inline counterpart. Setting
   both is not an error; the inline value simply is not rendered.</li>
 <li><strong>Inline values become environment variables</strong>, not arguments — so they stay
-  out of the container's <code>argv</code> — with the per-component prefix the binary
-  expects: <code>K8SSUSTAIN_PROMETHEUS_*</code> on the controller,
-  <code>K8SSUSTAIN_DASHBOARD_PROMETHEUS_*</code> on the dashboard.</li>
+  out of the container's <code>argv</code> — the same <code>K8SSUSTAIN_PROMETHEUS_*</code> variables
+  on the controller and the dashboard.</li>
 <li>Naming a <code>*Key</code> without the matching <code>existingSecret</code> renders <strong>nothing</strong> —
   no flag, no volume, no mount.</li>
 <li><strong>A <code>*File</code> value is a raw path, not a source the chart creates.</strong> It renders
@@ -2334,6 +2338,7 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 </div>
 <hr />
 <h2 id="controller">Controller<a class="headerlink" href="#controller" title="Permanent link">&para;</a></h2>
+<p>The duration values (<code>reconcileInterval</code>, <code>recycleReplacementTimeout</code>, <code>recommendationRetention</code>) take any Go duration the binary's flags parse: a sequence of decimal numbers, each with an optional fraction and a unit (<code>ns</code>, <code>us</code>, <code>ms</code>, <code>s</code>, <code>m</code>, <code>h</code>), such as <code>90s</code>, <code>1.5h</code> or <code>1h30m</code>. There is no day unit: write a week as <code>168h</code>.</p>
 <table>
 <thead>
 <tr>
@@ -2768,7 +2773,7 @@ chart's <a href="#extra-manifests"><code>extraManifests</code></a>.</p>
 </tr>
 <tr>
 <td><code>httpRoute.rules</code></td>
-<td><code>PathPrefix /</code></td>
+<td><code>PathPrefix</code> match on <code>/</code></td>
 <td>Match rules; each is routed to the dashboard Service port</td>
 </tr>
 </tbody>

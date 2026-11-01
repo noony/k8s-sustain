@@ -2522,11 +2522,6 @@
 <td>Address the dashboard server listens on</td>
 </tr>
 <tr>
-<td><code>--prometheus-address</code></td>
-<td><code>http://localhost:9090</code></td>
-<td>Prometheus server URL</td>
-</tr>
-<tr>
 <td><code>--log-level</code></td>
 <td><code>info</code></td>
 <td>Log level (debug, info, warn, error). The Helm chart sets <code>error</code>, which drops the startup and access logs.</td>
@@ -2536,31 +2531,23 @@
 <td><code>(empty — same-origin only)</code></td>
 <td>Allowed CORS origins (comma-separated). Use <code>*</code> to allow all (not recommended).</td>
 </tr>
-<tr>
-<td><code>--excluded-namespaces</code></td>
-<td><code>(empty)</code></td>
-<td>Namespaces the controller/webhook never manage (comma-separated). Mirrors their <code>--excluded-namespaces</code> flag so the dashboard's policy-scoped workload views stay consistent with what is actually managed.</td>
-</tr>
 </tbody>
 </table>
-<p>The dashboard also accepts the full set of Prometheus authentication and TLS
-flags (<code>--prometheus-bearer-token-file</code>, <code>--prometheus-basic-auth-*</code>,
-<code>--prometheus-headers</code>, <code>--prometheus-tls-*</code>), with the same names and
-semantics as on the controller — see the
-<a href="../../reference/cli/#prometheus-authentication-and-tls-flags">CLI reference</a>
-and the <a href="../authenticated-prometheus/">Authenticated Prometheus guide</a>.</p>
-<div class="admonition danger">
-<p class="admonition-title">Dashboard environment variables carry the <code>DASHBOARD</code> prefix</p>
-<p>The dashboard reads <code>K8SSUSTAIN_DASHBOARD_*</code>, not <code>K8SSUSTAIN_*</code>; an
-unprefixed variable is silently ignored and every panel reports
-<a href="#no-metrics-data-available">"No metrics data available"</a>. See
-<a href="../authenticated-prometheus/#environment-variables-the-prefixes-differ-per-subcommand">Environment variables — the prefixes differ per subcommand</a>.</p>
-</div>
+<p>The dashboard also reads the <a href="../../reference/cli/#global-flags">global flags</a>,
+with the same environment variables as the controller and the webhook:
+<code>--prometheus-address</code> (<code>K8SSUSTAIN_PROMETHEUS_ADDRESS</code>, default
+<code>http://localhost:9090</code>), the Prometheus authentication and TLS flags
+(<code>--prometheus-bearer-token-file</code>, <code>--prometheus-basic-auth-*</code>,
+<code>--prometheus-headers</code>, <code>--prometheus-tls-*</code>; see the
+<a href="../authenticated-prometheus/">Authenticated Prometheus guide</a>), and
+<code>--excluded-namespaces</code> (<code>K8SSUSTAIN_EXCLUDED_NAMESPACES</code>), so its views show
+a workload in an excluded namespace governed by no Policy, exactly as the
+controller and the webhook treat it.</p>
 <p>When a request carries an <code>Origin</code> header and a CORS allowlist is configured,
 the dashboard appends <code>Vary: Origin</code> to the response so shared caches never
 serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</p>
 <h3 id="helm-chart">Helm Chart<a class="headerlink" href="#helm-chart" title="Permanent link">&para;</a></h3>
-<p>The dashboard is enabled by default (<code>dashboard.enabled: true</code>). All <code>dashboard.*</code> values, including <code>corsAllowedOrigins</code>, <code>ingress.*</code> and <code>httpRoute.*</code>, are listed in the <a href="../../reference/helm-values/#dashboard">Helm values reference</a>. If Prometheus needs credentials, the top-level <code>prometheusAuth</code> block configures the dashboard and the controller alike, with the correct environment-variable prefix for each.</p>
+<p>The dashboard is enabled by default (<code>dashboard.enabled: true</code>). All <code>dashboard.*</code> values, including <code>corsAllowedOrigins</code>, <code>ingress.*</code> and <code>httpRoute.*</code>, are listed in the <a href="../../reference/helm-values/#dashboard">Helm values reference</a>. If Prometheus needs credentials, the top-level <code>prometheusAuth</code> block configures the dashboard and the controller alike.</p>
 <p>Access it via port-forward (the Service is named <code>&lt;fullname&gt;-dashboard</code>, e.g. <code>k8s-sustain-dashboard</code> for a release called <code>k8s-sustain</code>):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>kubectl<span class="w"> </span>port-forward<span class="w"> </span>svc/k8s-sustain-dashboard<span class="w"> </span><span class="m">8090</span>:8090
 </code></pre></div>
@@ -2706,7 +2693,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <ul>
 <li><strong>Recording rules not loaded</strong> — k8s-sustain requires recording rules (<code>k8s_sustain:pod_workload</code>, <code>k8s_sustain:container_cpu_usage_by_workload:rate1m</code>, etc.). Verify they exist by querying <code>k8s_sustain:pod_workload</code> in Prometheus. The bundled Prometheus subchart embeds them. With an external Prometheus Operator, set <code>prometheusRule.enabled=true</code> to deploy them as a <code>PrometheusRule</code>. See <a href="../../reference/recording-rules/">Recording rules</a>.</li>
 <li><strong>Duplicate kube-state-metrics instances</strong> — the recording rules deduplicate with <code>max by()</code>, but a hand-written query joining raw kube-state-metrics series can still fail with "many-to-many matching not allowed". Remove the duplicate kube-state-metrics or deduplicate the same way.</li>
-<li><strong>Dashboard querying Prometheus unauthenticated</strong> — if the controller produces recommendations but every dashboard panel is empty, the dashboard is probably missing its Prometheus credentials. The chart wires both from the same <code>prometheusAuth</code> block, so this shows up when credentials were set by hand with the wrong <a href="../authenticated-prometheus/#environment-variables-the-prefixes-differ-per-subcommand">environment-variable prefix</a>.</li>
+<li><strong>Dashboard querying Prometheus unauthenticated</strong> — if the controller produces recommendations but every dashboard panel is empty, the dashboard is probably missing its Prometheus credentials. The chart wires both from the same <code>prometheusAuth</code> block, so this shows up when credentials were set by hand on the controller's Deployment only (see <a href="../authenticated-prometheus/#environment-variables">Environment variables</a>).</li>
 <li><strong>Missing upstream metrics</strong> — the recording rules depend on <code>kube_pod_owner</code>, <code>kube_replicaset_owner</code>, <code>container_cpu_usage_seconds_total</code>, <code>container_memory_working_set_bytes</code>, and <code>kube_pod_container_resource_requests</code> (for historical request lines). Ensure kube-state-metrics and cAdvisor metrics are scraped.</li>
 </ul>
 <h2 id="http-api">HTTP API<a class="headerlink" href="#http-api" title="Permanent link">&para;</a></h2>
