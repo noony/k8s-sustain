@@ -2020,7 +2020,7 @@
 <li>Existing running pods are <strong>not</strong> affected — only newly created pods receive the recommendation</li>
 <li>If the webhook is unavailable, the pod is admitted without resource injection (<code>failurePolicy: Ignore</code>)</li>
 <li>The controller still computes a recommendation for <code>OnCreate</code> workloads on its regular reconcile cycle and caches it in a <code>WorkloadRecommendation</code> object — this keeps the workload visible on the dashboard and is what the webhook injects at admission (the webhook has no other source of recommendations), but the controller <strong>never</strong> recycles, resizes, or otherwise mutates the workload in this mode</li>
-<li>The dashboard reports pods still waiting for a rollout to pick up the recommendation as drift (stale pods)</li>
+<li>The dashboard reports pods still waiting for a rollout to pick up a request change as drift (stale pods); pods whose limits alone differ are not drift</li>
 </ul>
 <p><strong>Best for:</strong></p>
 <ul>
@@ -2045,7 +2045,7 @@
 <p><code>cronJob</code>, <code>job</code> and <code>pod</code> never take the eviction path: their running pods are resized in place or not at all — see <a href="../in-place-updates/#kinds-that-are-never-evicted">Kinds that are never evicted</a>.</p>
 <p><strong>Ongoing reconciliation (controller) on clusters without in-place update support (k8s &lt; 1.33):</strong></p>
 <ol>
-<li>Each non-terminal pod (Running or Pending) with stale resources is evicted via the Eviction API, one at a time (see <a href="#eviction-safeguards">Eviction safeguards</a>). Staleness is detected on both requests and limits. Evicting Pending pods unblocks workloads stuck unschedulable because their original request was too large.</li>
+<li>Each non-terminal pod (Running or Pending) with stale resources is evicted via the Eviction API, one at a time (see <a href="#eviction-safeguards">Eviction safeguards</a>). A pod is stale when a request differs from the recommendation; a pod whose limits alone differ is never evicted and keeps them until it is replaced (see <a href="../in-place-updates/#changes-to-limits-alone">Changes to limits alone</a>). Evicting Pending pods unblocks workloads stuck unschedulable because their original request was too large.</li>
 <li>The workload controller (Deployment/StatefulSet/DaemonSet) creates replacement pods</li>
 <li>The webhook injects the latest recommendations into the new pods at creation time</li>
 <li>PodDisruptionBudgets are respected — pods blocked by a PDB are skipped and retried on the next reconcile cycle</li>
@@ -2054,7 +2054,7 @@
 <ol>
 <li>Controller resizes each running, non-terminating pod through the <code>pods/resize</code> subresource. A stale Pending pod cannot be resized, so it is evicted as on older clusters</li>
 <li>The kubelet applies the new resources, without restarting the container unless its <code>resizePolicy</code> requires it</li>
-<li>If the kubelet reports <code>Infeasible</code> or <code>Error</code>, or the API server rejects the resize as invalid, the pod is evicted as a fallback; <code>Deferred</code> resizes are left to the kubelet</li>
+<li>If the kubelet reports <code>Infeasible</code> or <code>Error</code>, or the API server rejects the resize as invalid, the pod is evicted as a fallback, unless the resize changes limits alone; <code>Deferred</code> resizes are left to the kubelet</li>
 </ol>
 <p>See <a href="../in-place-updates/">In-Place Updates</a> for details.</p>
 <p><strong>Best for:</strong></p>
@@ -2124,7 +2124,7 @@
 <h2 id="downsize-threshold">Downsize threshold<a class="headerlink" href="#downsize-threshold" title="Permanent link">&para;</a></h2>
 <p>To avoid churning pods over noise, the controller ignores small <strong>decreases</strong>. A decrease is acted on only when it is at least <code>max(percent% of the current value, minDecrease)</code>, set per resource with <code>resourcesConfigs.&lt;cpu|memory&gt;.downsizeThreshold</code> (defaults: 5%, with <code>minDecrease</code> 10m for CPU and 15Mi for memory). The check is per container and per value (request and limit).</p>
 <ul>
-<li><strong>Increases always apply</strong>, however small.</li>
+<li><strong>Increases always apply</strong>, however small. A change to limits alone, increase or decrease, never evicts a pod: it is resized in place or waits for the pod's replacement (see <a href="../in-place-updates/#changes-to-limits-alone">Changes to limits alone</a>).</li>
 <li>Setting both <code>percent</code> and <code>minDecrease</code> to <code>0</code> acts on every decrease.</li>
 <li>The threshold only gates resizing and eviction of running pods; new pods still receive the exact recommendation from the webhook.</li>
 </ul>

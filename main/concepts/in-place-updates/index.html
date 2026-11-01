@@ -839,6 +839,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#changes-to-limits-alone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changes to limits alone
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#kinds-that-are-never-evicted" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1887,6 +1898,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#changes-to-limits-alone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Changes to limits alone
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#kinds-that-are-never-evicted" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2029,11 +2051,11 @@
 <tbody>
 <tr>
 <td><strong>1.30 – 1.32</strong></td>
-<td><code>inPlace=false</code> → eviction path. Stale pods are evicted via the Eviction API; the webhook injects the recommendation into the replacement. CronJob, Job and bare-pod pods are not touched.</td>
+<td><code>inPlace=false</code> → eviction path. Stale pods are evicted via the Eviction API; the webhook injects the recommendation into the replacement. A pod whose limits alone differ is left alone until it is replaced (see <a href="#changes-to-limits-alone">Changes to limits alone</a>). CronJob, Job and bare-pod pods are not touched.</td>
 </tr>
 <tr>
 <td><strong>1.33+</strong></td>
-<td><code>inPlace=true</code>. All resizes go through <code>pods/resize</code>; sidecar (restartable init) containers are resized in a separate call. A stale pod that is not Running yet (Pending) cannot be resized and is evicted instead, except for CronJob, Job and bare-pod pods.</td>
+<td><code>inPlace=true</code>. All resizes go through <code>pods/resize</code>; sidecar (restartable init) containers are resized in a separate call. A stale pod that is not Running yet (Pending) cannot be resized and is evicted instead, except for CronJob, Job and bare-pod pods, and except when only its limits differ.</td>
 </tr>
 </tbody>
 </table>
@@ -2049,28 +2071,37 @@
 </code></pre></div>
 <p>In both modes only pods owned by the target workload are touched — see <a href="../update-modes/#eviction-safeguards">Eviction safeguards</a>.</p>
 <p>A bare-pod identity has no owner object or selector: its pods are the members the inventory found — see <a href="#bare-pods">Bare pods</a>.</p>
-<p>When <code>Ongoing</code> mode is active and <code>inPlace=true</code>, a pod that is not Running yet cannot be resized in place. A stale one is evicted through the <a href="#eviction-fallback">eviction fallback</a> — a pod stuck Pending on an oversized request is exactly what the webhook should re-inject — except for the <a href="#kinds-that-are-never-evicted">kinds that are never evicted</a>, whose Pending pods are left alone. The patcher walks each running pod and:</p>
+<p>When <code>Ongoing</code> mode is active and <code>inPlace=true</code>, a pod that is not Running yet cannot be resized in place. A stale one is evicted through the <a href="#eviction-fallback">eviction fallback</a> — a pod stuck Pending on an oversized request is exactly what the webhook should re-inject — except for the <a href="#kinds-that-are-never-evicted">kinds that are never evicted</a>, whose Pending pods are left alone, and except a pod whose limits alone differ, which <a href="#changes-to-limits-alone">waits for its replacement</a>. The patcher walks each running pod and:</p>
 <ol>
 <li>Compares the pod spec against the current recommendation.</li>
 <li><strong>Spec differs</strong> — a resize is submitted with the new values, even if a previous resize is still pending. The kubelet re-evaluates pending resizes against the new desired state, so a recommendation that has since been lowered can succeed where the old one was infeasible.</li>
 <li><strong>Spec already at target</strong> — the kubelet's verdict on the staged resize decides, read from the <code>PodResizePending</code> and <code>PodResizeInProgress</code> pod conditions:<ul>
-<li><strong><code>Infeasible</code></strong> — the node cannot satisfy the request: the spec carries the target resources but they never landed. The pod is evicted (unconditionally — the spec matching the recommendation must not be mistaken for "already resized") so the scheduler can place the replacement elsewhere; the webhook injects the new resources into the replacement.</li>
+<li><strong><code>Infeasible</code></strong> — the node cannot satisfy the request: the spec carries the target resources but they never landed. The pod is evicted — the spec matching the recommendation must not be mistaken for "already resized" — so the scheduler can place the replacement elsewhere; the webhook injects the new resources into the replacement.</li>
 <li><strong><code>Error</code></strong> (reported on the <code>PodResizeInProgress</code> condition, kubelet ≥ 1.34) — the kubelet accepted the resize but failed while actuating it, and does not retry on its own. Same eviction fallback as <code>Infeasible</code>, so the pod doesn't run on its old allocation forever while the spec claims the target.</li>
+<li>Either verdict evicts only when the staged resize changes a request: the resources the kubelet reports it enacted (<code>status.containerStatuses[].resources</code>) are compared with the spec, and a container that reports none counts as a request change. A staged resize of limits alone leaves the pod running on its old limits until it is replaced.</li>
 <li><strong><code>Deferred</code></strong> — the kubelet accepted the request but is waiting on conditions (e.g. room freed by another pod terminating). Skipped; the kubelet will apply it without further intervention.</li>
 <li><strong>No pending resize</strong> — the pod is at target; nothing to do. An unrecognized future verdict is logged and left to the kubelet.</li>
 </ul>
 </li>
 <li>Issues <code>PATCH /api/v1/.../pods/&lt;name&gt;/resize</code>.</li>
-<li>An <code>Invalid</code> rejection is a <em>per-pod</em> validation failure — the subresource being served means the feature is available (the resize would change the pod's QoS class, decrease a memory limit with a <code>NotRequired</code> resize policy, …). Only that pod falls back to eviction (the webhook re-injects on the replacement); in-place stays enabled for every other pod.</li>
+<li>An <code>Invalid</code> rejection is a <em>per-pod</em> validation failure — the subresource being served means the feature is available (the resize would change the pod's QoS class, decrease a memory limit with a <code>NotRequired</code> resize policy, …). Only that pod falls back to eviction (the webhook re-injects on the replacement), unless only its limits differ: then it keeps them until it is replaced. In-place stays enabled for every other pod.</li>
 <li>A <code>NotFound</code> response means the pod disappeared between listing and patching; it is skipped without error.</li>
 </ol>
 <p>Sidecar (restartable init) containers are resized in a <strong>separate</strong> <code>/resize</code> call so a sidecar rejection (their resize needs feature gates beyond <code>InPlacePodVerticalScaling</code>) cannot block the regular-container resize. Failures on the sidecar call are logged and ignored — new requests will land at next pod creation via webhook injection.</p>
 <h2 id="eviction-fallback">Eviction fallback<a class="headerlink" href="#eviction-fallback" title="Permanent link">&para;</a></h2>
-<p>On clusters below 1.33, and on newer clusters for pods whose in-place resize fails or that are not Running yet, stale pods are evicted. The guards (ownership check, PDBs, <code>safe-to-evict</code>, one pod at a time, crash-loop halt, StatefulSet ordering) are listed in <a href="../update-modes/#eviction-safeguards">Eviction safeguards</a>. Details of the wait between evictions:</p>
+<p>On clusters below 1.33, and on newer clusters for pods whose in-place resize fails or that are not Running yet, stale pods are evicted. A pod is stale when a request differs from the recommendation beyond the <a href="../update-modes/#downsize-threshold">downsize threshold</a>; limits alone never make one. The guards (ownership check, PDBs, <code>safe-to-evict</code>, one pod at a time, crash-loop halt, StatefulSet ordering) are listed in <a href="../update-modes/#eviction-safeguards">Eviction safeguards</a>. Details of the wait between evictions:</p>
 <ul>
 <li>Quiescence is judged from pod state (evicted pod gone, no peer <code>Pending</code> or <code>Running</code>-but-not-Ready), not a Ready-count baseline, so HPA scale-down is handled: if no replacement is provisioned, the remaining peers stay Ready and the wait returns immediately.</li>
 <li>The wait times out after <code>--recycle-replacement-timeout</code> (Helm <code>controller.recycleReplacementTimeout</code>, default 5m), sized to cover a node-autoscaler provisioning a fresh node for the replacement. When it elapses, the loop stops for this reconcile so a stuck workload loses no more pods.</li>
 <li>The workload controller replaces the evicted pod from its unchanged template; the webhook injects the latest recommendation at admission.</li>
+</ul>
+<h2 id="changes-to-limits-alone">Changes to limits alone<a class="headerlink" href="#changes-to-limits-alone" title="Permanent link">&para;</a></h2>
+<p>A pod whose requests already match the recommendation, within the <a href="../update-modes/#downsize-threshold">downsize threshold</a>, and whose limits alone differ is never evicted: a limit does not decide where a pod is scheduled, and restarting a pod for a ceiling it has not hit trades a disruption for nothing yet.</p>
+<ul>
+<li>With in-place resize, the running pod is resized in place.</li>
+<li>Without it, or when the pod is not Running, or when the resize is rejected or the kubelet cannot enact it, the pod keeps its limits until it is replaced by a rollout, a scale event or a node drain. The webhook gives the replacement the new limits.</li>
+<li>Such a pod is not stale: it does not count in <code>k8s_sustain_workload_stale_pods</code> and does not make the workload <a href="../../guides/dashboard/#risk-state">Drifted</a>, as a suppressed decrease does not. The <code>WorkloadRecommendation</code> and its trace still show the new limit.</li>
+<li>A limit raised because the request rose (a limit never ends below its request, see the <a href="../../reference/policy/#cpulimits-memorylimits">Policy reference</a>) is part of that request change, applied like any other: resized in place, or evicted where it cannot be.</li>
 </ul>
 <h2 id="kinds-that-are-never-evicted">Kinds that are never evicted<a class="headerlink" href="#kinds-that-are-never-evicted" title="Permanent link">&para;</a></h2>
 <p>Three kinds opt out of the eviction path entirely, on the same reasoning: evicting the pod would destroy work that nothing will redo. For all three, in-place resize is the <em>only</em> post-creation correction, so on a cluster without in-place support the running pod simply keeps its original resources.</p>
@@ -2082,8 +2113,8 @@
 <p>A container with <code>resizePolicy: RestartContainer</code> for memory restarts on a memory resize, which for a task means losing in-flight work (see <a href="#caveats">Caveats</a>). Use <code>pod: OnCreate</code> if that is not acceptable. See <a href="../../guides/standalone-pods-and-grouping/">Standalone Pods &amp; Identity Grouping</a>.</p>
 <h2 id="caveats">Caveats<a class="headerlink" href="#caveats" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Any resize can be deferred or infeasible.</strong> CPU and memory, up or down: the kubelet reports <code>Deferred</code> while the node lacks free capacity and <code>Infeasible</code> when the request exceeds what the node can ever offer. <code>Deferred</code> resizes are left to the kubelet; <code>Infeasible</code> ones fall back to eviction (except for the never-evicted kinds).</li>
-<li><strong>Memory limit decreases</strong> only complete once the container's usage is below the new limit; until then the resize stays in progress.</li>
+<li><strong>Any resize can be deferred or infeasible.</strong> CPU and memory, up or down: the kubelet reports <code>Deferred</code> while the node lacks free capacity and <code>Infeasible</code> when the request exceeds what the node can ever offer. <code>Deferred</code> resizes are left to the kubelet; <code>Infeasible</code> ones fall back to eviction (except for the never-evicted kinds, and a staged change to limits alone).</li>
+<li><strong>Memory limit decreases</strong> only complete once the container's usage is below the new limit; until then the resize stays in progress. The pod is never evicted for it.</li>
 <li><strong><code>resizePolicy: RestartContainer</code></strong> on a container restarts it for that resource's resize. For Job, CronJob and bare pods that can discard in-flight work.</li>
 <li><strong>VPA conflicts.</strong> Running Vertical Pod Autoscaler alongside k8s-sustain on the same pods produces conflicting patches. Use the <code>k8s.sustain.io/policy</code> annotation to opt workloads in selectively, and exclude those workloads from VPA targets.</li>
 <li><strong>Resize status inspection:</strong></li>

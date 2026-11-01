@@ -3085,8 +3085,9 @@ coexist.</p>
 </code></pre></div>
 <ul>
 <li>The operator says why nothing happens — the controller logs
-  <code>recommend-only: computed recommendations</code> with <code>source=policy</code>, and the
-  webhook logs <code>recommend-only: would inject resources</code> on pod creation:</li>
+  <code>recommend-only: applying nothing</code>, and the webhook logs
+  <code>recommend-only: would inject resources</code> on pod creation, both with
+  <code>source=policy</code>:</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>k8s-sustain<span class="w"> </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>k8s-sustain<span class="w"> </span>--tail<span class="o">=</span><span class="m">500</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a><span class="w">  </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s1">'recommend-only'</span>

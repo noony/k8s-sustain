@@ -2647,6 +2647,7 @@ actively right-size. Inspect the resulting recommendations with
 </tbody>
 </table>
 <p>Whatever the strategy, a limit never ends below the request: the API server rejects such a pod and such a resize, so a kept limit the new request outgrows (an OOM floor, headroom, <code>minAllowed</code> or autoscaler coordination can each push it there) is raised to the request. The request is never lowered to fit the limit. The <code>WorkloadRecommendation</code>'s trace records the raise as its <code>guard</code> stage. The webhook and the in-place resize hold the same line when they write a container: when the limit it would end up with is below its request — a limit kept from a pod whose running limit differs from its template, or a limit decrease applied while the <a href="#downsize-threshold">downsize threshold</a> withholds the request's — they raise that limit to the request.</p>
+<p>A change to a container's limits alone, its requests already matching within the <a href="#downsize-threshold">downsize threshold</a>, never evicts a pod: it is resized in place where the cluster supports it, and otherwise waits for the pod's replacement, which the webhook gives the new limits. Such a pod is not counted as drift. A limit raised because the request rose is part of that request change. See <a href="../../concepts/in-place-updates/#changes-to-limits-alone">Changes to limits alone</a>.</p>
 <h4 id="downsize-threshold"><code>cpu.downsizeThreshold</code> / <code>memory.downsizeThreshold</code><a class="headerlink" href="#downsize-threshold" title="Permanent link">&para;</a></h4>
 <p>Suppresses pod recycling for resource <strong>decreases</strong> that are too small to be
 worth the disruption. <strong>Increases always apply immediately</strong> (under-provisioning
@@ -2680,7 +2681,8 @@ exceeds <code>max(percent% × current, minDecrease)</code>.</p>
 resource (every decrease is applied).</p>
 <p>The threshold gates only the controller's recycling of <strong>running</strong> pods. The
 admission webhook always injects the exact recommendation at pod creation — a
-new pod has nothing to disrupt.</p>
+new pod has nothing to disrupt. A pod whose requests are within the threshold
+and whose limits alone differ is not evicted either; see above.</p>
 <hr />
 <h2 id="status">Status<a class="headerlink" href="#status" title="Permanent link">&para;</a></h2>
 <p>The controller writes a single <code>Ready</code> condition to <code>status.conditions</code>.</p>
