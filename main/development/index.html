@@ -3296,14 +3296,19 @@ through the <code>recommender.InputsFetcher</code> port. Their tests inject
 <code>recommendertest.StaticInputs</code> instead of serving PromQL from an
 <code>httptest</code> server:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nx">inputs</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">recommendertest</span><span class="p">.</span><span class="nx">NewStaticInputs</span><span class="p">().</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nx">Set</span><span class="p">(</span><span class="nx">id</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">recommender</span><span class="p">.</span><span class="nx">WorkloadInputs</span><span class="p">{</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="nx">CPUPerPod</span><span class="p">:</span><span class="w"> </span><span class="nx">promclient</span><span class="p">.</span><span class="nx">ContainerValues</span><span class="p">{</span><span class="s">"app"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.1</span><span class="p">},</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">        </span><span class="nx">OOM</span><span class="p">:</span><span class="w">       </span><span class="kt">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">recommender</span><span class="p">.</span><span class="nx">OOM</span><span class="p">{</span><span class="s">"app"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nx">Kills</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nx">PeakBytes</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="nx">HasPeak</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}},</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="p">}).</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nx">Set</span><span class="p">(</span><span class="nx">id</span><span class="p">,</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="nx">recommender</span><span class="p">.</span><span class="nx">WithCPUUsage</span><span class="p">(</span><span class="nx">promclient</span><span class="p">.</span><span class="nx">ContainerValues</span><span class="p">{</span><span class="s">"app"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.1</span><span class="p">}),</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">        </span><span class="nx">recommender</span><span class="p">.</span><span class="nx">WithOOMKills</span><span class="p">(</span><span class="kt">map</span><span class="p">[</span><span class="kt">string</span><span class="p">]</span><span class="nx">recommender</span><span class="p">.</span><span class="nx">OOM</span><span class="p">{</span><span class="s">"app"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nx">Kills</span><span class="p">:</span><span class="w"> </span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="nx">PeakBytes</span><span class="p">:</span><span class="w"> </span><span class="mi">300</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span><span class="w"> </span><span class="nx">HasPeak</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">}}),</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">    </span><span class="p">).</span>
 <a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">    </span><span class="nx">Fail</span><span class="p">(</span><span class="nx">otherID</span><span class="p">,</span><span class="w"> </span><span class="nx">errors</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span><span class="s">"prometheus down"</span><span class="p">))</span>
 </code></pre></div>
-<p>An identity with neither gets empty inputs, whatever the settings it is
-fetched under, as Prometheus answers for one with no samples. <code>Calls()</code>
+<p>Each signal's module exports the option that sets its values
+(<code>WithCPUUsage</code>, <code>WithMemoryUsage</code>, <code>WithOOMKills</code>). <code>Set</code> builds the
+identity's inputs with <code>recommender.NewInputs</code>, which gives every signal it
+is not given its values from no samples, so they read exactly as the inputs
+<code>PromInputs</code> fetches. An identity with neither gets empty inputs, whatever
+the settings it is fetched under, as Prometheus answers for one with no
+samples. <code>Calls()</code>
 reports every fetch, the settings it ran under and its requests, and
 <code>Requested(id)</code> whether an identity was part of any, so a test can assert
 what was fetched and how. Prefer driving
@@ -3543,32 +3548,54 @@ kind (say <code>Rollout</code> from Argo) is mostly a matter of registering it t
 <code>internal/recommender</code> (<code>signal_usage.go</code> holds the CPU and memory usage
 signals, <code>signal_oom.go</code> the OOM floor) implementing the <code>signal</code> interface in
 <code>signal.go</code>: its query and shard cost, its Prometheus contract (<code>contract</code>),
-how it collects samples into per-container values, its failure policy, whether
-its values excuse a Too
-young identity from the age gate (<code>excusesAge</code>), where its stage runs (<code>slot</code>:
-base, adjuster or limit adjuster, CPU or memory), its contribution to a
-container's request or limit, and its trace stage. <code>PromInputs</code> fetches every
-signal in the <code>signals</code> list, and <code>Compute</code> runs one chain per resource in a
-fixed order: on the request side base signals, adjusters, headroom, clamp and
-coordination; on the limit side the Policy's limit strategy, limit adjusters
-and the guard (<code>limit.go</code>, whose <code>limitStrategies</code> is the one list of limit
-strategies, which <code>WithDefaults</code> reads too). Both sides run their signals
-alike (<code>contributionsTo</code>, then <code>stagesOf</code> for their trace stages) and differ
-only in which contribution wins. Neither has a line specific to any signal:
-the age gate asks every signal, and live OOM kills reach the OOM floor through
-the inputs port (<code>WithLiveOOMs</code>), not through <code>Compute</code>. To add one:</p>
+how it collects samples into its values (<code>collect</code>), its failure policy, where
+its stage runs (<code>slot</code>: base, adjuster or limit adjuster, CPU or memory), its
+contribution to a container's request or limit, and its trace stage. Its
+values are a type of its own behind the <code>signalValues</code> interface
+(<code>inputs.go</code>): the containers they give something to recommend from
+(<code>observed</code>), and whether they excuse a Too young identity from the age gate
+(<code>excusesAge</code>). <code>WorkloadInputs</code> holds every signal's values keyed by the
+signal, and a signal reads its own back with <code>valuesOf</code>, so a new signal adds
+no field to any shared type.</p>
+<p><code>PromInputs</code> fetches every signal in the <code>signals</code> list, and <code>Compute</code> runs
+one chain per resource in a fixed order: on the request side base signals,
+adjusters, headroom, clamp and coordination; on the limit side the Policy's
+limit strategy, limit adjusters and the guard (<code>limit.go</code>, whose
+<code>limitStrategies</code> is the one list of limit strategies, which <code>WithDefaults</code>
+reads too). Both sides run their signals alike (<code>contributionsTo</code>, then
+<code>stagesOf</code> for their trace stages), and every stage of a signal, its
+contribution and its trace entry, sizes with one <code>stageContext</code>: the
+identity's inputs, the resource's Policy config, the container as the
+identity holds it (the union of its members', with the requests and limits it
+declares, not a live pod's), the instant the Request computes as of, and on
+the limit side the final request. Each role combines its contributions its
+own way: base contributions by taking the highest, a tie going to the first in
+<code>signals</code> order (<code>requestOf</code>); an adjuster's only when it is above the value
+so far; a limit adjuster's only when, rounded up to a whole millicore or MiB,
+it is above the limit the strategy set. The trace marks the contribution that
+set the final value as the determining one. Neither side has a line specific
+to any signal: the age gate asks every signal's values, and live OOM kills
+reach the OOM floor through the inputs port (<code>WithLiveOOMs</code>), not through
+<code>Compute</code>.</p>
+<p>Outside the recommender, inputs answer only the questions every reader
+shares: <code>Resolved</code> (whether any container's usage was observed, the
+controller's coverage count) and <code>Usage</code> (a container's usage of a resource,
+which a Simulation shows). Add another only when a reader needs it, never a
+signal's values. To add a signal:</p>
 <ol>
 <li>Write <code>internal/recommender/signal_&lt;name&gt;.go</code>. Build its PromQL from the
    <code>internal/prometheus</code> primitives (<code>Shard.Selector</code>, <code>Shard.MetricsSelector</code>,
    <code>QuantileOverTime</code>, <code>WindowMinutes</code>); <code>PromInputs</code> runs it through
    <code>Client.QueryShard</code>, with the batching, retry and one-identity fallback
-   every signal shares. Give its per-container values a field in
-   <code>WorkloadInputs</code>, which is what <code>recommendertest.StaticInputs</code> serves</li>
+   every signal shares. Give its values a type of their own implementing
+   <code>signalValues</code>, whose zero value holds nothing, and export the
+   <code>InputsOption</code> that sets them (<code>WithOOMKills</code> does, through <code>setting</code>):
+   it is how <code>recommendertest.StaticInputs</code> serves them</li>
 <li>List it in <code>signals</code> (<code>internal/recommender/signal.go</code>). Within a role,
-   stages run in list order. A base signal or adjuster shapes the request; a
-   limit adjuster may only raise the limit the strategy set, never remove it
-   or give one to a container without, and the guard still raises a limit
-   left below the request</li>
+   stages run in list order, which settles a tie between base signals. A base
+   signal or adjuster shapes the request; a limit adjuster may only raise the
+   limit the strategy set, never remove it or give one to a container
+   without, and the guard still raises a limit left below the request</li>
 <li>Its trace stage is a <code>TraceStage</code> it builds itself: its name, the value it
    contributed and any facts as key/values. The trace is a list, so a new
    stage needs no CRD, <code>api.ts</code> or dashboard change (the dashboard shows an
@@ -3601,17 +3628,19 @@ the inputs port (<code>WithLiveOOMs</code>), not through <code>Compute</code>. T
    for users who bring their own Prometheus</li>
 <li>Test it at its own interface, next to <code>signal_usage_test.go</code> and
    <code>signal_oom_test.go</code>: the query built from settings, the values collected
-   from <code>ShardSample</code>s, its failure policy, its contribution and trace stage.
-   Test what it does to a whole recommendation through <code>Compute</code>, from a
-   <code>Request</code> the test builds in the package at a fixed instant (<code>now</code>; outside
-   the package only <code>Assemble</code> builds one). <code>signal_test.go</code> shows, in one
-   test, that a signal defined only in a test is fetched and then computed on
-   the limit side with its own trace stage from what was fetched, from its
-   list entry alone and with its values carried in <code>WorkloadInputs</code>, and
-   checks that every listed signal's contract
-   declares exactly the rules its query reads and that its <code>collect</code> reads a
-   sample of each of them, so no series its query returns is dropped for a
-   metric name <code>collect</code> does not handle</li>
+   from <code>ShardSample</code>s, its failure policy, and its contribution and trace
+   stage from a <code>stageContext</code> the test builds (<code>stageFor</code>), with no
+   Request. Test what it does to a whole recommendation through <code>Compute</code>,
+   from a <code>Request</code> the test builds in the package at a fixed instant (<code>now</code>;
+   outside the package only <code>Assemble</code> builds one) with inputs from
+   <code>NewInputs</code>. <code>signal_test.go</code> shows that a signal defined only in a test,
+   with values of its own type, is fetched and then computed on the limit
+   side with its own trace stage from what was fetched, from its list entry
+   alone; that every stage of a signal gets its context; that base signals
+   combine by max; and it checks that every listed signal's contract declares
+   exactly the rules its query reads and that its <code>collect</code> reads a sample of
+   each of them, so no series its query returns is dropped for a metric name
+   <code>collect</code> does not handle</li>
 <li>Add it to the signals table in
    <a href="../concepts/recommendation-pipeline/#signals">Recommendation Pipeline</a> and
    describe its stage there</li>
@@ -3886,7 +3915,7 @@ transport-related ones:</p>
 <li>the spec's resources with every default explicit (<code>WithDefaults</code>: the window, the percentile and headroom unless the request is kept, <code>keepLimit</code> when no strategy is set), which the fetch and the computation both use and a Simulation returns as its effective settings;</li>
 <li>one batch fetch, and one instant per batch read from <code>now</code> once it returns: kills the live decorator merged in never postdate it. The caller owns the clock: the controller passes <code>PolicyReconciler.Clock</code>, the one <code>start</code> also gives <code>WithLiveOOMs</code>, so the age gate and the live OOM window are judged by one clock; the dashboard passes <code>Server.Clock</code>. Nil is the wall clock on both, and a test fixes the instant with a fake one.</li>
 </ul>
-<p><code>Request</code> has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). <code>Request.RequestAt</code> is the request a Request computes for one of its containers had its usage percentile of one resource been a given value, every other signal as observed: a Simulation's recommendation chart computes each past percentile point with it (<code>recommendationSeries</code>), so a point costs one resource of one container, and the dashboard never maps a resource to its fields itself.</p>
+<p><code>Request</code> has no exported field: only the assembly builds one outside the package, so every Request carries its instant (a zero one would make every dated identity Too young). <code>Request.RequestAt</code> is the request a Request computes for one of its containers had its usage percentile of one resource been a given value, every other signal as observed: a Simulation's recommendation chart computes each past percentile point with it (<code>recommendationSeries</code>), so a point costs one resource of one container, and the dashboard never reads a signal's values itself.</p>
 <h4 id="the-policy-pass">The Policy pass<a class="headerlink" href="#the-policy-pass" title="Permanent link">&para;</a></h4>
 <p><code>Reconcile</code> reads the Policy, handles deletion and the finalizer, takes the <code>inventory.TakeForPolicy</code> snapshot, and runs one pass over it (<code>runPass</code> in <code>internal/controller/pass.go</code>). Everything after the pass consumes the <strong>report</strong> it returns, one entry per identity on the work-list (its key, whether it is departed, whether it was fetched and, if so, its outcome, whether its fetch resolved, whether a departed identity failed, one <code>applyResult</code> per live member, the Recommendation a live identity holds for the Policy after the pass, and what computing it found: its autoscaler, whether its members disagree on it, and the containers the OOM floor determined): <code>settle</code> hands the member results to the <a href="#apply-results-and-the-ledger">ledger</a> and returns how many identities failed and, per identity, how many members, the health tracker aggregates each live identity's health from the ledger, the <a href="#metric-series">series publisher</a> publishes what the report, the health and those counts describe, the sweep runs, <code>passCondition</code> derives the <code>Ready</code> condition from those counts, and the ledger schedules the requeue. The pass keeps no state between passes, and no step reads another's struct fields: each takes what it needs from the earlier steps' return values, in the order the pass calls them.</p>
 <ul>
