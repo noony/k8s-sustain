@@ -2638,11 +2638,11 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <li><strong>Signal history unavailable</strong>, with the reason, when the history cannot be read (Prometheus timed out, or the range loads more samples than <code>--query.max-samples</code>). The OOM markers, read with it, are missing too; the average and the rest of the page still show.</li>
 </ul>
 <h3 id="policies-page">Policies Page<a class="headerlink" href="#policies-page" title="Permanent link">&para;</a></h3>
-<p>A stat strip shows <strong>Total policies</strong>, <strong>Workloads covered</strong>, <strong>Cluster CPU saved</strong> and <strong>Cluster Mem saved</strong>. The table lists each policy's Name, <strong>Status</strong> (Ready condition), <strong>Mode</strong> (per-kind update modes), <strong>Workloads</strong>, <strong>CPU saved</strong>, <strong>Mem saved</strong>, <strong>Blocked</strong> (Blocked identities) and <strong>Last applied</strong>. Click a row for the policy detail page.</p>
+<p>A stat strip shows <strong>Total policies</strong>, <strong>Workloads covered</strong>, <strong>Cluster CPU saved</strong> and <strong>Cluster Mem saved</strong>. The table lists each policy's Name, <strong>Status</strong> (Ready condition), <strong>Mode</strong> (the update mode of each kind it manages), <strong>Workloads</strong>, <strong>CPU saved</strong>, <strong>Mem saved</strong>, <strong>Blocked</strong> (Blocked identities) and <strong>Last applied</strong>. Click a row for the policy detail page.</p>
 <h3 id="policy-detail">Policy Detail<a class="headerlink" href="#policy-detail" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>Stat strip</strong> — Status, Matched Workloads (every identity the policy governs, Departed ones included, unaffected by the table filters), CPU saved, Memory saved.</li>
-<li><strong>Configuration</strong> — per resource: window, percentile, headroom, min, max, keep request, and limits strategy. Below: update mode per kind (Deploy, STS, DS, CJ, Job, Rollout), ignore safe-to-evict annotations, exclude init containers, and autoscaler coordination (with <code>replicaBudgetAnchor</code> when set). <strong>View as YAML</strong> opens the Policy spec in a modal.</li>
+<li><strong>Configuration</strong> — per resource: window, percentile, headroom, min, max, keep request, and limits strategy. Below: the update mode of each kind the policy manages, <code>(in place)</code> marking <code>Ongoing</code> on a kind whose pods are only ever resized in place (CronJob, Job, Pod), ignore safe-to-evict annotations, exclude init containers, and autoscaler coordination (with <code>replicaBudgetAnchor</code> when set). <strong>View as YAML</strong> opens the Policy spec in a modal.</li>
 <li><strong>Selector</strong> — target namespaces (or "all namespaces"), <code>matchLabels</code> and <code>matchExpressions</code>.</li>
 <li><strong>Effectiveness over time</strong> — CPU and memory savings for this policy over the selected range.</li>
 <li><strong>Matched Workloads</strong> — the identities the policy governs: Namespace, Kind, Name (with Departed badge), Risk, Drift, containers and their current CPU/memory requests; namespace filter, name search, <strong>Reset filters</strong>, and pagination (50 per page). Sorted by name by default; click Namespace, Kind, Name or Drift to sort across all pages. Filters, sort and page live in the URL alongside the time range, so Back from a workload restores the list.</li>
@@ -2651,7 +2651,7 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <h3 id="policy-simulator">Policy Simulator<a class="headerlink" href="#policy-simulator" title="Permanent link">&para;</a></h3>
 <p>A Simulation is the Recommendation the controller would compute for an identity, under what-if changes to its Policy's settings. With no change it is exactly the controller's: the same identity (members, containers, age), the same Policy settings, and the same autoscaler, read for each member the Policy governs — the one difference is that the dashboard has no live OOM watcher, so a kill the controller saw in the last 30 minutes but Prometheus does not hold yet raises the controller's memory floor and not the Simulation's.</p>
 <ol>
-<li>Select a <strong>workload</strong> (namespace, kind, name). Kinds: Deployment, StatefulSet, DaemonSet, CronJob, Job, Rollout, Pod. <strong>Open in Simulator</strong> on a workload page fills it in.</li>
+<li>Select a <strong>workload</strong> (namespace, kind, name). The kinds offered are those a Policy can manage (<code>GET /api/kinds</code>). <strong>Open in Simulator</strong> on a workload page fills it in.</li>
 <li>The Simulation <strong>starts from</strong> the workload's governing policy, and every control shows that policy's settings with the recommender's defaults filled in (<code>168h</code> window, 95th percentile, no headroom, the existing limit kept, raised to the request when below it). Start from another policy instead with the <strong>Start from</strong> selector, which drops your changes; when no policy governs the workload, the defaults apply. <strong>Reset</strong> drops every change.</li>
 <li>
 <p>Change any of, per resource:</p>
@@ -2747,6 +2747,11 @@ serve one origin's <code>Access-Control-Allow-Origin</code> header to another.</
 <td><code>POST</code></td>
 <td><code>/api/simulate</code></td>
 <td>A <a href="#post-apisimulate">Simulation</a> of one identity: its governing (or a chosen) Policy with a what-if <code>override</code></td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/kinds</code></td>
+<td>The workload kinds a Policy can manage, in the controller's order: each one's <code>name</code>, the <code>spec.rightSizing.update.types</code> field that manages it (<code>updateField</code>), and whether its pods are never evicted (<code>inPlaceOnly</code>)</td>
 </tr>
 <tr>
 <td><code>GET</code></td>

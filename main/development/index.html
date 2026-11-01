@@ -3407,12 +3407,14 @@ runs. The full posture and the verification commands are documented in
 <a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a>│   └── k8s-sustain-policies/ # Policy objects chart
 <a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a>├── hack/
 <a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a>│   ├── docscheck/         # Docs drift guards (run by go test)
-<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>│   └── scenarios/         # kind end-to-end scenarios
-<a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>├── docs/                  # This documentation
-<a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>├── Dockerfile
-<a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>├── Makefile
-<a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a>├── Makefile.scenarios     # kind end-to-end harness
-<a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a>└── main.go
+<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>│   ├── kindcontract/      # Every place a workload kind is registered in, checked against workload.SupportedKinds (run by go test)
+<a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>│   ├── signalcontract/    # The chart checked against every recommendation signal's Prometheus contract (run by go test)
+<a id="__codelineno-5-34" name="__codelineno-5-34" href="#__codelineno-5-34"></a>│   └── scenarios/         # kind end-to-end scenarios
+<a id="__codelineno-5-35" name="__codelineno-5-35" href="#__codelineno-5-35"></a>├── docs/                  # This documentation
+<a id="__codelineno-5-36" name="__codelineno-5-36" href="#__codelineno-5-36"></a>├── Dockerfile
+<a id="__codelineno-5-37" name="__codelineno-5-37" href="#__codelineno-5-37"></a>├── Makefile
+<a id="__codelineno-5-38" name="__codelineno-5-38" href="#__codelineno-5-38"></a>├── Makefile.scenarios     # kind end-to-end harness
+<a id="__codelineno-5-39" name="__codelineno-5-39" href="#__codelineno-5-39"></a>└── main.go
 </code></pre></div>
 <h2 id="running-locally-against-a-cluster">Running locally against a cluster<a class="headerlink" href="#running-locally-against-a-cluster" title="Permanent link">&para;</a></h2>
 <h3 id="start-the-controller">Start the controller<a class="headerlink" href="#start-the-controller" title="Permanent link">&para;</a></h3>
@@ -3562,17 +3564,41 @@ pod without a controller another kind than it does, or when the bundled
 kube-state-metrics stops exporting the annotation
 (<code>pod_workload_owner_name_test.yaml</code> covers the mapping itself).</p>
 <h2 id="adding-a-new-workload-kind">Adding a new workload kind<a class="headerlink" href="#adding-a-new-workload-kind" title="Permanent link">&para;</a></h2>
-<p>Every reader of workload objects goes through one table, so supporting a new
-kind (say <code>Rollout</code> from Argo) is mostly a matter of registering it there:</p>
+<p><code>workload.SupportedKinds</code> (<code>internal/workload/kindobjects.go</code>) is the one kind
+table. The inventory lists its kinds for the controller and the dashboard,
+<code>GET /api/kinds</code> serves them to the SPA, which holds no kind list of its own,
+and <code>go test ./hack/kindcontract</code> checks every other place a kind is
+registered in against it, failing with a message that names the place to edit.
+Supporting a new kind (say <code>Rollout</code> from Argo) is these steps, in order; run
+<code>go test ./hack/kindcontract ./internal/workload</code> after the first and follow
+what fails:</p>
 <ol>
-<li>Add <code>&lt;Kind&gt; *UpdateMode</code> to <code>UpdateTypes</code> in <code>api/v1alpha1/policy_types.go</code>, add the case to <code>UpdateTypes.ModeForKind</code>, then run <code>make generate</code> and <code>make manifests</code></li>
-<li>Add the kind to the <code>ownerKinds</code> table in <code>internal/workload/kindobjects.go</code> (object and list constructors plus its <code>GroupResource</code>) and, if the controller and dashboard should list it, to <code>workload.SupportedKinds</code>. This single table drives the inventory's listing (<code>internal/inventory</code>, which both the controller and the dashboard read identities from), the dashboard's NotFound errors, and the workload-level annotation reads in the webhook and the OOM watcher. A kind missing here silently loses workload-level opt-in (namespace-level and pod-template-level keep working, since neither depends on this table)</li>
-<li>Add the kind's pod template to <code>workload.PodTemplateOf</code> in <code>internal/workload/templates.go</code>: the inventory decides governance on it, so its annotations are the pod-template opt-in level and its labels what a Policy's label selector matches</li>
-<li>Add the same kind to <code>k8s.OwnerChainDisableFor()</code> in <code>internal/k8s/client.go</code>. Every kind in <code>ownerKinds</code> must appear here too, or its first Get on the admission hot path stands up a cluster-wide informer over every object of that kind instead of costing one Get. <code>TestDisableForCoversOwnerAnnotationKinds</code> (<code>internal/webhook/optin_test.go</code>) cross-checks the two lists and fails if one is missing from the other</li>
-<li>If the kind is a CRD, register its scheme in <code>internal/config/config.go</code> and <code>internal/dashboard/server.go</code></li>
-<li>Give the kind its apply rule in <code>applyRules</code> (<code>internal/workload/apply.go</code>): where a member's pods come from (<code>selectedPods</code> with the kind's selector for a workload whose pods it owns through a selector, a function of its own otherwise) and whether the kind is <code>inPlaceOnly</code>, its pods never evicted (like Job, CronJob and bare <code>Pod</code>). <code>TestApply_EveryKindHasAnApplyRule</code> fails for a kind of <code>SupportedKinds</code> without a rule, and <code>TestApply_EveryKindUnderEveryMode</code> (<code>internal/workload/apply_test.go</code>) needs a fixture for it</li>
-<li>Add RBAC markers (<code>+kubebuilder:rbac:...</code>) to the controller and the Helm RBAC rule in <code>charts/k8s-sustain/templates/rbac.yaml</code></li>
+<li>Add the kind to <code>workload.SupportedKinds</code>.</li>
+<li>Add <code>&lt;Kind&gt; *UpdateMode</code> to <code>UpdateTypes</code> in <code>api/v1alpha1/policy_types.go</code> and a case returning it to <code>UpdateTypes.ModeForKind</code>, then run <code>make generate manifests</code>. Without one, <code>inventory.TakeForPolicy</code> never lists the kind and no Policy can manage it. <em>Kind contract: update modes.</em></li>
+<li>Add the kind to the <code>ownerKinds</code> table in <code>internal/workload/kindobjects.go</code>: its object and list constructors and its <code>GroupResource</code>. The inventory lists the kind's objects through it, the dashboard names it in NotFound errors, and the webhook and the OOM watcher read workload-level opt-in through it. <em>Kind contract: objects.</em></li>
+<li>Add the kind's pod template to <code>workload.PodTemplateOf</code> in <code>internal/workload/templates.go</code>. The inventory decides governance on it: its annotations are the pod-template opt-in level and its labels are what a Policy's label selector matches. Without it the inventory skips every object of the kind. <em>Kind contract: objects.</em></li>
+<li>Give the kind its apply rule in <code>applyRules</code> (<code>internal/workload/apply.go</code>). The rule says where a member's pods come from: <code>selectedPods</code> with the kind's selector for a workload that owns its pods through a selector, a function of its own otherwise. It also says whether the kind is <code>inPlaceOnly</code>, its pods never evicted (like Job, CronJob and bare <code>Pod</code>). <code>/api/kinds</code> serves that flag. <em><code>TestApply_EveryKindHasAnApplyRule</code>, and <code>TestApply_EveryKindUnderEveryMode</code> (<code>internal/workload/apply_test.go</code>), which needs a fixture for the kind.</em></li>
+<li>Add the kind's object to <code>k8s.OwnerChainDisableFor()</code> in <code>internal/k8s/client.go</code>. The webhook reads it at most once per pod CREATE, so its first Get would otherwise stand up a cluster-wide informer on the admission path. <em>Kind contract: owner-chain reads.</em></li>
+<li>If the kind is a custom resource, add its API group to <code>config.Scheme</code> in <code>internal/config/config.go</code>, the one scheme every binary reads through. <em>Kind contract: scheme.</em></li>
+<li>Grant <code>get</code>, <code>list</code> and <code>watch</code> on the kind's resource in both ClusterRoles of <code>charts/k8s-sustain/templates/rbac.yaml</code>: the controller's, which the webhook shares, and the dashboard's. Nothing generates RBAC; the chart's is the only one. <em>Kind contract: RBAC.</em></li>
+<li>
+<p>Map the kind's pods in the recording rules, in <code>prometheusRule.groups</code> of <code>charts/k8s-sustain/values.yaml</code>, as <code>workload.ResolveControllerOwner</code> (<code>internal/workload/ownerref.go</code>) resolves them. Without this the kind has no usage, so its outcome stays NoData.</p>
+<ul>
+<li>A pod whose controller is the kind itself: add the kind to the <code>owner_kind</code> regex of the direct-owner <code>k8s_sustain:pod_workload</code> rule.</li>
+<li>A pod owned through an intermediate object, as a Deployment's is through a ReplicaSet: teach <code>ResolveControllerOwner</code> the walk. Add the kind to the <code>kube_&lt;intermediate&gt;_owner</code> selectors of both <code>k8s_sustain:pod_workload</code> and <code>k8s_sustain:pod_owner_kind_internal</code>. If the intermediate is itself a supported kind, as a CronJob's Job is, add the kind to the <code>kube_&lt;intermediate&gt;_owner</code> selector in the <code>unless</code> clause of the direct-owner rule too, so the rule drops those pods.</li>
+</ul>
+<p>Cover the mapping with a promtool fixture in <code>charts/k8s-sustain/tests/promtool/</code>. <em>Kind contract: recording rules.</em>
+10. If the kind owns objects of another supported kind, as a CronJob owns its Jobs, skip those objects in the inventory's membership filter (<code>addWorkloads</code> in <code>internal/inventory/inventory.go</code>): their pods belong to the new kind's identity only. <em>Kind contract: membership.</em>
+11. Give the kind's badge a colour: a <code>.kind-&lt;Kind&gt;</code> rule in the dashboard's <code>src/style.css</code>. <em>Kind contract: badges.</em>
+12. Add the kind's update type to the <code>spec.rightSizing.update.types</code> table of <code>docs/reference/policy.md</code>. <em>Kind contract: docs.</em></p>
+</li>
 </ol>
+<p>Nothing guards the rest, since none of it is a table a test can read:</p>
+<ul>
+<li>Order the kind's evictions in <code>sortPodsForRecycle</code> (<code>internal/workload/patcher.go</code>), if its pods must be replaced in an order, as a StatefulSet's are. Whether they must is a property of the kind's controller.</li>
+<li>Describe the kind in the guides, and in the Policy example of <code>docs/reference/policy.md</code> if it belongs there.</li>
+<li>Add a scenario to <code>hack/scenarios/</code>, listed in <code>SCENARIOS</code> in <code>Makefile.scenarios</code> and in <code>hack/scenarios/status.sh</code>, if the local test cluster can run it: a Rollout scenario would need Argo Rollouts installed.</li>
+</ul>
 <h2 id="adding-a-recommendation-signal">Adding a recommendation signal<a class="headerlink" href="#adding-a-recommendation-signal" title="Permanent link">&para;</a></h2>
 <p>A <a href="../concepts/recommendation-pipeline/#signals">signal</a> is one module of
 <code>internal/recommender</code> (<code>signal_usage.go</code> holds the CPU and memory usage
@@ -3836,6 +3862,16 @@ spell a label, class or link of their own:</p>
   <code>riskState</code> and the counts from the payload: the SPA never derives either.</li>
 <li><strong><code>outcomes.ts</code></strong> — the label of each <code>status.outcome</code> a
   <code>WorkloadRecommendation</code> or a Simulation reports (<code>outcomeLabel</code>).</li>
+<li><strong><code>kinds.ts</code></strong> — the workload kinds a Policy can manage, fetched from
+  <code>GET /api/kinds</code> by <code>getKinds</code>, once for every view; a failed fetch is
+  not kept, so the next call retries. Each kind has its name, the
+  <code>spec.rightSizing.update.types</code> field that manages it and whether it is
+  in-place-only. <code>updateModes</code> summarises a Policy's update modes from them,
+  or from the raw <code>update.types</code> keys when the kinds failed to load: the
+  Policies pages render without them, while the Simulator shows an error with
+  a retry in place of its workload target. The SPA holds no kind list of its
+  own: a kind the backend adds reaches the Policies pages and the Simulator
+  without a frontend change.</li>
 <li><strong><code>limits.ts</code></strong> — the limit strategies in the recommender's precedence:
   each one's label, help per resource, and the label the trace table gives the
   stage it runs as; <code>limitModeOf</code> reads a Policy's strategy and <code>limitsPatch</code>
